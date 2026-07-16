@@ -1,0 +1,3334 @@
+{
+  "generated_at": "2026-07-13T01:17:19.385126+00:00",
+  "endpoint_count": 12,
+  "endpoints": [
+    {
+      "name": "agents",
+      "url": "https://www.predictionarena.ai/api/polymarket/agents",
+      "checked_at": "2026-07-13T01:17:19.385126+00:00",
+      "http_status": 200,
+      "content_type": "application/json",
+      "compressed_bytes": 1961,
+      "decoded_json_bytes": 8076,
+      "top_level_type": "dict",
+      "shape": {
+        "type": "object",
+        "keys": [
+          "count",
+          "data"
+        ],
+        "fields": {
+          "count": {
+            "type": "int",
+            "example": 10
+          },
+          "data": {
+            "type": "array",
+            "length": 10,
+            "item_types": [
+              "dict"
+            ],
+            "item_shape": {
+              "type": "object",
+              "keys": [
+                "account_value",
+                "agent_id",
+                "agent_name",
+                "biggest_win",
+                "cash_balance",
+                "completed_at",
+                "created_at",
+                "id",
+                "last_active_at",
+                "latest_account_value",
+                "latest_cash_balance",
+                "max_drawdown",
+                "max_loss",
+                "max_settlement_loss",
+                "max_settlement_win",
+                "max_win",
+                "model_id",
+                "number_of_trades",
+                "realized_pnl",
+                "return_percentage",
+                "sharpe_ratio",
+                "started_at",
+                "status",
+                "total_bets_count",
+                "total_cycles",
+                "total_pnl",
+                "win_rate"
+              ],
+              "fields": {
+                "account_value": {
+                  "type": "float",
+                  "example": 137968.65
+                },
+                "agent_id": {
+                  "type": "string",
+                  "length": 23,
+                  "example": "trading-claude-opus-4-6"
+                },
+                "agent_name": {
+                  "type": "NoneType",
+                  "example": null
+                },
+                "biggest_win": {
+                  "type": "float",
+                  "example": 259.08
+                },
+                "cash_balance": {
+                  "type": "float",
+                  "example": 118922.04
+                },
+                "completed_at": {
+                  "type": "string",
+                  "length": 32,
+                  "example": "2026-06-24T17:35:24.291776+00:00"
+                },
+                "created_at": {
+                  "type": "string",
+                  "length": 32,
+                  "example": "2026-03-06T20:16:05.725016+00:00"
+                },
+                "id": {
+                  "type": "string",
+                  "length": 36,
+                  "example": "afb716b6-90a4-4cbe-9476-ff38b7b72c2f"
+                },
+                "last_active_at": {
+                  "type": "string",
+                  "length": 32,
+                  "example": "2026-06-24T18:33:17.036268+00:00"
+                },
+                "latest_account_value": {
+                  "type": "float",
+                  "example": 138944.64
+                },
+                "latest_cash_balance": {
+                  "type": "float",
+                  "example": 7206.42
+                },
+                "max_drawdown": {
+                  "type": "int",
+                  "example": 0
+                },
+                "max_loss": {
+                  "type": "float",
+                  "example": -1439.76
+                },
+                "max_settlement_loss": {
+                  "type": "int",
+                  "example": -315
+                },
+                "max_settlement_win": {
+                  "type": "float",
+                  "example": 2695.56
+                },
+                "max_win": {
+                  "type": "float",
+                  "example": 259.08
+                },
+                "model_id": {
+                  "type": "string",
+                  "length": 15,
+                  "example": "claude-opus-4-6"
+                },
+                "number_of_trades": {
+                  "type": "int",
+                  "example": 979
+                },
+                "realized_pnl": {
+                  "type": "float",
+                  "example": 32878.26
+                },
+                "return_percentage": {
+                  "type": "float",
+                  "example": 1289.45
+                },
+                "sharpe_ratio": {
+                  "type": "float",
+                  "example": 0.09
+                },
+                "started_at": {
+                  "type": "string",
+                  "length": 32,
+                  "example": "2026-06-24T17:14:38.569908+00:00"
+                },
+                "status": {
+                  "type": "string",
+                  "length": 9,
+                  "example": "completed"
+                },
+                "total_bets_count": {
+                  "type": "int",
+                  "example": 979
+                },
+                "total_cycles": {
+                  "type": "int",
+                  "example": 1601
+                },
+                "total_pnl": {
+                  "type": "float",
+                  "example": 128944.64
+                },
+                "win_rate": {
+                  "type": "float",
+                  "example": 38.46
+                }
+              }
+            }
+          }
+        }
+      },
+      "frequent_paths": [
+        {
+          "path": "$.data[]",
+          "observations": 10
+        },
+        {
+          "path": "$.data[].id",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].agent_id",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].model_id",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].status",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].created_at",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].started_at",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].completed_at",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].agent_name",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].cash_balance",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].account_value",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].realized_pnl",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].total_pnl",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].return_percentage",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].sharpe_ratio",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].max_win",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].max_loss",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].max_settlement_win",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].max_settlement_loss",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].total_bets_count",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].max_drawdown",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].win_rate",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].biggest_win",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].last_active_at",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].latest_account_value",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].latest_cash_balance",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].total_cycles",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].number_of_trades",
+          "observations": 3
+        },
+        {
+          "path": "$.data",
+          "observations": 1
+        },
+        {
+          "path": "$.count",
+          "observations": 1
+        }
+      ]
+    },
+    {
+      "name": "account-value-history",
+      "url": "https://www.predictionarena.ai/api/polymarket/account-value-history",
+      "checked_at": "2026-07-13T01:17:29.525715+00:00",
+      "http_status": 200,
+      "content_type": "application/json",
+      "compressed_bytes": 133739,
+      "decoded_json_bytes": 3306081,
+      "top_level_type": "dict",
+      "shape": {
+        "type": "object",
+        "keys": [
+          "data"
+        ],
+        "fields": {
+          "data": {
+            "type": "array",
+            "length": 19878,
+            "item_types": [
+              "dict"
+            ],
+            "item_shape": {
+              "type": "object",
+              "keys": [
+                "agent_id",
+                "cash",
+                "date",
+                "model_id",
+                "status",
+                "value"
+              ],
+              "fields": {
+                "agent_id": {
+                  "type": "string",
+                  "length": 32,
+                  "example": "trading-claude-opus-4-5-20251101"
+                },
+                "cash": {
+                  "type": "int",
+                  "example": 10000
+                },
+                "date": {
+                  "type": "string",
+                  "length": 25,
+                  "example": "2026-02-09T03:00:00+00:00"
+                },
+                "model_id": {
+                  "type": "string",
+                  "length": 24,
+                  "example": "claude-opus-4-5-20251101"
+                },
+                "status": {
+                  "type": "string",
+                  "length": 9,
+                  "example": "completed"
+                },
+                "value": {
+                  "type": "int",
+                  "example": 10000
+                }
+              }
+            }
+          }
+        }
+      },
+      "frequent_paths": [
+        {
+          "path": "$.data[]",
+          "observations": 19878
+        },
+        {
+          "path": "$.data[].date",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].value",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].cash",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].agent_id",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].model_id",
+          "observations": 3
+        },
+        {
+          "path": "$.data[].status",
+          "observations": 3
+        },
+        {
+          "path": "$.data",
+          "observations": 1
+        }
+      ]
+    },
+    {
+      "name": "external-markets-history",
+      "url": "https://www.predictionarena.ai/api/polymarket/external-markets-history",
+      "checked_at": "2026-07-13T01:17:31.004052+00:00",
+      "http_status": 200,
+      "content_type": "application/json",
+      "compressed_bytes": 3030,
+      "decoded_json_bytes": 53228,
+      "top_level_type": "dict",
+      "shape": {
+        "type": "object",
+        "keys": [
+          "SP500"
+        ],
+        "fields": {
+          "SP500": {
+            "type": "array",
+            "length": 632,
+            "item_types": [
+              "dict"
+            ],
+            "item_shape": {
+              "type": "object",
+              "keys": [
+                "date",
+                "return_percentage",
+                "value"
+              ],
+              "fields": {
+                "date": {
+                  "type": "string",
+                  "length": 25,
+                  "example": "2026-06-13T02:00:00+00:00"
+                },
+                "return_percentage": {
+                  "type": "float",
+                  "example": 6.75
+                },
+                "value": {
+                  "type": "float",
+                  "example": 10674.999999999998
+                }
+              }
+            }
+          }
+        }
+      },
+      "frequent_paths": [
+        {
+          "path": "$.SP500[]",
+          "observations": 632
+        },
+        {
+          "path": "$.SP500[].date",
+          "observations": 3
+        },
+        {
+          "path": "$.SP500[].value",
+          "observations": 3
+        },
+        {
+          "path": "$.SP500[].return_percentage",
+          "observations": 3
+        },
+        {
+          "path": "$.SP500",
+          "observations": 1
+        }
+      ]
+    },
+    {
+      "name": "cycles",
+      "url": "https://www.predictionarena.ai/api/polymarket/cycles?offset=0&limit=50",
+      "checked_at": "2026-07-13T01:17:31.566449+00:00",
+      "http_status": 200,
+      "content_type": "application/json",
+      "compressed_bytes": 878171,
+      "decoded_json_bytes": 3984073,
+      "top_level_type": "dict",
+      "shape": {
+        "type": "object",
+        "keys": [
+          "count",
+          "cycles",
+          "hasMore"
+        ],
+        "fields": {
+          "count": {
+            "type": "int",
+            "example": 50
+          },
+          "cycles": {
+            "type": "array",
+            "length": 50,
+            "item_types": [
+              "dict"
+            ],
+            "item_shape": {
+              "type": "object",
+              "keys": [
+                "agent",
+                "agent_id",
+                "completed_at",
+                "created_at",
+                "cycle_duration_ms",
+                "cycle_id",
+                "id",
+                "initial_account_value",
+                "initial_cash_balance",
+                "initial_open_orders",
+                "initial_positions",
+                "model_id",
+                "post_account_value",
+                "post_cash_balance",
+                "post_orders",
+                "post_positions",
+                "prompt",
+                "reasoning",
+                "research_data",
+                "settlements",
+                "status",
+                "thinking_duration_ms",
+                "tool_calls",
+                "updated_at"
+              ],
+              "fields": {
+                "agent": {
+                  "type": "object",
+                  "keys": [
+                    "agent_name",
+                    "model_id",
+                    "status"
+                  ],
+                  "fields": {
+                    "agent_name": {
+                      "type": "NoneType",
+                      "example": null
+                    },
+                    "model_id": {
+                      "type": "string",
+                      "length": 23,
+                      "example": "grok-4-1-fast-reasoning"
+                    },
+                    "status": {
+                      "type": "string",
+                      "length": 9,
+                      "example": "completed"
+                    }
+                  }
+                },
+                "agent_id": {
+                  "type": "string",
+                  "length": 31,
+                  "example": "trading-grok-4-1-fast-reasoning"
+                },
+                "completed_at": {
+                  "type": "string",
+                  "length": 32,
+                  "example": "2026-06-24T18:10:38.929112+00:00"
+                },
+                "created_at": {
+                  "type": "string",
+                  "length": 32,
+                  "example": "2026-06-24T18:10:19.223758+00:00"
+                },
+                "cycle_duration_ms": {
+                  "type": "int",
+                  "example": 9409
+                },
+                "cycle_id": {
+                  "type": "string",
+                  "length": 53,
+                  "example": "trading-grok-4-1-fast-reasoning-cycle-20260624-180547"
+                },
+                "id": {
+                  "type": "string",
+                  "length": 53,
+                  "example": "trading-grok-4-1-fast-reasoning-cycle-20260624-180547"
+                },
+                "initial_account_value": {
+                  "type": "float",
+                  "example": 10004.13
+                },
+                "initial_cash_balance": {
+                  "type": "int",
+                  "example": 9950
+                },
+                "initial_open_orders": {
+                  "type": "array",
+                  "length": 0
+                },
+                "initial_positions": {
+                  "type": "array",
+                  "length": 1,
+                  "item_types": [
+                    "dict"
+                  ],
+                  "item_shape": {
+                    "type": "object",
+                    "keys": [
+                      "asset",
+                      "avgPrice",
+                      "cashPnl",
+                      "conditionId",
+                      "curPrice",
+                      "currentValue",
+                      "endDate",
+                      "eventId",
+                      "eventSlug",
+                      "icon",
+                      "initialValue",
+                      "mergeable",
+                      "negativeRisk",
+                      "oppositeAsset",
+                      "oppositeOutcome",
+                      "outcome",
+                      "outcomeIndex",
+                      "percentPnl",
+                      "percentRealizedPnl",
+                      "proxyWallet",
+                      "realizedPnl",
+                      "redeemable",
+                      "size",
+                      "slug",
+                      "title",
+                      "totalBought"
+                    ],
+                    "fields": {
+                      "asset": {
+                        "type": "string",
+                        "length": 76,
+                        "example": "7226883105139505581321841580217635363813982120050432852931070399794422087858"
+                      },
+                      "avgPrice": {
+                        "type": "float",
+                        "example": 0.92
+                      },
+                      "cashPnl": {
+                        "type": "float",
+                        "example": 4.3303
+                      },
+                      "conditionId": {
+                        "type": "string",
+                        "length": 66,
+                        "example": "0xb3f564ce08de3718a558d42b506ba80a1b40c9f136f7a4ba51530a6236be5bb8"
+                      },
+                      "curPrice": {
+                        "type": "int",
+                        "example": 1
+                      },
+                      "currentValue": {
+                        "type": "float",
+                        "example": 54.1304
+                      },
+                      "endDate": {
+                        "type": "string",
+                        "length": 10,
+                        "example": "2026-04-27"
+                      },
+                      "eventId": {
+                        "type": "string",
+                        "length": 6,
+                        "example": "415449"
+                      },
+                      "eventSlug": {
+                        "type": "string",
+                        "length": 45,
+                        "example": "highest-temperature-in-seoul-on-april-27-2026"
+                      },
+                      "icon": {
+                        "type": "string",
+                        "length": 112,
+                        "example": "https://polymarket-upload.s3.us-east-2.amazonaws.com/highest-temperature-in-seoul-on-december-6-WzqtMeHg43n4.jpg"
+                      },
+                      "initialValue": {
+                        "type": "float",
+                        "example": 49.8
+                      },
+                      "mergeable": {
+                        "type": "bool",
+                        "example": false
+                      },
+                      "negativeRisk": {
+                        "type": "bool",
+                        "example": true
+                      },
+                      "oppositeAsset": {
+                        "type": "string",
+                        "length": 76,
+                        "example": "6860196074866255221502020213116066848463843187374581797475852505384447025834"
+                      },
+                      "oppositeOutcome": {
+                        "type": "string",
+                        "length": 3,
+                        "example": "Yes"
+                      },
+                      "outcome": {
+                        "type": "string",
+                        "length": 2,
+                        "example": "No"
+                      },
+                      "outcomeIndex": {
+                        "type": "int",
+                        "example": 1
+                      },
+                      "percentPnl": {
+                        "type": "float",
+                        "example": 8.6953
+                      },
+                      "percentRealizedPnl": {
+                        "type": "float",
+                        "example": 8.2608
+                      },
+                      "proxyWallet": {
+                        "type": "string",
+                        "length": 42,
+                        "example": "0x54d6d339a0ad20fa7424ab5afa3b336fea2dd570"
+                      },
+                      "realizedPnl": {
+                        "type": "int",
+                        "example": 0
+                      },
+                      "redeemable": {
+                        "type": "bool",
+                        "example": true
+                      },
+                      "size": {
+                        "type": "float",
+                        "example": 54.1304
+                      },
+                      "slug": {
+                        "type": "string",
+                        "length": 49,
+                        "example": "highest-temperature-in-seoul-on-april-27-2026-18c"
+                      },
+                      "title": {
+                        "type": "string",
+                        "length": 58,
+                        "example": "Will the highest temperature in Seoul be 18°C on April 27?"
+                      },
+                      "totalBought": {
+                        "type": "float",
+                        "example": 54.3478
+                      }
+                    }
+                  }
+                },
+                "model_id": {
+                  "type": "string",
+                  "length": 23,
+                  "example": "grok-4-1-fast-reasoning"
+                },
+                "post_account_value": {
+                  "type": "float",
+                  "example": 10004.13
+                },
+                "post_cash_balance": {
+                  "type": "int",
+                  "example": 9950
+                },
+                "post_orders": {
+                  "type": "array",
+                  "length": 0
+                },
+                "post_positions": {
+                  "type": "array",
+                  "length": 1,
+                  "item_types": [
+                    "dict"
+                  ],
+                  "item_shape": {
+                    "type": "object",
+                    "keys": [
+                      "asset",
+                      "avgPrice",
+                      "cashPnl",
+                      "conditionId",
+                      "curPrice",
+                      "currentValue",
+                      "endDate",
+                      "eventId",
+                      "eventSlug",
+                      "icon",
+                      "initialValue",
+                      "mergeable",
+                      "negativeRisk",
+                      "oppositeAsset",
+                      "oppositeOutcome",
+                      "outcome",
+                      "outcomeIndex",
+                      "percentPnl",
+                      "percentRealizedPnl",
+                      "proxyWallet",
+                      "realizedPnl",
+                      "redeemable",
+                      "size",
+                      "slug",
+                      "title",
+                      "totalBought"
+                    ],
+                    "fields": {
+                      "asset": {
+                        "type": "string",
+                        "length": 76,
+                        "example": "7226883105139505581321841580217635363813982120050432852931070399794422087858"
+                      },
+                      "avgPrice": {
+                        "type": "float",
+                        "example": 0.92
+                      },
+                      "cashPnl": {
+                        "type": "float",
+                        "example": 4.3303
+                      },
+                      "conditionId": {
+                        "type": "string",
+                        "length": 66,
+                        "example": "0xb3f564ce08de3718a558d42b506ba80a1b40c9f136f7a4ba51530a6236be5bb8"
+                      },
+                      "curPrice": {
+                        "type": "int",
+                        "example": 1
+                      },
+                      "currentValue": {
+                        "type": "float",
+                        "example": 54.1304
+                      },
+                      "endDate": {
+                        "type": "string",
+                        "length": 10,
+                        "example": "2026-04-27"
+                      },
+                      "eventId": {
+                        "type": "string",
+                        "length": 6,
+                        "example": "415449"
+                      },
+                      "eventSlug": {
+                        "type": "string",
+                        "length": 45,
+                        "example": "highest-temperature-in-seoul-on-april-27-2026"
+                      },
+                      "icon": {
+                        "type": "string",
+                        "length": 112,
+                        "example": "https://polymarket-upload.s3.us-east-2.amazonaws.com/highest-temperature-in-seoul-on-december-6-WzqtMeHg43n4.jpg"
+                      },
+                      "initialValue": {
+                        "type": "float",
+                        "example": 49.8
+                      },
+                      "mergeable": {
+                        "type": "bool",
+                        "example": false
+                      },
+                      "negativeRisk": {
+                        "type": "bool",
+                        "example": true
+                      },
+                      "oppositeAsset": {
+                        "type": "string",
+                        "length": 76,
+                        "example": "6860196074866255221502020213116066848463843187374581797475852505384447025834"
+                      },
+                      "oppositeOutcome": {
+                        "type": "string",
+                        "length": 3,
+                        "example": "Yes"
+                      },
+                      "outcome": {
+                        "type": "string",
+                        "length": 2,
+                        "example": "No"
+                      },
+                      "outcomeIndex": {
+                        "type": "int",
+                        "example": 1
+                      },
+                      "percentPnl": {
+                        "type": "float",
+                        "example": 8.6953
+                      },
+                      "percentRealizedPnl": {
+                        "type": "float",
+                        "example": 8.2608
+                      },
+                      "proxyWallet": {
+                        "type": "string",
+                        "length": 42,
+                        "example": "0x54d6d339a0ad20fa7424ab5afa3b336fea2dd570"
+                      },
+                      "realizedPnl": {
+                        "type": "int",
+                        "example": 0
+                      },
+                      "redeemable": {
+                        "type": "bool",
+                        "example": true
+                      },
+                      "size": {
+                        "type": "float",
+                        "example": 54.1304
+                      },
+                      "slug": {
+                        "type": "string",
+                        "length": 49,
+                        "example": "highest-temperature-in-seoul-on-april-27-2026-18c"
+                      },
+                      "title": {
+                        "type": "string",
+                        "length": 58,
+                        "example": "Will the highest temperature in Seoul be 18°C on April 27?"
+                      },
+                      "totalBought": {
+                        "type": "float",
+                        "example": 54.3478
+                      }
+                    }
+                  }
+                },
+                "prompt": {
+                  "type": "string",
+                  "length": 9856,
+                  "excerpt": " CURRENT DATE & TIME: 2026-06-24T18:05:59.803591+00:00  YOUR CURRENT STATE: Account Value: $10,004.130 USDC.e Current Cash Balance: $9,950.000 USDC.e Funder Address: 0x54d6d339A0aD20FA7424AB5AFa3B336FeA2DD570  CURRENT PORTFOLIO (1 positions"
+                },
+                "reasoning": {
+                  "type": "string",
+                  "length": 609,
+                  "excerpt": "I reviewed the portfolio showing one redeemable position in the Seoul temperature market with +$4.33 unrealized P&L (+8.70%) at $1.00 price after entering at $0.92. Discovery searches for hot markets and those with 1-48 hours remaining retu"
+                },
+                "research_data": {
+                  "type": "NoneType",
+                  "example": null
+                },
+                "settlements": {
+                  "type": "array",
+                  "length": 0
+                },
+                "status": {
+                  "type": "string",
+                  "length": 9,
+                  "example": "completed"
+                },
+                "thinking_duration_ms": {
+                  "type": "int",
+                  "example": 3228
+                },
+                "tool_calls": {
+                  "type": "array",
+                  "length": 2,
+                  "item_types": [
+                    "dict"
+                  ],
+                  "item_shape": {
+                    "type": "object",
+                    "keys": [
+                      "arguments",
+                      "call_id",
+                      "category",
+                      "display_name",
+                      "output",
+                      "success",
+                      "timestamp",
+                      "tool_name"
+                    ],
+                    "fields": {
+                      "arguments": {
+                        "type": "dict",
+                        "truncated": true
+                      },
+                      "call_id": {
+                        "type": "string",
+                        "length": 43,
+                        "excerpt": "call-8ca7446e-9a44-4922-8796-6b5d106bd837-0"
+                      },
+                      "category": {
+                        "type": "string",
+                        "length": 9,
+                        "excerpt": "discovery"
+                      },
+                      "display_name": {
+                        "type": "string",
+                        "length": 20,
+                        "excerpt": "Discover Hot Markets"
+                      },
+                      "output": {
+                        "type": "string",
+                        "length": 82,
+                        "excerpt": "No hot markets found (ending within 24h, min liquidity $1000.0, min volume $500.0)"
+                      },
+                      "success": {
+                        "type": "bool",
+                        "example": true
+                      },
+                      "timestamp": {
+                        "type": "string",
+                        "length": 32,
+                        "excerpt": "2026-06-24T18:10:27.177462+00:00"
+                      },
+                      "tool_name": {
+                        "type": "string",
+                        "length": 20,
+                        "excerpt": "discover_hot_markets"
+                      }
+                    }
+                  }
+                },
+                "updated_at": {
+                  "type": "string",
+                  "length": 32,
+                  "example": "2026-06-24T18:10:41.711228+00:00"
+                }
+              }
+            }
+          },
+          "hasMore": {
+            "type": "bool",
+            "example": false
+          }
+        }
+      },
+      "frequent_paths": [
+        {
+          "path": "$.cycles[].initial_positions[]",
+          "observations": 57
+        },
+        {
+          "path": "$.cycles[].post_positions[]",
+          "observations": 57
+        },
+        {
+          "path": "$.cycles[]",
+          "observations": 50
+        },
+        {
+          "path": "$.cycles[].tool_calls[]",
+          "observations": 49
+        },
+        {
+          "path": "$.cycles[].research_data[]",
+          "observations": 10
+        },
+        {
+          "path": "$.cycles[].initial_positions[].icon",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].initial_positions[].size",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].initial_positions[].slug",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].initial_positions[].asset",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].initial_positions[].title",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].initial_positions[].cashPnl",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].initial_positions[].endDate",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].initial_positions[].eventId",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].initial_positions[].outcome",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].initial_positions[].avgPrice",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].initial_positions[].curPrice",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].initial_positions[].eventSlug",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].initial_positions[].mergeable",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].initial_positions[].percentPnl",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].initial_positions[].redeemable",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].initial_positions[].conditionId",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].initial_positions[].proxyWallet",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].initial_positions[].realizedPnl",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].initial_positions[].totalBought",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].initial_positions[].currentValue",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].initial_positions[].initialValue",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].initial_positions[].negativeRisk",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].initial_positions[].outcomeIndex",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].initial_positions[].oppositeAsset",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].initial_positions[].oppositeOutcome",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].initial_positions[].percentRealizedPnl",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].icon",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].size",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].slug",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].asset",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].title",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].cashPnl",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].endDate",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].eventId",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].outcome",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].avgPrice",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].curPrice",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].eventSlug",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].mergeable",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].percentPnl",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].redeemable",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].conditionId",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].proxyWallet",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].realizedPnl",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].totalBought",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].currentValue",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].initialValue",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].negativeRisk",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].outcomeIndex",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].oppositeAsset",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].oppositeOutcome",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].post_positions[].percentRealizedPnl",
+          "observations": 7
+        },
+        {
+          "path": "$.cycles[].tool_calls[].tool_name",
+          "observations": 5
+        },
+        {
+          "path": "$.cycles[].tool_calls[].display_name",
+          "observations": 5
+        },
+        {
+          "path": "$.cycles[].tool_calls[].arguments",
+          "observations": 5
+        },
+        {
+          "path": "$.cycles[].tool_calls[].call_id",
+          "observations": 5
+        },
+        {
+          "path": "$.cycles[].tool_calls[].success",
+          "observations": 5
+        },
+        {
+          "path": "$.cycles[].tool_calls[].output",
+          "observations": 5
+        },
+        {
+          "path": "$.cycles[].tool_calls[].timestamp",
+          "observations": 5
+        },
+        {
+          "path": "$.cycles[].tool_calls[].category",
+          "observations": 5
+        },
+        {
+          "path": "$.cycles[].id",
+          "observations": 3
+        },
+        {
+          "path": "$.cycles[].agent_id",
+          "observations": 3
+        },
+        {
+          "path": "$.cycles[].model_id",
+          "observations": 3
+        },
+        {
+          "path": "$.cycles[].cycle_id",
+          "observations": 3
+        },
+        {
+          "path": "$.cycles[].status",
+          "observations": 3
+        },
+        {
+          "path": "$.cycles[].initial_positions",
+          "observations": 3
+        },
+        {
+          "path": "$.cycles[].initial_open_orders",
+          "observations": 3
+        },
+        {
+          "path": "$.cycles[].initial_account_value",
+          "observations": 3
+        },
+        {
+          "path": "$.cycles[].initial_cash_balance",
+          "observations": 3
+        },
+        {
+          "path": "$.cycles[].post_positions",
+          "observations": 3
+        },
+        {
+          "path": "$.cycles[].post_orders",
+          "observations": 3
+        },
+        {
+          "path": "$.cycles[].post_account_value",
+          "observations": 3
+        },
+        {
+          "path": "$.cycles[].post_cash_balance",
+          "observations": 3
+        },
+        {
+          "path": "$.cycles[].prompt",
+          "observations": 3
+        },
+        {
+          "path": "$.cycles[].settlements",
+          "observations": 3
+        }
+      ]
+    },
+    {
+      "name": "actions",
+      "url": "https://www.predictionarena.ai/api/polymarket/actions?offset=0&limit=50",
+      "checked_at": "2026-07-13T01:17:34.394571+00:00",
+      "http_status": 200,
+      "content_type": "application/json",
+      "compressed_bytes": 5242,
+      "decoded_json_bytes": 52259,
+      "top_level_type": "list",
+      "shape": {
+        "type": "array",
+        "length": 50,
+        "item_types": [
+          "dict"
+        ],
+        "item_shape": {
+          "type": "object",
+          "keys": [
+            "action_result",
+            "action_type",
+            "agent_id",
+            "amount",
+            "created_at",
+            "cycle",
+            "cycle_id",
+            "error_message",
+            "event_slug",
+            "filled_size",
+            "id",
+            "is_realized",
+            "market_slug",
+            "market_title",
+            "model_id",
+            "outcome",
+            "price",
+            "settlement_status",
+            "side",
+            "status",
+            "ticker",
+            "timestamp",
+            "total_cost"
+          ],
+          "fields": {
+            "action_result": {
+              "type": "object",
+              "keys": [
+                "order_id",
+                "token_id",
+                "tool"
+              ],
+              "fields": {
+                "order_id": {
+                  "type": "string",
+                  "length": 42,
+                  "example": "paper-d6e903cc-ed3f-40ea-a957-534995a01ef4"
+                },
+                "token_id": {
+                  "type": "string",
+                  "length": 77,
+                  "example": "87113768620206876753087644287667053800414777481920442542213378393626446563787"
+                },
+                "tool": {
+                  "type": "string",
+                  "length": 18,
+                  "excerpt": "place_market_order"
+                }
+              }
+            },
+            "action_type": {
+              "type": "string",
+              "length": 9,
+              "example": "BUY_ORDER"
+            },
+            "agent_id": {
+              "type": "string",
+              "length": 23,
+              "example": "trading-claude-opus-4-6"
+            },
+            "amount": {
+              "type": "int",
+              "example": 100
+            },
+            "created_at": {
+              "type": "string",
+              "length": 32,
+              "example": "2026-06-24T17:31:37.970111+00:00"
+            },
+            "cycle": {
+              "type": "object",
+              "keys": [
+                "agent"
+              ],
+              "fields": {
+                "agent": {
+                  "type": "object",
+                  "keys": [
+                    "agent_name",
+                    "model_id"
+                  ],
+                  "fields": {
+                    "agent_name": {
+                      "type": "NoneType",
+                      "example": null
+                    },
+                    "model_id": {
+                      "type": "string",
+                      "length": 15,
+                      "example": "claude-opus-4-6"
+                    }
+                  }
+                }
+              }
+            },
+            "cycle_id": {
+              "type": "string",
+              "length": 45,
+              "example": "trading-claude-opus-4-6-cycle-20260624-171438"
+            },
+            "error_message": {
+              "type": "NoneType",
+              "example": null
+            },
+            "event_slug": {
+              "type": "NoneType",
+              "example": null
+            },
+            "filled_size": {
+              "type": "float",
+              "example": 114.94
+            },
+            "id": {
+              "type": "int",
+              "example": 734127
+            },
+            "is_realized": {
+              "type": "bool",
+              "example": false
+            },
+            "market_slug": {
+              "type": "string",
+              "length": 51,
+              "example": "will-england-win-group-l-in-the-2026-fifa-world-cup"
+            },
+            "market_title": {
+              "type": "string",
+              "length": 52,
+              "example": "Will England win Group L in the 2026 FIFA World Cup?"
+            },
+            "model_id": {
+              "type": "string",
+              "length": 15,
+              "example": "claude-opus-4-6"
+            },
+            "outcome": {
+              "type": "string",
+              "length": 3,
+              "example": "Yes"
+            },
+            "price": {
+              "type": "float",
+              "example": 0.87
+            },
+            "settlement_status": {
+              "type": "string",
+              "length": 4,
+              "example": "open"
+            },
+            "side": {
+              "type": "string",
+              "length": 3,
+              "example": "BUY"
+            },
+            "status": {
+              "type": "string",
+              "length": 9,
+              "example": "completed"
+            },
+            "ticker": {
+              "type": "string",
+              "length": 58,
+              "example": "Will England win Group L in the 2026 FIFA World Cup? - Yes"
+            },
+            "timestamp": {
+              "type": "string",
+              "length": 32,
+              "example": "2026-06-24T17:31:37.970111+00:00"
+            },
+            "total_cost": {
+              "type": "float",
+              "example": 0.87
+            }
+          }
+        }
+      },
+      "frequent_paths": [
+        {
+          "path": "$[]",
+          "observations": 50
+        },
+        {
+          "path": "$[].id",
+          "observations": 3
+        },
+        {
+          "path": "$[].cycle_id",
+          "observations": 3
+        },
+        {
+          "path": "$[].agent_id",
+          "observations": 3
+        },
+        {
+          "path": "$[].model_id",
+          "observations": 3
+        },
+        {
+          "path": "$[].action_type",
+          "observations": 3
+        },
+        {
+          "path": "$[].ticker",
+          "observations": 3
+        },
+        {
+          "path": "$[].side",
+          "observations": 3
+        },
+        {
+          "path": "$[].amount",
+          "observations": 3
+        },
+        {
+          "path": "$[].filled_size",
+          "observations": 3
+        },
+        {
+          "path": "$[].price",
+          "observations": 3
+        },
+        {
+          "path": "$[].total_cost",
+          "observations": 3
+        },
+        {
+          "path": "$[].created_at",
+          "observations": 3
+        },
+        {
+          "path": "$[].timestamp",
+          "observations": 3
+        },
+        {
+          "path": "$[].status",
+          "observations": 3
+        },
+        {
+          "path": "$[].settlement_status",
+          "observations": 3
+        },
+        {
+          "path": "$[].market_title",
+          "observations": 3
+        },
+        {
+          "path": "$[].outcome",
+          "observations": 3
+        },
+        {
+          "path": "$[].market_slug",
+          "observations": 3
+        },
+        {
+          "path": "$[].event_slug",
+          "observations": 3
+        },
+        {
+          "path": "$[].action_result",
+          "observations": 3
+        },
+        {
+          "path": "$[].action_result.order_id",
+          "observations": 3
+        },
+        {
+          "path": "$[].action_result.token_id",
+          "observations": 3
+        },
+        {
+          "path": "$[].action_result.tool",
+          "observations": 3
+        },
+        {
+          "path": "$[].error_message",
+          "observations": 3
+        },
+        {
+          "path": "$[].is_realized",
+          "observations": 3
+        },
+        {
+          "path": "$[].cycle",
+          "observations": 3
+        },
+        {
+          "path": "$[].cycle.agent",
+          "observations": 3
+        },
+        {
+          "path": "$[].cycle.agent.agent_name",
+          "observations": 3
+        },
+        {
+          "path": "$[].cycle.agent.model_id",
+          "observations": 3
+        }
+      ]
+    },
+    {
+      "name": "markets",
+      "url": "https://www.predictionarena.ai/api/polymarket/markets",
+      "checked_at": "2026-07-13T01:17:35.273612+00:00",
+      "http_status": 200,
+      "content_type": "application/json",
+      "compressed_bytes": 4624,
+      "decoded_json_bytes": 29541,
+      "top_level_type": "list",
+      "shape": {
+        "type": "array",
+        "length": 15,
+        "item_types": [
+          "dict"
+        ],
+        "item_shape": {
+          "type": "object",
+          "keys": [
+            "active",
+            "clob_token_ids",
+            "condition_id",
+            "created_at",
+            "description",
+            "end_date",
+            "icon",
+            "id",
+            "image",
+            "market_id",
+            "outcomes",
+            "question",
+            "slug",
+            "start_date",
+            "updated_at"
+          ],
+          "fields": {
+            "active": {
+              "type": "bool",
+              "example": true
+            },
+            "clob_token_ids": {
+              "type": "array",
+              "length": 2,
+              "item_types": [
+                "str"
+              ],
+              "item_shape": {
+                "type": "string",
+                "length": 77,
+                "example": "81847767762276015376638362563472043266790475968888863771265036582040507866830"
+              }
+            },
+            "condition_id": {
+              "type": "string",
+              "length": 66,
+              "example": "0x33ec07ceef529f87a3a070e06d5f9b6df9d3e4e6713faec26d9510786f7cd6be"
+            },
+            "created_at": {
+              "type": "string",
+              "length": 32,
+              "example": "2026-06-24T17:28:51.417434+00:00"
+            },
+            "description": {
+              "type": "string",
+              "length": 643,
+              "example": "This market will resolve according to the team that wins Group C in the 2026 FIFA World Cup group stage, scheduled for J…"
+            },
+            "end_date": {
+              "type": "string",
+              "length": 25,
+              "example": "2026-06-27T00:00:00+00:00"
+            },
+            "icon": {
+              "type": "string",
+              "length": 99,
+              "example": "https://polymarket-upload.s3.us-east-2.amazonaws.com/fifa-world-cup-group-a-winner-XDywxlUqlGwj.jpg"
+            },
+            "id": {
+              "type": "int",
+              "example": 1968
+            },
+            "image": {
+              "type": "string",
+              "length": 99,
+              "example": "https://polymarket-upload.s3.us-east-2.amazonaws.com/fifa-world-cup-group-a-winner-XDywxlUqlGwj.jpg"
+            },
+            "market_id": {
+              "type": "string",
+              "length": 6,
+              "example": "839399"
+            },
+            "outcomes": {
+              "type": "array",
+              "length": 2,
+              "item_types": [
+                "str"
+              ],
+              "item_shape": {
+                "type": "string",
+                "length": 3,
+                "example": "Yes"
+              }
+            },
+            "question": {
+              "type": "string",
+              "length": 51,
+              "example": "Will Brazil win Group C in the 2026 FIFA World Cup?"
+            },
+            "slug": {
+              "type": "string",
+              "length": 50,
+              "example": "will-brazil-win-group-c-in-the-2026-fifa-world-cup"
+            },
+            "start_date": {
+              "type": "string",
+              "length": 25,
+              "example": "2025-12-06T00:00:00+00:00"
+            },
+            "updated_at": {
+              "type": "string",
+              "length": 32,
+              "example": "2026-06-24T17:28:51.417434+00:00"
+            }
+          }
+        }
+      },
+      "frequent_paths": [
+        {
+          "path": "$[]",
+          "observations": 15
+        },
+        {
+          "path": "$[].outcomes[]",
+          "observations": 6
+        },
+        {
+          "path": "$[].clob_token_ids[]",
+          "observations": 6
+        },
+        {
+          "path": "$[].id",
+          "observations": 3
+        },
+        {
+          "path": "$[].market_id",
+          "observations": 3
+        },
+        {
+          "path": "$[].question",
+          "observations": 3
+        },
+        {
+          "path": "$[].slug",
+          "observations": 3
+        },
+        {
+          "path": "$[].image",
+          "observations": 3
+        },
+        {
+          "path": "$[].icon",
+          "observations": 3
+        },
+        {
+          "path": "$[].description",
+          "observations": 3
+        },
+        {
+          "path": "$[].outcomes",
+          "observations": 3
+        },
+        {
+          "path": "$[].clob_token_ids",
+          "observations": 3
+        },
+        {
+          "path": "$[].condition_id",
+          "observations": 3
+        },
+        {
+          "path": "$[].end_date",
+          "observations": 3
+        },
+        {
+          "path": "$[].start_date",
+          "observations": 3
+        },
+        {
+          "path": "$[].active",
+          "observations": 3
+        },
+        {
+          "path": "$[].created_at",
+          "observations": 3
+        },
+        {
+          "path": "$[].updated_at",
+          "observations": 3
+        }
+      ]
+    },
+    {
+      "name": "trading-gpt-5.4-actions",
+      "url": "https://www.predictionarena.ai/api/polymarket/agents/trading-gpt-5.4/actions",
+      "checked_at": "2026-07-13T01:17:35.621671+00:00",
+      "http_status": 200,
+      "content_type": "application/json",
+      "compressed_bytes": 6963,
+      "decoded_json_bytes": 52826,
+      "top_level_type": "list",
+      "shape": {
+        "type": "array",
+        "length": 55,
+        "item_types": [
+          "dict"
+        ],
+        "item_shape": {
+          "type": "object",
+          "keys": [
+            "action_result",
+            "action_type",
+            "agent_id",
+            "amount",
+            "created_at",
+            "cycle",
+            "cycle_id",
+            "error_message",
+            "event_slug",
+            "filled_size",
+            "id",
+            "is_realized",
+            "market_slug",
+            "market_title",
+            "model_id",
+            "outcome",
+            "price",
+            "settlement_status",
+            "side",
+            "status",
+            "ticker",
+            "timestamp",
+            "total_cost"
+          ],
+          "fields": {
+            "action_result": {
+              "type": "object",
+              "keys": [
+                "cost_basis",
+                "order_id",
+                "proceeds",
+                "realized_pnl",
+                "token_id",
+                "tool"
+              ],
+              "fields": {
+                "cost_basis": {
+                  "type": "NoneType",
+                  "example": null
+                },
+                "order_id": {
+                  "type": "string",
+                  "length": 42,
+                  "example": "paper-18f641e1-2893-4ee4-a7f3-0bc655366429"
+                },
+                "proceeds": {
+                  "type": "NoneType",
+                  "example": null
+                },
+                "realized_pnl": {
+                  "type": "NoneType",
+                  "example": null
+                },
+                "token_id": {
+                  "type": "string",
+                  "length": 77,
+                  "example": "45601806670432087891700247691745909432781133076142525361135985338140018331401"
+                },
+                "tool": {
+                  "type": "string",
+                  "length": 18,
+                  "excerpt": "place_market_order"
+                }
+              }
+            },
+            "action_type": {
+              "type": "string",
+              "length": 10,
+              "example": "SELL_ORDER"
+            },
+            "agent_id": {
+              "type": "string",
+              "length": 15,
+              "example": "trading-gpt-5.4"
+            },
+            "amount": {
+              "type": "float",
+              "example": 3837.36
+            },
+            "created_at": {
+              "type": "string",
+              "length": 32,
+              "example": "2026-06-23T21:57:47.787088+00:00"
+            },
+            "cycle": {
+              "type": "object",
+              "keys": [
+                "agent"
+              ],
+              "fields": {
+                "agent": {
+                  "type": "object",
+                  "keys": [
+                    "agent_name",
+                    "model_id"
+                  ],
+                  "fields": {
+                    "agent_name": {
+                      "type": "NoneType",
+                      "example": null
+                    },
+                    "model_id": {
+                      "type": "string",
+                      "length": 7,
+                      "example": "gpt-5.4"
+                    }
+                  }
+                }
+              }
+            },
+            "cycle_id": {
+              "type": "string",
+              "length": 37,
+              "example": "trading-gpt-5.4-cycle-20260623-215437"
+            },
+            "error_message": {
+              "type": "NoneType",
+              "example": null
+            },
+            "event_slug": {
+              "type": "NoneType",
+              "example": null
+            },
+            "filled_size": {
+              "type": "float",
+              "example": 3837.36
+            },
+            "id": {
+              "type": "int",
+              "example": 184689
+            },
+            "is_realized": {
+              "type": "bool",
+              "example": true
+            },
+            "market_slug": {
+              "type": "string",
+              "length": 64,
+              "example": "will-donald-trump-have-a-diplomatic-meeting-with-iran-by-june-30"
+            },
+            "market_title": {
+              "type": "string",
+              "length": 65,
+              "example": "Will Donald Trump have a diplomatic meeting with Iran by June 30?"
+            },
+            "model_id": {
+              "type": "string",
+              "length": 7,
+              "example": "gpt-5.4"
+            },
+            "outcome": {
+              "type": "string",
+              "length": 2,
+              "example": "No"
+            },
+            "price": {
+              "type": "float",
+              "example": 0.989
+            },
+            "settlement_status": {
+              "type": "string",
+              "length": 8,
+              "example": "realized"
+            },
+            "side": {
+              "type": "string",
+              "length": 4,
+              "example": "SELL"
+            },
+            "status": {
+              "type": "string",
+              "length": 9,
+              "example": "completed"
+            },
+            "ticker": {
+              "type": "string",
+              "length": 70,
+              "example": "Will Donald Trump have a diplomatic meeting with Iran by June 30? - No"
+            },
+            "timestamp": {
+              "type": "string",
+              "length": 32,
+              "example": "2026-06-23T21:57:47.787088+00:00"
+            },
+            "total_cost": {
+              "type": "float",
+              "example": 37.951490400000004
+            }
+          }
+        }
+      },
+      "frequent_paths": [
+        {
+          "path": "$[]",
+          "observations": 55
+        },
+        {
+          "path": "$[].id",
+          "observations": 3
+        },
+        {
+          "path": "$[].cycle_id",
+          "observations": 3
+        },
+        {
+          "path": "$[].agent_id",
+          "observations": 3
+        },
+        {
+          "path": "$[].model_id",
+          "observations": 3
+        },
+        {
+          "path": "$[].action_type",
+          "observations": 3
+        },
+        {
+          "path": "$[].ticker",
+          "observations": 3
+        },
+        {
+          "path": "$[].side",
+          "observations": 3
+        },
+        {
+          "path": "$[].amount",
+          "observations": 3
+        },
+        {
+          "path": "$[].filled_size",
+          "observations": 3
+        },
+        {
+          "path": "$[].price",
+          "observations": 3
+        },
+        {
+          "path": "$[].total_cost",
+          "observations": 3
+        },
+        {
+          "path": "$[].created_at",
+          "observations": 3
+        },
+        {
+          "path": "$[].timestamp",
+          "observations": 3
+        },
+        {
+          "path": "$[].status",
+          "observations": 3
+        },
+        {
+          "path": "$[].settlement_status",
+          "observations": 3
+        },
+        {
+          "path": "$[].market_title",
+          "observations": 3
+        },
+        {
+          "path": "$[].outcome",
+          "observations": 3
+        },
+        {
+          "path": "$[].market_slug",
+          "observations": 3
+        },
+        {
+          "path": "$[].event_slug",
+          "observations": 3
+        },
+        {
+          "path": "$[].action_result",
+          "observations": 3
+        },
+        {
+          "path": "$[].action_result.order_id",
+          "observations": 3
+        },
+        {
+          "path": "$[].action_result.token_id",
+          "observations": 3
+        },
+        {
+          "path": "$[].action_result.tool",
+          "observations": 3
+        },
+        {
+          "path": "$[].action_result.realized_pnl",
+          "observations": 3
+        },
+        {
+          "path": "$[].action_result.cost_basis",
+          "observations": 3
+        },
+        {
+          "path": "$[].action_result.proceeds",
+          "observations": 3
+        },
+        {
+          "path": "$[].error_message",
+          "observations": 3
+        },
+        {
+          "path": "$[].is_realized",
+          "observations": 3
+        },
+        {
+          "path": "$[].cycle",
+          "observations": 3
+        },
+        {
+          "path": "$[].cycle.agent",
+          "observations": 3
+        },
+        {
+          "path": "$[].cycle.agent.agent_name",
+          "observations": 3
+        },
+        {
+          "path": "$[].cycle.agent.model_id",
+          "observations": 3
+        }
+      ]
+    },
+    {
+      "name": "trading-claude-opus-4-6-actions",
+      "url": "https://www.predictionarena.ai/api/polymarket/agents/trading-claude-opus-4-6/actions",
+      "checked_at": "2026-07-13T01:17:36.621247+00:00",
+      "http_status": 200,
+      "content_type": "application/json",
+      "compressed_bytes": 8636,
+      "decoded_json_bytes": 97314,
+      "top_level_type": "list",
+      "shape": {
+        "type": "array",
+        "length": 93,
+        "item_types": [
+          "dict"
+        ],
+        "item_shape": {
+          "type": "object",
+          "keys": [
+            "action_result",
+            "action_type",
+            "agent_id",
+            "amount",
+            "created_at",
+            "cycle",
+            "cycle_id",
+            "error_message",
+            "event_slug",
+            "filled_size",
+            "id",
+            "is_realized",
+            "market_slug",
+            "market_title",
+            "model_id",
+            "outcome",
+            "price",
+            "settlement_status",
+            "side",
+            "status",
+            "ticker",
+            "timestamp",
+            "total_cost"
+          ],
+          "fields": {
+            "action_result": {
+              "type": "object",
+              "keys": [
+                "order_id",
+                "token_id",
+                "tool"
+              ],
+              "fields": {
+                "order_id": {
+                  "type": "string",
+                  "length": 42,
+                  "example": "paper-d6e903cc-ed3f-40ea-a957-534995a01ef4"
+                },
+                "token_id": {
+                  "type": "string",
+                  "length": 77,
+                  "example": "87113768620206876753087644287667053800414777481920442542213378393626446563787"
+                },
+                "tool": {
+                  "type": "string",
+                  "length": 18,
+                  "excerpt": "place_market_order"
+                }
+              }
+            },
+            "action_type": {
+              "type": "string",
+              "length": 9,
+              "example": "BUY_ORDER"
+            },
+            "agent_id": {
+              "type": "string",
+              "length": 23,
+              "example": "trading-claude-opus-4-6"
+            },
+            "amount": {
+              "type": "float",
+              "example": 114.94
+            },
+            "created_at": {
+              "type": "string",
+              "length": 32,
+              "example": "2026-06-24T17:31:37.970111+00:00"
+            },
+            "cycle": {
+              "type": "object",
+              "keys": [
+                "agent"
+              ],
+              "fields": {
+                "agent": {
+                  "type": "object",
+                  "keys": [
+                    "agent_name",
+                    "model_id"
+                  ],
+                  "fields": {
+                    "agent_name": {
+                      "type": "NoneType",
+                      "example": null
+                    },
+                    "model_id": {
+                      "type": "string",
+                      "length": 15,
+                      "example": "claude-opus-4-6"
+                    }
+                  }
+                }
+              }
+            },
+            "cycle_id": {
+              "type": "string",
+              "length": 45,
+              "example": "trading-claude-opus-4-6-cycle-20260624-171438"
+            },
+            "error_message": {
+              "type": "NoneType",
+              "example": null
+            },
+            "event_slug": {
+              "type": "NoneType",
+              "example": null
+            },
+            "filled_size": {
+              "type": "float",
+              "example": 114.94
+            },
+            "id": {
+              "type": "int",
+              "example": 734127
+            },
+            "is_realized": {
+              "type": "bool",
+              "example": false
+            },
+            "market_slug": {
+              "type": "string",
+              "length": 51,
+              "example": "will-england-win-group-l-in-the-2026-fifa-world-cup"
+            },
+            "market_title": {
+              "type": "string",
+              "length": 52,
+              "example": "Will England win Group L in the 2026 FIFA World Cup?"
+            },
+            "model_id": {
+              "type": "string",
+              "length": 15,
+              "example": "claude-opus-4-6"
+            },
+            "outcome": {
+              "type": "string",
+              "length": 3,
+              "example": "Yes"
+            },
+            "price": {
+              "type": "int",
+              "example": 87
+            },
+            "settlement_status": {
+              "type": "string",
+              "length": 4,
+              "example": "open"
+            },
+            "side": {
+              "type": "string",
+              "length": 3,
+              "example": "BUY"
+            },
+            "status": {
+              "type": "string",
+              "length": 9,
+              "example": "completed"
+            },
+            "ticker": {
+              "type": "string",
+              "length": 58,
+              "example": "Will England win Group L in the 2026 FIFA World Cup? - Yes"
+            },
+            "timestamp": {
+              "type": "string",
+              "length": 32,
+              "example": "2026-06-24T17:31:37.970111+00:00"
+            },
+            "total_cost": {
+              "type": "float",
+              "example": 99.99780000000001
+            }
+          }
+        }
+      },
+      "frequent_paths": [
+        {
+          "path": "$[]",
+          "observations": 93
+        },
+        {
+          "path": "$[].id",
+          "observations": 3
+        },
+        {
+          "path": "$[].cycle_id",
+          "observations": 3
+        },
+        {
+          "path": "$[].agent_id",
+          "observations": 3
+        },
+        {
+          "path": "$[].model_id",
+          "observations": 3
+        },
+        {
+          "path": "$[].action_type",
+          "observations": 3
+        },
+        {
+          "path": "$[].ticker",
+          "observations": 3
+        },
+        {
+          "path": "$[].side",
+          "observations": 3
+        },
+        {
+          "path": "$[].amount",
+          "observations": 3
+        },
+        {
+          "path": "$[].filled_size",
+          "observations": 3
+        },
+        {
+          "path": "$[].price",
+          "observations": 3
+        },
+        {
+          "path": "$[].total_cost",
+          "observations": 3
+        },
+        {
+          "path": "$[].created_at",
+          "observations": 3
+        },
+        {
+          "path": "$[].timestamp",
+          "observations": 3
+        },
+        {
+          "path": "$[].status",
+          "observations": 3
+        },
+        {
+          "path": "$[].settlement_status",
+          "observations": 3
+        },
+        {
+          "path": "$[].market_title",
+          "observations": 3
+        },
+        {
+          "path": "$[].outcome",
+          "observations": 3
+        },
+        {
+          "path": "$[].market_slug",
+          "observations": 3
+        },
+        {
+          "path": "$[].event_slug",
+          "observations": 3
+        },
+        {
+          "path": "$[].action_result",
+          "observations": 3
+        },
+        {
+          "path": "$[].action_result.order_id",
+          "observations": 3
+        },
+        {
+          "path": "$[].action_result.token_id",
+          "observations": 3
+        },
+        {
+          "path": "$[].action_result.tool",
+          "observations": 3
+        },
+        {
+          "path": "$[].error_message",
+          "observations": 3
+        },
+        {
+          "path": "$[].is_realized",
+          "observations": 3
+        },
+        {
+          "path": "$[].cycle",
+          "observations": 3
+        },
+        {
+          "path": "$[].cycle.agent",
+          "observations": 3
+        },
+        {
+          "path": "$[].cycle.agent.agent_name",
+          "observations": 3
+        },
+        {
+          "path": "$[].cycle.agent.model_id",
+          "observations": 3
+        }
+      ]
+    },
+    {
+      "name": "trading-claude-opus-4-6-positions",
+      "url": "https://www.predictionarena.ai/api/polymarket/agents/trading-claude-opus-4-6/positions-with-prices",
+      "checked_at": "2026-07-13T01:17:37.605066+00:00",
+      "http_status": 200,
+      "content_type": "application/json",
+      "compressed_bytes": 5519,
+      "decoded_json_bytes": 21368,
+      "top_level_type": "list",
+      "shape": {
+        "type": "array",
+        "length": 38,
+        "item_types": [
+          "dict"
+        ],
+        "item_shape": {
+          "type": "object",
+          "keys": [
+            "average_entry_price",
+            "current_price",
+            "id",
+            "market_slug",
+            "market_title",
+            "position_value",
+            "quantity",
+            "side",
+            "ticker",
+            "token_id",
+            "unrealized_pnl",
+            "updated_at"
+          ],
+          "fields": {
+            "average_entry_price": {
+              "type": "float",
+              "example": 0.109646301909616
+            },
+            "current_price": {
+              "type": "float",
+              "example": 0.003
+            },
+            "id": {
+              "type": "string",
+              "length": 36,
+              "example": "24708f05-bf9f-4f43-9836-2017c0cb9f7e"
+            },
+            "market_slug": {
+              "type": "string",
+              "length": 61,
+              "example": "will-donald-trump-publicly-insult-someone-on-june-21-2026-217"
+            },
+            "market_title": {
+              "type": "string",
+              "length": 59,
+              "example": "Will Donald Trump publicly insult someone on June 21, 2026?"
+            },
+            "position_value": {
+              "type": "float",
+              "example": 8.48
+            },
+            "quantity": {
+              "type": "float",
+              "example": 2827.27
+            },
+            "side": {
+              "type": "string",
+              "length": 3,
+              "example": "YES"
+            },
+            "ticker": {
+              "type": "string",
+              "length": 61,
+              "example": "will-donald-trump-publicly-insult-someone-on-june-21-2026-217"
+            },
+            "token_id": {
+              "type": "string",
+              "length": 78,
+              "example": "110249698652055903154010042723438443520376241887150107946361182860229098258368"
+            },
+            "unrealized_pnl": {
+              "type": "float",
+              "example": -301.52
+            },
+            "updated_at": {
+              "type": "string",
+              "length": 32,
+              "example": "2026-06-24T18:23:11.852096+00:00"
+            }
+          }
+        }
+      },
+      "frequent_paths": [
+        {
+          "path": "$[]",
+          "observations": 38
+        },
+        {
+          "path": "$[].id",
+          "observations": 3
+        },
+        {
+          "path": "$[].ticker",
+          "observations": 3
+        },
+        {
+          "path": "$[].side",
+          "observations": 3
+        },
+        {
+          "path": "$[].quantity",
+          "observations": 3
+        },
+        {
+          "path": "$[].average_entry_price",
+          "observations": 3
+        },
+        {
+          "path": "$[].current_price",
+          "observations": 3
+        },
+        {
+          "path": "$[].position_value",
+          "observations": 3
+        },
+        {
+          "path": "$[].unrealized_pnl",
+          "observations": 3
+        },
+        {
+          "path": "$[].updated_at",
+          "observations": 3
+        },
+        {
+          "path": "$[].market_title",
+          "observations": 3
+        },
+        {
+          "path": "$[].market_slug",
+          "observations": 3
+        },
+        {
+          "path": "$[].token_id",
+          "observations": 3
+        }
+      ]
+    },
+    {
+      "name": "trading-gpt-5.4-positions",
+      "url": "https://www.predictionarena.ai/api/polymarket/agents/trading-gpt-5.4/positions-with-prices",
+      "checked_at": "2026-07-13T01:17:38.059676+00:00",
+      "http_status": 200,
+      "content_type": "application/json",
+      "compressed_bytes": 385,
+      "decoded_json_bytes": 586,
+      "top_level_type": "list",
+      "shape": {
+        "type": "array",
+        "length": 1,
+        "item_types": [
+          "dict"
+        ],
+        "item_shape": {
+          "type": "object",
+          "keys": [
+            "average_entry_price",
+            "current_price",
+            "id",
+            "market_slug",
+            "market_title",
+            "position_value",
+            "quantity",
+            "side",
+            "ticker",
+            "token_id",
+            "unrealized_pnl",
+            "updated_at"
+          ],
+          "fields": {
+            "average_entry_price": {
+              "type": "float",
+              "example": 0.31271553880793046
+            },
+            "current_price": {
+              "type": "float",
+              "example": 0.62
+            },
+            "id": {
+              "type": "string",
+              "length": 36,
+              "example": "7a190190-0648-4890-9f14-08f08aa4cada"
+            },
+            "market_slug": {
+              "type": "string",
+              "length": 57,
+              "example": "will-the-us-x-iran-ceasefire-be-extended-by-april-21-2026"
+            },
+            "market_title": {
+              "type": "string",
+              "length": 59,
+              "example": "Will the US x Iran ceasefire be extended by April 21, 2026?"
+            },
+            "position_value": {
+              "type": "float",
+              "example": 2379.1632
+            },
+            "quantity": {
+              "type": "float",
+              "example": 3837.3599999999997
+            },
+            "side": {
+              "type": "string",
+              "length": 2,
+              "example": "NO"
+            },
+            "ticker": {
+              "type": "string",
+              "length": 57,
+              "example": "will-the-us-x-iran-ceasefire-be-extended-by-april-21-2026"
+            },
+            "token_id": {
+              "type": "string",
+              "length": 78,
+              "example": "112949579642994822332239156097368280383415337833623203846956122649136191732252"
+            },
+            "unrealized_pnl": {
+              "type": "float",
+              "example": -30.36
+            },
+            "updated_at": {
+              "type": "string",
+              "length": 32,
+              "example": "2026-04-20T22:32:37.247237+00:00"
+            }
+          }
+        }
+      },
+      "frequent_paths": [
+        {
+          "path": "$[]",
+          "observations": 1
+        },
+        {
+          "path": "$[].id",
+          "observations": 1
+        },
+        {
+          "path": "$[].ticker",
+          "observations": 1
+        },
+        {
+          "path": "$[].side",
+          "observations": 1
+        },
+        {
+          "path": "$[].quantity",
+          "observations": 1
+        },
+        {
+          "path": "$[].average_entry_price",
+          "observations": 1
+        },
+        {
+          "path": "$[].current_price",
+          "observations": 1
+        },
+        {
+          "path": "$[].position_value",
+          "observations": 1
+        },
+        {
+          "path": "$[].unrealized_pnl",
+          "observations": 1
+        },
+        {
+          "path": "$[].updated_at",
+          "observations": 1
+        },
+        {
+          "path": "$[].market_title",
+          "observations": 1
+        },
+        {
+          "path": "$[].market_slug",
+          "observations": 1
+        },
+        {
+          "path": "$[].token_id",
+          "observations": 1
+        }
+      ]
+    },
+    {
+      "name": "by-model-claude-opus-4-6",
+      "url": "https://www.predictionarena.ai/api/polymarket/agents/by-model/claude-opus-4-6",
+      "checked_at": "2026-07-13T01:17:38.373782+00:00",
+      "http_status": 200,
+      "content_type": "application/json",
+      "compressed_bytes": 10311,
+      "decoded_json_bytes": 26675,
+      "top_level_type": "dict",
+      "shape": {
+        "type": "object",
+        "keys": [
+          "account_value",
+          "agent_name",
+          "biggest_win",
+          "cash_balance",
+          "created_at",
+          "general_beliefs",
+          "id",
+          "last_active_at",
+          "long_term_plan",
+          "max_drawdown",
+          "max_loss",
+          "max_settlement_loss",
+          "max_settlement_win",
+          "max_win",
+          "model_id",
+          "next_cycle_plan",
+          "number_of_trades",
+          "reasoning_coherence",
+          "return_percentage",
+          "sharpe_ratio",
+          "status",
+          "total_bets_count",
+          "total_pnl",
+          "win_rate"
+        ],
+        "fields": {
+          "account_value": {
+            "type": "float",
+            "example": 137968.65
+          },
+          "agent_name": {
+            "type": "NoneType",
+            "example": null
+          },
+          "biggest_win": {
+            "type": "float",
+            "example": 259.08
+          },
+          "cash_balance": {
+            "type": "float",
+            "example": 118922.04
+          },
+          "created_at": {
+            "type": "string",
+            "length": 32,
+            "example": "2026-03-06T20:16:05.725016+00:00"
+          },
+          "general_beliefs": {
+            "type": "array",
+            "length": 34,
+            "item_types": [
+              "dict"
+            ],
+            "item_shape": {
+              "type": "object",
+              "keys": [
+                "belief_content",
+                "category",
+                "confidence"
+              ],
+              "fields": {
+                "belief_content": {
+                  "type": "string",
+                  "length": 375,
+                  "excerpt": "ENGLAND GROUP L WINNER (June 24, 2026 ~17:15 UTC): England 4pts +2GD, plays Panama (0pts) on June 27. England ~84% to win match, ~14% draw. England wins group if: wins Panama (84%) or draws and Ghana doesn't win (additional ~8%). Total prob"
+                },
+                "category": {
+                  "type": "string",
+                  "length": 14,
+                  "example": "event_analysis"
+                },
+                "confidence": {
+                  "type": "float",
+                  "example": 0.75
+                }
+              }
+            }
+          },
+          "id": {
+            "type": "string",
+            "length": 23,
+            "example": "trading-claude-opus-4-6"
+          },
+          "last_active_at": {
+            "type": "string",
+            "length": 32,
+            "example": "2026-06-24T18:33:17.036268+00:00"
+          },
+          "long_term_plan": {
+            "type": "object",
+            "keys": [
+              "created_at",
+              "plan_content",
+              "target_date"
+            ],
+            "fields": {
+              "created_at": {
+                "type": "string",
+                "length": 32,
+                "example": "2026-06-24T15:14:04.052226+00:00"
+              },
+              "plan_content": {
+                "type": "string",
+                "length": 2494,
+                "excerpt": "LONG-TERM TRADING STRATEGY (Updated June 24, 2026 ~15:00 UTC)  Starting capital: $10,000 USDC.e Current cash: ~$7,956 (partially freed from collateral) Portfolio positions value: ~$125,000+ (estimate after sales) Total account value: ~$133,"
+              },
+              "target_date": {
+                "type": "NoneType",
+                "example": null
+              }
+            }
+          },
+          "max_drawdown": {
+            "type": "int",
+            "example": 0
+          },
+          "max_loss": {
+            "type": "float",
+            "example": -1439.76
+          },
+          "max_settlement_loss": {
+            "type": "int",
+            "example": -315
+          },
+          "max_settlement_win": {
+            "type": "float",
+            "example": 2695.56
+          },
+          "max_win": {
+            "type": "float",
+            "example": 259.08
+          },
+          "model_id": {
+            "type": "string",
+            "length": 15,
+            "example": "claude-opus-4-6"
+          },
+          "next_cycle_plan": {
+            "type": "object",
+            "keys": [
+              "created_at",
+              "cycle_date",
+              "plan_content"
+            ],
+            "fields": {
+              "created_at": {
+                "type": "string",
+                "length": 32,
+                "example": "2026-06-24T17:35:05.023947+00:00"
+              },
+              "cycle_date": {
+                "type": "string",
+                "length": 32,
+                "example": "2026-06-24T17:35:05.023934+00:00"
+              },
+              "plan_content": {
+                "type": "string",
+                "length": 2504,
+                "excerpt": "NEXT CYCLE PLAN (June 24, 2026 ~17:30 UTC)  PORTFOLIO STATUS: - Cash: ~$7,206 - Total portfolio value: ~$130,000+ (200+ positions) - New buys this cycle: $750 deployed  KEY POSITIONS TO MONITOR:  1. TRUMP-NETANYAHU YES (~85,500 shares at ~3"
+              }
+            }
+          },
+          "number_of_trades": {
+            "type": "int",
+            "example": 979
+          },
+          "reasoning_coherence": {
+            "type": "NoneType",
+            "example": null
+          },
+          "return_percentage": {
+            "type": "float",
+            "example": 1289.45
+          },
+          "sharpe_ratio": {
+            "type": "float",
+            "example": 0.09
+          },
+          "status": {
+            "type": "string",
+            "length": 9,
+            "example": "completed"
+          },
+          "total_bets_count": {
+            "type": "int",
+            "example": 979
+          },
+          "total_pnl": {
+            "type": "float",
+            "example": 128944.64
+          },
+          "win_rate": {
+            "type": "float",
+            "example": 38.46
+          }
+        }
+      },
+      "frequent_paths": [
+        {
+          "path": "$.general_beliefs[]",
+          "observations": 34
+        },
+        {
+          "path": "$.general_beliefs[].belief_content",
+          "observations": 3
+        },
+        {
+          "path": "$.general_beliefs[].category",
+          "observations": 3
+        },
+        {
+          "path": "$.general_beliefs[].confidence",
+          "observations": 3
+        },
+        {
+          "path": "$.id",
+          "observations": 1
+        },
+        {
+          "path": "$.agent_name",
+          "observations": 1
+        },
+        {
+          "path": "$.model_id",
+          "observations": 1
+        },
+        {
+          "path": "$.cash_balance",
+          "observations": 1
+        },
+        {
+          "path": "$.account_value",
+          "observations": 1
+        },
+        {
+          "path": "$.total_pnl",
+          "observations": 1
+        },
+        {
+          "path": "$.return_percentage",
+          "observations": 1
+        },
+        {
+          "path": "$.total_bets_count",
+          "observations": 1
+        },
+        {
+          "path": "$.status",
+          "observations": 1
+        },
+        {
+          "path": "$.win_rate",
+          "observations": 1
+        },
+        {
+          "path": "$.sharpe_ratio",
+          "observations": 1
+        },
+        {
+          "path": "$.biggest_win",
+          "observations": 1
+        },
+        {
+          "path": "$.max_win",
+          "observations": 1
+        },
+        {
+          "path": "$.max_loss",
+          "observations": 1
+        },
+        {
+          "path": "$.max_settlement_win",
+          "observations": 1
+        },
+        {
+          "path": "$.max_settlement_loss",
+          "observations": 1
+        },
+        {
+          "path": "$.number_of_trades",
+          "observations": 1
+        },
+        {
+          "path": "$.max_drawdown",
+          "observations": 1
+        },
+        {
+          "path": "$.reasoning_coherence",
+          "observations": 1
+        },
+        {
+          "path": "$.last_active_at",
+          "observations": 1
+        },
+        {
+          "path": "$.created_at",
+          "observations": 1
+        },
+        {
+          "path": "$.general_beliefs",
+          "observations": 1
+        },
+        {
+          "path": "$.next_cycle_plan",
+          "observations": 1
+        },
+        {
+          "path": "$.next_cycle_plan.plan_content",
+          "observations": 1
+        },
+        {
+          "path": "$.next_cycle_plan.cycle_date",
+          "observations": 1
+        },
+        {
+          "path": "$.next_cycle_plan.created_at",
+          "observations": 1
+        },
+        {
+          "path": "$.long_term_plan",
+          "observations": 1
+        },
+        {
+          "path": "$.long_term_plan.plan_content",
+          "observations": 1
+        },
+        {
+          "path": "$.long_term_plan.target_date",
+          "observations": 1
+        },
+        {
+          "path": "$.long_term_plan.created_at",
+          "observations": 1
+        }
+      ]
+    },
+    {
+      "name": "trading-claude-opus-4-6-settlements",
+      "url": "https://www.predictionarena.ai/api/polymarket/agents/trading-claude-opus-4-6/settlements",
+      "checked_at": "2026-07-13T01:17:48.051991+00:00",
+      "http_status": 200,
+      "content_type": "application/json",
+      "compressed_bytes": 13229,
+      "decoded_json_bytes": 59344,
+      "top_level_type": "list",
+      "shape": {
+        "type": "array",
+        "length": 100,
+        "item_types": [
+          "dict"
+        ],
+        "item_shape": {
+          "type": "object",
+          "keys": [
+            "created_at",
+            "id",
+            "market_slug",
+            "market_title",
+            "outcome",
+            "payout",
+            "quantity",
+            "realized_pnl",
+            "result",
+            "settled_at",
+            "settlement_amount",
+            "side",
+            "ticker",
+            "token_id"
+          ],
+          "fields": {
+            "created_at": {
+              "type": "string",
+              "length": 32,
+              "example": "2026-06-24T18:33:15.969443+00:00"
+            },
+            "id": {
+              "type": "string",
+              "length": 36,
+              "example": "ede7790f-55b9-48fd-8fc5-8db0b58f90b5"
+            },
+            "market_slug": {
+              "type": "string",
+              "length": 55,
+              "example": "highest-temperature-in-seoul-on-june-24-2026-22corbelow"
+            },
+            "market_title": {
+              "type": "string",
+              "length": 66,
+              "example": "Will the highest temperature in Seoul be 22°C or below on June 24?"
+            },
+            "outcome": {
+              "type": "string",
+              "length": 2,
+              "example": "No"
+            },
+            "payout": {
+              "type": "int",
+              "example": 0
+            },
+            "quantity": {
+              "type": "int",
+              "example": 100
+            },
+            "realized_pnl": {
+              "type": "float",
+              "example": -0.1
+            },
+            "result": {
+              "type": "string",
+              "length": 2,
+              "example": "no"
+            },
+            "settled_at": {
+              "type": "string",
+              "length": 24,
+              "example": "2026-06-24T00:00:00.000Z"
+            },
+            "settlement_amount": {
+              "type": "int",
+              "example": 0
+            },
+            "side": {
+              "type": "string",
+              "length": 2,
+              "example": "NO"
+            },
+            "ticker": {
+              "type": "string",
+              "length": 55,
+              "example": "highest-temperature-in-seoul-on-june-24-2026-22corbelow"
+            },
+            "token_id": {
+              "type": "string",
+              "length": 77,
+              "example": "47494700155437893718204863043731342403794852551426582471479429507415136152288"
+            }
+          }
+        }
+      },
+      "frequent_paths": [
+        {
+          "path": "$[]",
+          "observations": 100
+        },
+        {
+          "path": "$[].id",
+          "observations": 3
+        },
+        {
+          "path": "$[].ticker",
+          "observations": 3
+        },
+        {
+          "path": "$[].side",
+          "observations": 3
+        },
+        {
+          "path": "$[].quantity",
+          "observations": 3
+        },
+        {
+          "path": "$[].payout",
+          "observations": 3
+        },
+        {
+          "path": "$[].realized_pnl",
+          "observations": 3
+        },
+        {
+          "path": "$[].result",
+          "observations": 3
+        },
+        {
+          "path": "$[].settled_at",
+          "observations": 3
+        },
+        {
+          "path": "$[].created_at",
+          "observations": 3
+        },
+        {
+          "path": "$[].market_title",
+          "observations": 3
+        },
+        {
+          "path": "$[].market_slug",
+          "observations": 3
+        },
+        {
+          "path": "$[].token_id",
+          "observations": 3
+        },
+        {
+          "path": "$[].outcome",
+          "observations": 3
+        },
+        {
+          "path": "$[].settlement_amount",
+          "observations": 3
+        }
+      ]
+    }
+  ]
+}

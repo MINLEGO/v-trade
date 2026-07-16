@@ -1,0 +1,410 @@
+{
+  "generated_at": "2026-07-13T01:22:27.607295+00:00",
+  "snapshot_notes": {
+    "agents": {
+      "count": 10,
+      "rows": [
+        {
+          "id": "afb716b6-90a4-4cbe-9476-ff38b7b72c2f",
+          "agent_id": "trading-claude-opus-4-6",
+          "model_id": "claude-opus-4-6",
+          "status": "completed",
+          "account_value": 137968.65,
+          "latest_account_value": 138944.64,
+          "cash_balance": 118922.04,
+          "latest_cash_balance": 7206.42,
+          "total_pnl": 128944.64,
+          "return_percentage": 1289.45,
+          "total_cycles": 1601,
+          "number_of_trades": 979
+        },
+        {
+          "id": "cb44a97e-497a-4032-baea-8018c5223c26",
+          "agent_id": "trading-gpt-5.4",
+          "model_id": "gpt-5.4",
+          "status": "completed",
+          "account_value": 15411.83,
+          "latest_account_value": 15411.83,
+          "cash_balance": 13032.67,
+          "latest_cash_balance": 11438.09,
+          "total_pnl": 5411.83,
+          "return_percentage": 54.12,
+          "total_cycles": 1805,
+          "number_of_trades": 55
+        },
+        {
+          "id": "c9a8450c-6618-42cc-9f88-a98d67de6cca",
+          "agent_id": "trading-gemini-3.1-pro-preview",
+          "model_id": "gemini-3.1-pro-preview",
+          "status": "completed",
+          "account_value": 29473.18,
+          "latest_account_value": 28113.52,
+          "cash_balance": 27749.39,
+          "latest_cash_balance": 7009.6,
+          "total_pnl": 19675.33,
+          "return_percentage": 196.75,
+          "total_cycles": 1614,
+          "number_of_trades": 913
+        },
+        {
+          "id": "6d71bd28-cf65-4a7e-8cfd-db244225df3b",
+          "agent_id": "trading-glm-5",
+          "model_id": "glm-5",
+          "status": "completed",
+          "account_value": 7053.46,
+          "latest_account_value": 7053.46,
+          "cash_balance": 7000,
+          "latest_cash_balance": 7000,
+          "total_pnl": -2946.54,
+          "return_percentage": -29.47,
+          "total_cycles": 2059,
+          "number_of_trades": 176
+        },
+        {
+          "id": "6751247a-33d3-4e96-ba9a-b09bf0b04a7e",
+          "agent_id": "trading-gpt-5.2",
+          "model_id": "gpt-5.2",
+          "status": "completed",
+          "account_value": 9823.1,
+          "latest_account_value": 9823.1,
+          "cash_balance": 9787.21,
+          "latest_cash_balance": 9787.21,
+          "total_pnl": -176.9,
+          "return_percentage": -1.77,
+          "total_cycles": 2678,
+          "number_of_trades": 189
+        },
+        {
+          "id": "9bafb0fb-d1f9-4472-ac44-34d5e081e26d",
+          "agent_id": "trading-glm-4.7",
+          "model_id": "glm-4.7",
+          "status": "completed",
+          "account_value": 9982.59,
+          "latest_account_value": 9982.59,
+          "cash_balance": 9981.4,
+          "latest_cash_balance": 9981.4,
+          "total_pnl": -17.41,
+          "return_percentage": -0.17,
+          "total_cycles": 2736,
+          "number_of_trades": 118
+        },
+        {
+          "id": "b518ab8b-c7b2-48ba-b1e8-58b5c8317c66",
+          "agent_id": "trading-mystery-model-alpha",
+          "model_id": "mystery-model-alpha",
+          "status": "running",
+          "account_value": 9793.62,
+          "latest_account_value": 9793.62,
+          "cash_balance": 9793.56,
+          "latest_cash_balance": 9793.56,
+          "total_pnl": -206.38,
+          "return_percentage": -2.06,
+          "total_cycles": 2453,
+          "number_of_trades": 23
+        },
+        {
+          "id": "29a62cb6-f033-413f-9c34-d175c6aee6b6",
+          "agent_id": "trading-grok-4-1-fast-reasoning",
+          "model_id": "grok-4-1-fast-reasoning",
+          "status": "completed",
+          "account_value": 10004.13,
+          "latest_account_value": 10004.13,
+          "cash_balance": 9950,
+          "latest_cash_balance": 9950,
+          "total_pnl": 4.13,
+          "return_percentage": 0.04,
+          "total_cycles": 3032,
+          "number_of_trades": 1
+        },
+        {
+          "id": "1d9d4d9b-6eb8-4e05-a807-d0695637fd61",
+          "agent_id": "trading-claude-opus-4-5-20251101",
+          "model_id": "claude-opus-4-5-20251101",
+          "status": "completed",
+          "account_value": 9887.5,
+          "latest_account_value": 9887.5,
+          "cash_balance": 9880.38,
+          "latest_cash_balance": 9832.22,
+          "total_pnl": -112.5,
+          "return_percentage": -1.12,
+          "total_cycles": 2635,
+          "number_of_trades": 217
+        },
+        {
+          "id": "ca887435-2b6c-433e-a3ec-c44923ffff2c",
+          "agent_id": "trading-gemini-3-pro-preview",
+          "model_id": "gemini-3-pro-preview",
+          "status": "completed",
+          "account_value": 9771.36,
+          "latest_account_value": 9770.22,
+          "cash_balance": 9753.84,
+          "latest_cash_balance": 9751.62,
+          "total_pnl": -228.64,
+          "return_percentage": -2.29,
+          "total_cycles": 2381,
+          "number_of_trades": 454
+        }
+      ]
+    },
+    "account_value_history": {
+      "count": 19878,
+      "date_range": {
+        "min": "2026-02-09T03:00:00+00:00",
+        "max": "2026-06-24T18:00:00+00:00"
+      },
+      "models": {
+        "claude-opus-4-5-20251101": 2288,
+        "gemini-3-pro-preview": 1911,
+        "glm-4.7": 2238,
+        "grok-4-1-fast-reasoning": 2520,
+        "mystery-model-alpha": 1975,
+        "gpt-5.2": 2316,
+        "glm-5": 1888,
+        "gpt-5.4": 1767,
+        "gemini-3.1-pro-preview": 1461,
+        "claude-opus-4-6": 1514
+      },
+      "statuses": {
+        "completed": 19878
+      },
+      "value_range": {
+        "min": 7010.66,
+        "max": 144356.01,
+        "median": 9982.17
+      }
+    },
+    "external_markets_history": {
+      "series": [
+        "date",
+        "return_percentage",
+        "value"
+      ],
+      "count": 632,
+      "date_range": {
+        "min": "2026-06-13T02:00:00+00:00",
+        "max": "2026-07-13T00:00:00+00:00"
+      },
+      "first": {
+        "date": "2026-06-13T02:00:00+00:00",
+        "value": 10674.999999999998,
+        "return_percentage": 6.75
+      },
+      "last": {
+        "date": "2026-07-13T00:00:00+00:00",
+        "value": 10883,
+        "return_percentage": 8.83
+      }
+    },
+    "cycles": {
+      "count": 50,
+      "date_range": {
+        "created_at": {
+          "min": "2026-06-24T11:42:28.979975+00:00",
+          "max": "2026-06-24T18:10:19.223758+00:00"
+        },
+        "completed_at": {
+          "min": "2026-06-24T11:42:39.176418+00:00",
+          "max": "2026-06-24T18:10:38.929112+00:00"
+        }
+      },
+      "models": {
+        "grok-4-1-fast-reasoning": 5,
+        "claude-opus-4-5-20251101": 5,
+        "gemini-3-pro-preview": 5,
+        "gpt-5.4": 5,
+        "claude-opus-4-6": 5,
+        "gemini-3.1-pro-preview": 5,
+        "glm-5": 5,
+        "gpt-5.2": 5,
+        "glm-4.7": 5,
+        "mystery-model-alpha": 5
+      },
+      "statuses": {
+        "completed": 32,
+        "failed": 18
+      },
+      "tool_calls_per_cycle": {
+        "min": 0,
+        "median": 10.5,
+        "max": 92
+      }
+    },
+    "actions": {
+      "count": 50,
+      "date_range": {
+        "min": "2026-06-23T21:57:47.787088+00:00",
+        "max": "2026-06-24T17:31:37.970111+00:00"
+      },
+      "models": {
+        "claude-opus-4-6": 49,
+        "gpt-5.4": 1
+      },
+      "action_types": {
+        "BUY_ORDER": 37,
+        "SELL_ORDER": 13
+      },
+      "sides": {
+        "BUY": 37,
+        "SELL": 13
+      },
+      "statuses": {
+        "completed": 50
+      },
+      "settlement_statuses": {
+        "open": 37,
+        "realized": 13
+      },
+      "price_range": {
+        "min": 0.001,
+        "max": 0.989,
+        "median": 0.18
+      },
+      "amount_range": {
+        "min": 0.1,
+        "max": 14207.78,
+        "median": 100.0
+      },
+      "total_cost_range": {
+        "min": 1e-06,
+        "max": 37.951490400000004,
+        "median": 0.18
+      }
+    },
+    "markets": {
+      "count": 15,
+      "active": 15,
+      "outcome_counts": {
+        "2": 15
+      },
+      "date_range": {
+        "start_date": {
+          "min": "2025-12-06T00:00:00+00:00",
+          "max": "2026-06-23T00:00:00+00:00",
+          "median": "2026-06-23T00:00:00+00:00"
+        },
+        "end_date": {
+          "min": "2026-06-24T00:00:00+00:00",
+          "max": "2026-06-29T00:00:00+00:00",
+          "median": "2026-06-25T00:00:00+00:00"
+        }
+      }
+    },
+    "agent_actions": {
+      "count": 93,
+      "date_range": {
+        "min": "2026-06-23T07:33:05.708359+00:00",
+        "max": "2026-06-24T17:31:37.970111+00:00",
+        "median": "2026-06-23T22:56:17.446734+00:00"
+      },
+      "action_types": {
+        "BUY_ORDER": 70,
+        "SELL_ORDER": 23
+      },
+      "sides": {
+        "BUY": 70,
+        "SELL": 23
+      },
+      "settlement_statuses": {
+        "open": 70,
+        "realized": 23
+      }
+    },
+    "positions": {
+      "count": 38,
+      "date_range": {
+        "min": "2026-04-13T01:31:15.71362+00:00",
+        "max": "2026-06-24T18:23:11.852096+00:00"
+      },
+      "sides": {
+        "YES": 33,
+        "NO": 5
+      },
+      "quantity_range": {
+        "min": 0.029999999999972715,
+        "max": 85228.80999999995,
+        "median": 116.295
+      },
+      "position_value_range": {
+        "min": 0,
+        "max": 16193.47,
+        "median": 3.43
+      },
+      "unrealized_pnl_range": {
+        "min": -9772.14,
+        "max": 244.66,
+        "median": -0.16
+      }
+    },
+    "by_model": {
+      "id": "trading-claude-opus-4-6",
+      "agent_name": null,
+      "model_id": "claude-opus-4-6",
+      "cash_balance": 118922.04,
+      "account_value": 137968.65,
+      "total_pnl": 128944.64,
+      "return_percentage": 1289.45,
+      "total_bets_count": 979,
+      "status": "completed",
+      "win_rate": 38.46,
+      "sharpe_ratio": 0.09,
+      "biggest_win": 259.08,
+      "max_win": 259.08,
+      "max_loss": -1439.76,
+      "max_settlement_win": 2695.56,
+      "max_settlement_loss": -315,
+      "number_of_trades": 979,
+      "max_drawdown": 0,
+      "reasoning_coherence": null,
+      "last_active_at": "2026-06-24T18:33:17.036268+00:00",
+      "created_at": "2026-03-06T20:16:05.725016+00:00"
+    },
+    "by_model_nested": {
+      "general_beliefs_count": 34,
+      "belief_categories": {
+        "event_analysis": 10,
+        "risk_assessment": 7,
+        "market_structure": 10,
+        "trading_strategy": 7
+      },
+      "long_term_plan_fields": [
+        "created_at",
+        "plan_content",
+        "target_date"
+      ],
+      "next_cycle_plan_fields": [
+        "created_at",
+        "cycle_date",
+        "plan_content"
+      ],
+      "long_term_plan_chars": 2494,
+      "next_cycle_plan_chars": 2504
+    },
+    "settlements": {
+      "count": 100,
+      "date_range": {
+        "created_at": {
+          "min": "2026-06-24T18:30:11.419204+00:00",
+          "max": "2026-06-24T18:33:15.969443+00:00"
+        },
+        "settled_at": {
+          "min": "2026-05-15T00:00:00.000Z",
+          "max": "2026-07-01T00:00:00.000Z"
+        }
+      },
+      "results": {
+        "no": 74,
+        "yes": 26
+      },
+      "realized_pnl_range": {
+        "min": -345.002,
+        "max": 836.5450499999997,
+        "median": -1.0
+      },
+      "payout_range": {
+        "min": 0,
+        "max": 2799.78,
+        "median": 0.0
+      }
+    }
+  }
+}

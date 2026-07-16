@@ -1,0 +1,110 @@
+{
+  "experiment_version": "predictionarena-polymarket-v1",
+  "status": "owner_pending",
+  "schedule": {
+    "interval_minutes": 60,
+    "mode": "independent_per_agent",
+    "simultaneous_start_required": false,
+    "missed_cycles": "skip"
+  },
+  "capital": {"initial_balance_micros": 10000000000, "currency": "USD"},
+  "artifacts": {
+    "prompt": {
+      "path": "spec/prompt/predictionarena-polymarket-v1.md",
+      "sha256": "ba89b32ade841a7d1d81c96acfd030dba31a6ef6401418c417b45dc42ea44fd2",
+      "classification": "inferred"
+    },
+    "tool_schemas": {
+      "path": "spec/tool-schemas-v1.json",
+      "sha256": "934b0b7e7f501b7f5999fc09fb491e138dc2ce9c00a82735eb31fd3d70bb98d1",
+      "classification": "inferred"
+    }
+  },
+  "classifications": {
+    "schedule.interval_minutes": "vtrade_deviation",
+    "schedule.independent_per_agent": "vtrade_deviation",
+    "research.provider": "vtrade_deviation",
+    "models.gateway": "vtrade_deviation",
+    "venue.execution": "vtrade_deviation",
+    "risk.max_market_cost_basis_fraction": "documented",
+    "execution.paper_fill_rule": "inferred",
+    "prompt.role_separation": "inferred",
+    "discovery.policy": "inferred"
+  },
+  "research": {
+    "enabled_provider": "exa",
+    "fallback_provider": null,
+    "expected_searches_per_agent_cycle": 13,
+    "expected_searches_classification": "inferred"
+  },
+  "models": [
+    {
+      "label": "DeepSeek V4 Flash",
+      "slug": "deepseek/deepseek-v4-flash",
+      "maximum_quantization_bits": 8,
+      "reasoning_effort": null,
+      "provider_allowlist": null,
+      "cross_model_fallback": false,
+      "status": "owner_pending"
+    },
+    {
+      "label": "MiMo V2.5 Pro",
+      "slug": "xiaomi/mimo-v2.5-pro",
+      "maximum_quantization_bits": 8,
+      "reasoning_effort": null,
+      "provider_allowlist": null,
+      "cross_model_fallback": false,
+      "status": "owner_pending"
+    }
+  ],
+  "retention": {
+    "prompts_transcripts_reasoning_months": 6,
+    "visibility": null,
+    "redaction_policy": null
+  },
+  "limits": {
+    "maximum_model_turns": 32,
+    "maximum_total_tool_calls": 100,
+    "maximum_web_searches_per_cycle": null,
+    "maximum_cycle_wall_clock_seconds": 3300,
+    "monthly_external_api_budget_micros": 40000000,
+    "budget_alert_micros": [20000000, 32000000, 40000000],
+    "maximum_market_cost_basis_fraction": "0.15"
+  },
+  "owner_decisions": {
+    "paper_fill_rule": {
+      "status": "owner_pending",
+      "required": true,
+      "proposal": "buy_best_ask_sell_best_bid_reject_absent_quote_no_counterparty_requirement"
+    },
+    "model_routing": {
+      "status": "owner_pending",
+      "required": true,
+      "resolved": {
+        "exact_slugs": true,
+        "maximum_quantization_bits": 8,
+        "cross_model_fallback": false
+      },
+      "requires": ["reasoning_effort", "provider_allowlist"]
+    },
+    "prompt_transcript_visibility": {
+      "status": "owner_pending",
+      "required": true,
+      "requires": ["retention", "redaction", "operator_visibility"]
+    },
+    "experiment_comparison": {
+      "status": "resolved",
+      "required": false,
+      "policy": "independent_agent_start_and_schedule",
+      "simultaneous_start_required": false,
+      "membership_change_effect": "none_on_existing_agents",
+      "new_agent_start": "own_start_date"
+    },
+    "exa_web_search_burst_ceiling": {
+      "status": "owner_pending",
+      "required": true,
+      "reason": "implementation plan conflicts between 50 and 100",
+      "options": [50, 100]
+    }
+  }
+}

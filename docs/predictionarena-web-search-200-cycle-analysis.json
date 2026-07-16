@@ -1,0 +1,49 @@
+{
+  "checked_at": "2026-07-13T01:54:39.883696+00:00",
+  "url": "https://www.predictionarena.ai/api/polymarket/cycles?offset=0&limit=200",
+  "returned_cycles": 200,
+  "api_count": 200,
+  "has_more": false,
+  "web_search_count": {
+    "maximum": 25,
+    "winning_cycles": [
+      {
+        "rank": 27,
+        "cycle_id": "trading-glm-5-cycle-20260624-142702",
+        "model_id": "glm-5",
+        "agent_id": "trading-glm-5",
+        "status": "completed",
+        "created_at": "2026-06-24T14:27:06.548965+00:00",
+        "web_search_count": 25,
+        "total_tool_calls": 61
+      }
+    ],
+    "mean": 4.085,
+    "median": 1.0,
+    "distribution": {
+      "0": 88,
+      "1": 14,
+      "2": 11,
+      "3": 12,
+      "4": 8,
+      "5": 6,
+      "6": 6,
+      "7": 6,
+      "8": 6,
+      "9": 4,
+      "10": 10,
+      "11": 8,
+      "12": 2,
+      "13": 9,
+      "14": 1,
+      "16": 1,
+      "17": 2,
+      "18": 1,
+      "19": 2,
+      "23": 1,
+      "24": 1,
+      "25": 1
+    },
+    "cycles_with_at_least_one": 112
+  }
+}

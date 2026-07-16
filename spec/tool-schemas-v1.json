@@ -1,0 +1,676 @@
+{
+  "schema_version": "predictionarena-tools-v1",
+  "evidence_cutoff": "2026-07-13",
+  "notice": "Names and observed argument keys come from public traces. Types, required fields, bounds and outputs are inferred V-Trade contracts.",
+  "tools": [
+    {
+      "name": "discover_hot_markets",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "hours_back": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "min_liquidity": {
+            "type": "number"
+          },
+          "min_volume_24hr": {
+            "type": "number"
+          }
+        },
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "discover_by_time_remaining",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "hours_min": {
+            "type": "number"
+          },
+          "hours_max": {
+            "type": "number"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "min_liquidity": {
+            "type": "number"
+          }
+        },
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "discover_events",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "keyword": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "min_liquidity": {
+            "type": "number"
+          },
+          "min_volume_24hr": {
+            "type": "number"
+          }
+        },
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "list_top_events",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "integer"
+          },
+          "min_liquidity": {
+            "type": "number"
+          },
+          "min_volume_24hr": {
+            "type": "number"
+          }
+        },
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "get_market_details",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "slug": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "web_search",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "get_orderbook",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "token_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token_id"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "browse_markets_by_volume",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "integer"
+          },
+          "min_liquidity": {
+            "type": "number"
+          },
+          "min_volume_24hr": {
+            "type": "number"
+          }
+        },
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "discover_by_price_volatility",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "integer"
+          },
+          "min_liquidity": {
+            "type": "number"
+          },
+          "min_volatility": {
+            "type": "number"
+          }
+        },
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "get_event_markets",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "event_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_id"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "get_newest_events",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "integer"
+          },
+          "min_liquidity": {
+            "type": "number"
+          }
+        },
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "get_all_active_markets",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "integer"
+          },
+          "min_liquidity": {
+            "type": "number"
+          },
+          "min_volume_24hr": {
+            "type": "number"
+          }
+        },
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "discover_by_volume_trend",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "integer"
+          },
+          "min_liquidity": {
+            "type": "number"
+          },
+          "trend": {
+            "type": "string"
+          }
+        },
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "discover_by_competitive_score",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "integer"
+          },
+          "min_liquidity": {
+            "type": "number"
+          },
+          "min_score": {
+            "type": "number"
+          }
+        },
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "discover_by_date_range",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "start_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "end_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "min_liquidity": {
+            "type": "number"
+          }
+        },
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "search_tags",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "get_balance",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "get_portfolio",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "get_open_orders",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "get_closed_trades",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "integer"
+          }
+        },
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "get_settlements",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "integer"
+          }
+        },
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "get_general_beliefs",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "integer"
+          },
+          "include_inactive": {
+            "type": "boolean"
+          }
+        },
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "search_general_beliefs",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "keyword": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer"
+          }
+        },
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "create_general_belief",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "belief_content": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "belief_content",
+          "category",
+          "confidence"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "delete_general_belief",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "belief_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "belief_id"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "create_long_term_plan",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "plan_content": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_content"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "get_next_cycle_plan",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "create_next_cycle_plan",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "plan_content": {
+            "type": "string"
+          },
+          "cycle_date": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        "required": [
+          "plan_content"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "place_market_order",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "token_id": {
+            "type": "string"
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "BUY",
+              "SELL"
+            ]
+          },
+          "amount": {
+            "type": "number"
+          },
+          "conviction": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "token_id",
+          "side",
+          "amount"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    }
+  ]
+}
+

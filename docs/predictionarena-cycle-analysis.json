@@ -1,0 +1,1119 @@
+{
+  "generated_at": "2026-07-13T01:24:14.113149+00:00",
+  "source": "https://www.predictionarena.ai/api/polymarket/cycles?offset=0&limit=50",
+  "cycle_count": 50,
+  "cycle_statuses": {
+    "completed": 32,
+    "failed": 18
+  },
+  "models": {
+    "grok-4-1-fast-reasoning": 5,
+    "claude-opus-4-5-20251101": 5,
+    "gemini-3-pro-preview": 5,
+    "gpt-5.4": 5,
+    "claude-opus-4-6": 5,
+    "gemini-3.1-pro-preview": 5,
+    "glm-5": 5,
+    "gpt-5.2": 5,
+    "glm-4.7": 5,
+    "mystery-model-alpha": 5
+  },
+  "prompt": {
+    "count": 50,
+    "length_chars": {
+      "min": 9012,
+      "median": 13174.0,
+      "max": 27904
+    },
+    "keyword_presence_count": {
+      "current date": 50,
+      "account value": 50,
+      "positions": 50,
+      "research": 50,
+      "discovery": 50,
+      "belief": 50,
+      "plan": 50,
+      "risk": 50,
+      "buy": 50,
+      "sell": 50,
+      "tool": 50
+    },
+    "marker_lines": [
+      {
+        "text": "TRADING PROTOCOL - MANDATORY STEPS:",
+        "count": 55
+      },
+      {
+        "text": "STEP 1: STRATEGY SELECTION",
+        "count": 55
+      },
+      {
+        "text": "STEP 2: RESEARCH EFFICIENTLY",
+        "count": 55
+      },
+      {
+        "text": "STEP 3: SIDE SELECTION VERIFICATION (CRITICAL - PREVENTS LOSSES)",
+        "count": 55
+      },
+      {
+        "text": "STEP 4: CALCULATE EDGE & EXPECTED P&L",
+        "count": 55
+      },
+      {
+        "text": "STEP 5: SIZE & EXECUTE",
+        "count": 55
+      },
+      {
+        "text": "IMPORTANT REMINDERS:",
+        "count": 55
+      },
+      {
+        "text": "YOUR CURRENT STATE:",
+        "count": 50
+      },
+      {
+        "text": "TO SELL A POSITION:",
+        "count": 50
+      },
+      {
+        "text": "USE KNOWLEDGE MANAGEMENT TOOLS STRATEGICALLY:",
+        "count": 50
+      },
+      {
+        "text": "YOUR KNOWLEDGE & PLANS:",
+        "count": 45
+      },
+      {
+        "text": "RISK MANAGEMENT:",
+        "count": 25
+      },
+      {
+        "text": "PORTFOLIO STATUS:",
+        "count": 15
+      },
+      {
+        "text": "KEY POSITIONS TO HOLD:",
+        "count": 10
+      },
+      {
+        "text": "FUNDAMENTAL:",
+        "count": 10
+      },
+      {
+        "text": "STRATEGY:",
+        "count": 6
+      },
+      {
+        "text": "STRATEGY FOR NEXT CYCLE:",
+        "count": 5
+      },
+      {
+        "text": "ACCOUNT STATUS:",
+        "count": 5
+      },
+      {
+        "text": "METHODOLOGY FOR WORLD CUP GROUP WINNERS:",
+        "count": 5
+      },
+      {
+        "text": "KEY INSIGHTS FROM RECENT ANALYSIS:",
+        "count": 5
+      },
+      {
+        "text": "TRADING PROTOCOL:",
+        "count": 5
+      },
+      {
+        "text": "UPCOMING EVENTS TO MONITOR:",
+        "count": 5
+      },
+      {
+        "text": "LESSONS LEARNED:",
+        "count": 5
+      },
+      {
+        "text": "KEY POSITIONS TO MONITOR:",
+        "count": 5
+      },
+      {
+        "text": "HIGHEST PRIORITY POSITIONS:",
+        "count": 5
+      },
+      {
+        "text": "CORE APPROACH:",
+        "count": 5
+      },
+      {
+        "text": "CURRENT PORTFOLIO SUMMARY:",
+        "count": 5
+      },
+      {
+        "text": "TRADING STRATEGY:",
+        "count": 5
+      },
+      {
+        "text": "RESEARCH COMPLETED:",
+        "count": 5
+      },
+      {
+        "text": "PORTFOLIO REVIEW:",
+        "count": 5
+      },
+      {
+        "text": "NEXT CYCLE PRIORITIES:",
+        "count": 5
+      },
+      {
+        "text": "LONG-TERM TRADING STRATEGY UPDATE - APRIL 17, 2026:",
+        "count": 5
+      },
+      {
+        "text": "CORE PHILOSOPHY:",
+        "count": 5
+      },
+      {
+        "text": "CURRENT MARKET ENVIRONMENT:",
+        "count": 5
+      },
+      {
+        "text": "KEY CHALLENGES:",
+        "count": 5
+      },
+      {
+        "text": "MARKET-MAKING:",
+        "count": 5
+      },
+      {
+        "text": "PORTFOLIO MANAGEMENT:",
+        "count": 5
+      },
+      {
+        "text": "KEY BELIEFS:",
+        "count": 5
+      },
+      {
+        "text": "SMALL ACTIVE POSITIONS:",
+        "count": 4
+      },
+      {
+        "text": "OPPORTUNITY ANALYSIS:",
+        "count": 4
+      },
+      {
+        "text": "DECISION:",
+        "count": 4
+      },
+      {
+        "text": "MY PROBABILITY CALCULATION:",
+        "count": 3
+      },
+      {
+        "text": "MARKET ANALYSIS:",
+        "count": 3
+      },
+      {
+        "text": "SIDE VERIFICATION:",
+        "count": 3
+      },
+      {
+        "text": "STANDINGS:",
+        "count": 3
+      },
+      {
+        "text": "JUNE 27 MATCHES:",
+        "count": 3
+      },
+      {
+        "text": "MY PROBABILITY:",
+        "count": 3
+      },
+      {
+        "text": "EXECUTION STATUS:",
+        "count": 3
+      },
+      {
+        "text": "PRIORITY WHEN CAPITAL FREES:",
+        "count": 3
+      },
+      {
+        "text": "NEXT ACTIONS:",
+        "count": 3
+      },
+      {
+        "text": "CRITICAL CAPITAL LOCKUP - ZERO TRADING CAPACITY:",
+        "count": 3
+      },
+      {
+        "text": "KEY LESSONS LEARNED:",
+        "count": 3
+      },
+      {
+        "text": "OPPORTUNITIES EVALUATED THIS CYCLE:",
+        "count": 3
+      },
+      {
+        "text": "PRIORITY NEXT CYCLE:",
+        "count": 2
+      },
+      {
+        "text": "LESSONS THIS CYCLE:",
+        "count": 2
+      },
+      {
+        "text": "CAPITAL SITUATION - IMPROVING:",
+        "count": 2
+      },
+      {
+        "text": "KEY LESSONS:",
+        "count": 2
+      },
+      {
+        "text": "JUNE 24, 2026 CYCLE - PORTFOLIO REVIEW AND HOLDING STRATEGY",
+        "count": 2
+      },
+      {
+        "text": "JUNE 24, 2026 CYCLE - NO TRADES EXECUTED",
+        "count": 2
+      },
+      {
+        "text": "MARKET ANALYSIS COMPLETED THIS CYCLE:",
+        "count": 2
+      },
+      {
+        "text": "EXECUTION CONSTRAINTS:",
+        "count": 2
+      },
+      {
+        "text": "KEY INSIGHT:",
+        "count": 2
+      },
+      {
+        "text": "CAPITAL LOCKUP - ONGOING CRISIS:",
+        "count": 2
+      },
+      {
+        "text": "OPPORTUNITY ANALYSIS THIS CYCLE:",
+        "count": 1
+      },
+      {
+        "text": "OPPORTUNITY IDENTIFIED THIS CYCLE:",
+        "count": 1
+      },
+      {
+        "text": "CAPITAL LOCKUP - ONGOING (CRITICAL):",
+        "count": 1
+      },
+      {
+        "text": "JUNE 24, 2026 CYCLE - FUNDAMENTAL TRADE EXECUTED",
+        "count": 1
+      },
+      {
+        "text": "TRADE EXECUTED:",
+        "count": 1
+      },
+      {
+        "text": "ENGLAND WORLD CUP GROUP L MARKET:",
+        "count": 1
+      }
+    ],
+    "common_lines": [
+      {
+        "text": "────────────────────────────────────────────────────────────────────",
+        "count": 345
+      },
+      {
+        "text": "Status:         Redeemable",
+        "count": 330
+      },
+      {
+        "text": "Outcome:        Yes",
+        "count": 255
+      },
+      {
+        "text": "Current Value:  $0.00 USDC.e",
+        "count": 225
+      },
+      {
+        "text": "Current Price:  N/A",
+        "count": 225
+      },
+      {
+        "text": "- Total Expected P&L = Expected P&L per contract × Quantity",
+        "count": 110
+      },
+      {
+        "text": "Current Price:  $1.0000 USDC.e",
+        "count": 105
+      },
+      {
+        "text": "Initial Value:  $1.00 USDC.e",
+        "count": 85
+      },
+      {
+        "text": "Outcome:        No",
+        "count": 80
+      },
+      {
+        "text": "Realized PnL:   $-1.00 USDC.e",
+        "count": 70
+      },
+      {
+        "text": "======================================================================",
+        "count": 60
+      },
+      {
+        "text": "End Date:       2026-04-10",
+        "count": 60
+      },
+      {
+        "text": "TRADING PROTOCOL - MANDATORY STEPS:",
+        "count": 55
+      },
+      {
+        "text": "STEP 1: STRATEGY SELECTION",
+        "count": 55
+      },
+      {
+        "text": "Decide: Am I making a fundamental trade (betting on outcome, holding to settlement) or market-making trade (trading price movement, exiting before settlement)?",
+        "count": 55
+      },
+      {
+        "text": "STEP 2: RESEARCH EFFICIENTLY",
+        "count": 55
+      },
+      {
+        "text": "- Use discovery tools to find relevant markets (discover_events, discover_hot_markets, etc.)",
+        "count": 55
+      },
+      {
+        "text": "- Use get_market_details to analyze specific markets",
+        "count": 55
+      },
+      {
+        "text": "- Use get_orderbook to assess liquidity before trading",
+        "count": 55
+      },
+      {
+        "text": "- Use web_search for current data, forecasts, expert analysis",
+        "count": 55
+      },
+      {
+        "text": "- For fundamental: Research actual outcome probability, accounting for resolution conditions in market description",
+        "count": 55
+      },
+      {
+        "text": "- For market-making: Research price catalysts and movement",
+        "count": 55
+      },
+      {
+        "text": "STEP 3: SIDE SELECTION VERIFICATION (CRITICAL - PREVENTS LOSSES)",
+        "count": 55
+      },
+      {
+        "text": "Before EVERY trade, write out:",
+        "count": 55
+      },
+      {
+        "text": "- \"YES wins if: [exact condition]\"",
+        "count": 55
+      },
+      {
+        "text": "- \"NO wins if: [exact opposite]\"",
+        "count": 55
+      },
+      {
+        "text": "- \"I expect: [outcome or price movement]\"",
+        "count": 55
+      },
+      {
+        "text": "- \"Therefore buying: [YES or NO]\"",
+        "count": 55
+      },
+      {
+        "text": "- Read this TWICE and verify logic",
+        "count": 55
+      },
+      {
+        "text": "STEP 4: CALCULATE EDGE & EXPECTED P&L",
+        "count": 55
+      },
+      {
+        "text": "- Fundamental: Calculate true probability from data (express as range, acknowledge uncertainty), compare to market price, compute Expected P&L per contract",
+        "count": 55
+      },
+      {
+        "text": "- Review market description for resolution conditions (delayed data, government shutdowns, etc.) and factor into probability",
+        "count": 55
+      },
+      {
+        "text": "- Expected P&L = (True Probability × $1.00) - (Market Price × $1.00) - fees - gas_fees",
+        "count": 55
+      },
+      {
+        "text": "- Gas fees: Account for up to $0.10 (10 cents) in POL gas fees per transaction (NOT per contract - it's a fixed fee per transaction regardless of quantity)",
+        "count": 55
+      },
+      {
+        "text": "- **FAVORITE-LONGSHOT BIAS**: Near settlement favorites (>70%) are often underpriced → can lead to positive Expected P&L, but always verify",
+        "count": 55
+      },
+      {
+        "text": "- **IMPORTANT**: Evaluate all opportunities by expected P&L, not just favorites. Longshots with positive EV can be better than favorites with negative EV.",
+        "count": 55
+      },
+      {
+        "text": "- If probability estimate has high uncertainty, use conservative estimate or require larger EV threshold",
+        "count": 55
+      },
+      {
+        "text": "- Market-making: Identify catalyst, predict price movement, calculate Expected P&L",
+        "count": 55
+      },
+      {
+        "text": "- Expected P&L = (Target Price - Entry Price) - fees - gas_fees per contract",
+        "count": 55
+      },
+      {
+        "text": "- Gas fees: Account for up to $0.10 (10 cents) in POL gas fees per transaction (NOT per contract - it's a fixed fee per transaction regardless of quantity). Buy and sell = up to $0.20 total gas fees.",
+        "count": 55
+      },
+      {
+        "text": "- Need >15¢ profit per contract after all fees (including gas)",
+        "count": 55
+      },
+      {
+        "text": "STEP 5: SIZE & EXECUTE",
+        "count": 55
+      },
+      {
+        "text": "- Follow sizing rules based on edge, timing, and strategy",
+        "count": 55
+      },
+      {
+        "text": "- Set exit plan for market-making trades (trigger, stop-loss, max 3 days)",
+        "count": 55
+      },
+      {
+        "text": "- Simply describing a trade or stating \"I will buy\" does NOT execute anything",
+        "count": 55
+      },
+      {
+        "text": "- The trading tool call is what actually executes the trade on Polymarket",
+        "count": 55
+      },
+      {
+        "text": "- If you decide to trade, you MUST use the tool - no exceptions",
+        "count": 55
+      },
+      {
+        "text": "IMPORTANT REMINDERS:",
+        "count": 55
+      },
+      {
+        "text": "- **P&L IS EVERYTHING**: Every trade decision must be evaluated through expected P&L. Track realized P&L (locked in) vs unrealized P&L (can change). Maximize total portfolio P&L. Only trade if expected P&L is positive.",
+        "count": 55
+      },
+      {
+        "text": "- **ACKNOWLEDGE UNCERTAINTY**: Express probabilities as ranges, acknowledge when data is conflicting or sparse, and size positions accordingly. High uncertainty = smaller positions.",
+        "count": 55
+      },
+      {
+        "text": "- **AVOID CONFIRMATION BIAS**: Actively seek disconfirming evidence. What would make your analysis wrong? Consider alternative scenarios before trading.",
+        "count": 55
+      },
+      {
+        "text": "- **MARKET DESCRIPTION**: Always read market descriptions - they contain resolution conditions that may differ from expectations (e.g., delayed data may resolve to default outcome)",
+        "count": 55
+      },
+      {
+        "text": "- **LOW-PRICE (<10¢)**: If you trade a side below 10¢, be able to explain why the market is that low and why you are still trading.",
+        "count": 55
+      },
+      {
+        "text": "- TIMING RISK: High-price positions (>70¢) far from settlement (3+ days) are DANGEROUS to hold but GOOD to trade (market-making)",
+        "count": 55
+      },
+      {
+        "text": "- SIDE SELECTION: Most losses come from buying the WRONG SIDE. Wrong side = negative P&L. Always verify which side wins under which conditions.",
+        "count": 55
+      },
+      {
+        "text": "- Market-making exit: If you have market-making positions, check if catalyst occurred or stop-loss hit - EXIT IMMEDIATELY to realize P&L, don't hold to settlement",
+        "count": 55
+      },
+      {
+        "text": "- NO GUESSING: Every probability must be based on concrete data from research. Wrong probability = wrong expected P&L = losses.",
+        "count": 55
+      },
+      {
+        "text": "- LIQUIDITY RISK: Consider market depth before trading. Low liquidity markets may be difficult to exit. Check orderbook depth before entering positions.",
+        "count": 55
+      },
+      {
+        "text": "YOUR CURRENT STATE:",
+        "count": 50
+      },
+      {
+        "text": "OPEN ORDERS (0 orders):",
+        "count": 50
+      },
+      {
+        "text": "No open orders",
+        "count": 50
+      },
+      {
+        "text": "- Each cycle, make a deliberate search for at least one opportunity that could meet your expected P&L bar; if you find it and it passes your checks, execute. If you have not traded in many cycles, prioritize this search—inaction has no P&L.",
+        "count": 50
+      },
+      {
+        "text": "- **CRITICAL: You MUST actually call {trading_tool_ref} tool to execute trades**",
+        "count": 50
+      },
+      {
+        "text": "TO SELL A POSITION:",
+        "count": 50
+      },
+      {
+        "text": "- Use {trading_tool_ref} with side=\"SELL\" and the token_id of the position you want to sell",
+        "count": 50
+      },
+      {
+        "text": "- You can directly sell contracts you own - no need to buy the opposite side",
+        "count": 50
+      },
+      {
+        "text": "USE KNOWLEDGE MANAGEMENT TOOLS STRATEGICALLY:",
+        "count": 50
+      },
+      {
+        "text": "**OPEN ORDERS MANAGEMENT**:",
+        "count": 50
+      },
+      {
+        "text": "- Review your open orders at the start of each cycle",
+        "count": 50
+      },
+      {
+        "text": "- Cancel stale orders (>24h old) if market moved significantly or strategy changed",
+        "count": 50
+      },
+      {
+        "text": "- Cancel orders if price moved >10% away from your limit price",
+        "count": 50
+      },
+      {
+        "text": "- Cancel orders on markets <24h to settlement if not filled (avoid accidental fills)",
+        "count": 50
+      },
+      {
+        "text": "- Let orders fill if price still good and strategy unchanged",
+        "count": 50
+      },
+      {
+        "text": "- Check partially filled orders - decide if remainder should fill or be cancelled",
+        "count": 50
+      },
+      {
+        "text": "YOUR KNOWLEDGE & PLANS:",
+        "count": 45
+      },
+      {
+        "text": "Next Cycle Plan:",
+        "count": 45
+      }
+    ]
+  },
+  "reasoning_length_chars": {
+    "min": 0,
+    "median": 1090.0,
+    "max": 2013
+  },
+  "tool_calls": {
+    "total": 849,
+    "success_values": {
+      "true": 849
+    },
+    "categories": {
+      "discovery": 763,
+      "knowledge": 44,
+      "trading": 42
+    },
+    "names": {
+      "discover_hot_markets": 31,
+      "discover_by_time_remaining": 31,
+      "get_portfolio": 29,
+      "get_balance": 31,
+      "get_open_orders": 21,
+      "discover_events": 111,
+      "list_top_events": 20,
+      "get_market_details": 110,
+      "web_search": 196,
+      "get_orderbook": 41,
+      "browse_markets_by_volume": 18,
+      "discover_by_price_volatility": 17,
+      "get_event_markets": 29,
+      "get_newest_events": 3,
+      "get_all_active_markets": 15,
+      "get_general_beliefs": 15,
+      "create_next_cycle_plan": 22,
+      "create_general_belief": 13,
+      "delete_general_belief": 8,
+      "get_closed_trades": 5,
+      "discover_by_volume_trend": 9,
+      "search_general_beliefs": 9,
+      "get_settlements": 6,
+      "place_market_order": 42,
+      "get_next_cycle_plan": 2,
+      "discover_by_competitive_score": 11,
+      "create_long_term_plan": 1,
+      "discover_by_date_range": 2,
+      "search_tags": 1
+    },
+    "display_names": {
+      "Discover Hot Markets": 31,
+      "Discover By Time Remaining": 31,
+      "Get Portfolio": 29,
+      "Get Balance": 31,
+      "Get Open Orders": 21,
+      "Discover Events": 111,
+      "List Top Events": 20,
+      "Get Market Details": 110,
+      "Web Search": 196,
+      "Get Orderbook": 41,
+      "Browse Markets By Volume": 18,
+      "Discover By Price Volatility": 17,
+      "Get Event Markets": 29,
+      "Get Newest Events": 3,
+      "Get All Active Markets": 15,
+      "Get General Beliefs": 15,
+      "Create Next Cycle Plan": 22,
+      "Create General Belief": 13,
+      "Delete General Belief": 8,
+      "Get Closed Trades": 5,
+      "Discover By Volume Trend": 9,
+      "Search General Beliefs": 9,
+      "Get Settlements": 6,
+      "Place Market Order": 42,
+      "Get Next Cycle Plan": 2,
+      "Discover By Competitive Score": 11,
+      "Create Long Term Plan": 1,
+      "Discover By Date Range": 2,
+      "Search Tags": 1
+    },
+    "argument_shapes": {
+      "discover_hot_markets": {
+        "keys=hours_back,limit,min_liquidity,min_volume_24hr": 20,
+        "keys=hours_back,limit": 3,
+        "keys=hours_back,limit,min_liquidity": 2,
+        "keys=limit": 2,
+        "keys=limit,min_liquidity,min_volume_24hr": 4
+      },
+      "discover_by_time_remaining": {
+        "keys=hours_max,hours_min,limit,min_liquidity": 22,
+        "keys=hours_max,limit,min_liquidity": 6,
+        "keys=hours_max,hours_min,limit": 3
+      },
+      "get_portfolio": {
+        "keys=": 29
+      },
+      "get_balance": {
+        "keys=": 31
+      },
+      "get_open_orders": {
+        "keys=": 21
+      },
+      "discover_events": {
+        "keys=keyword,limit": 34,
+        "keys=keyword,limit,min_liquidity,min_volume_24hr": 60,
+        "keys=keyword,limit,min_liquidity": 5,
+        "keys=keyword,min_liquidity,min_volume_24hr": 7,
+        "keys=keyword": 5
+      },
+      "list_top_events": {
+        "keys=limit": 3,
+        "keys=limit,min_liquidity,min_volume_24hr": 13,
+        "keys=limit,min_liquidity": 2,
+        "keys=limit,min_volume_24hr": 2
+      },
+      "get_market_details": {
+        "keys=slug": 110
+      },
+      "web_search": {
+        "keys=query": 196
+      },
+      "get_orderbook": {
+        "keys=token_id": 41
+      },
+      "browse_markets_by_volume": {
+        "keys=limit,min_liquidity": 1,
+        "keys=limit,min_liquidity,min_volume_24hr": 15,
+        "keys=limit": 2
+      },
+      "discover_by_price_volatility": {
+        "keys=limit,min_volatility": 3,
+        "keys=limit,min_liquidity,min_volatility": 13,
+        "keys=limit,min_liquidity": 1
+      },
+      "get_event_markets": {
+        "keys=event_id": 29
+      },
+      "get_newest_events": {
+        "keys=limit": 1,
+        "keys=limit,min_liquidity": 2
+      },
+      "get_all_active_markets": {
+        "keys=limit,min_liquidity": 1,
+        "keys=limit,min_liquidity,min_volume_24hr": 13,
+        "keys=limit": 1
+      },
+      "get_general_beliefs": {
+        "keys=limit": 9,
+        "keys=": 4,
+        "keys=include_inactive,limit": 2
+      },
+      "create_next_cycle_plan": {
+        "keys=cycle_date,plan_content": 8,
+        "keys=plan_content": 14
+      },
+      "create_general_belief": {
+        "keys=belief_content,category,confidence": 13
+      },
+      "delete_general_belief": {
+        "keys=belief_id": 8
+      },
+      "get_closed_trades": {
+        "keys=limit": 5
+      },
+      "discover_by_volume_trend": {
+        "keys=limit,min_liquidity,trend": 7,
+        "keys=limit,trend": 2
+      },
+      "search_general_beliefs": {
+        "keys=keyword,limit": 4,
+        "keys=category,limit": 4,
+        "keys=keyword": 1
+      },
+      "get_settlements": {
+        "keys=limit": 6
+      },
+      "place_market_order": {
+        "keys=amount,conviction,side,token_id": 31,
+        "keys=amount,side,token_id": 11
+      },
+      "get_next_cycle_plan": {
+        "keys=": 2
+      },
+      "discover_by_competitive_score": {
+        "keys=limit,min_liquidity,min_score": 8,
+        "keys=limit,min_score": 3
+      },
+      "create_long_term_plan": {
+        "keys=plan_content": 1
+      },
+      "discover_by_date_range": {
+        "keys=end_date,limit,min_liquidity,start_date": 1,
+        "keys=end_date,limit,start_date": 1
+      },
+      "search_tags": {
+        "keys=query": 1
+      }
+    },
+    "argument_examples": {
+      "discover_hot_markets": {
+        "limit": 10,
+        "min_liquidity": 1000,
+        "min_volume_24hr": 500,
+        "hours_back": 24
+      },
+      "discover_by_time_remaining": {
+        "limit": 10,
+        "hours_min": 1,
+        "hours_max": 48,
+        "min_liquidity": 1000
+      },
+      "discover_events": {
+        "keyword": "World Cup",
+        "limit": 15,
+        "min_liquidity": 1000,
+        "min_volume_24hr": 100
+      },
+      "list_top_events": {
+        "limit": 20,
+        "min_liquidity": 1000,
+        "min_volume_24hr": 500
+      },
+      "get_market_details": {
+        "slug": "will-brazil-win-group-c-in-the-2026-fifa-world-cup"
+      },
+      "web_search": {
+        "query": "World Cup 2026 Group C standings Brazil Morocco Scotland June 24 2026 results"
+      },
+      "get_orderbook": {
+        "token_id": "81847767762276015376638362563472043266790475968888863771265036582040507866830"
+      },
+      "browse_markets_by_volume": {
+        "limit": 30,
+        "min_liquidity": 500,
+        "min_volume_24hr": 500
+      },
+      "discover_by_price_volatility": {
+        "min_volatility": 0.05,
+        "limit": 15,
+        "min_liquidity": 1000
+      },
+      "get_event_markets": {
+        "event_id": "98264"
+      },
+      "get_newest_events": {
+        "limit": 15,
+        "min_liquidity": 200
+      },
+      "get_all_active_markets": {
+        "limit": 30,
+        "min_liquidity": 1000,
+        "min_volume_24hr": 10
+      },
+      "get_general_beliefs": {
+        "limit": 20,
+        "include_inactive": false
+      },
+      "create_next_cycle_plan": {
+        "plan_content": "NEXT CYCLE PLAN (June 24, 2026 - 17:50 UTC)\n\nPORTFOLIO STATUS:\n- Cash: $9,832.22 (~99.3% of account)\n- Active Portfolio ",
+        "cycle_date": "2026-06-24"
+      },
+      "create_general_belief": {
+        "belief_content": "BRAZIL GROUP C WINNER - FINAL MATCH DAY ANALYSIS (June 24, 2026 - 17:50 UTC): Matches kick off at 6:00 PM ET (22:00 UTC)",
+        "category": "event_analysis",
+        "confidence": 0.8
+      },
+      "delete_general_belief": {
+        "belief_id": "f4960c9b-4002-4976-9731-dafcba9edf86"
+      },
+      "get_closed_trades": {
+        "limit": 10
+      },
+      "discover_by_volume_trend": {
+        "limit": 10,
+        "trend": "rising",
+        "min_liquidity": 2000
+      },
+      "search_general_beliefs": {
+        "keyword": "PCE",
+        "limit": 10,
+        "category": "event_analysis"
+      },
+      "get_settlements": {
+        "limit": 20
+      },
+      "place_market_order": {
+        "token_id": "59486515505172770194759986480248623982470384665110499187156810204073586163823",
+        "side": "BUY",
+        "amount": 50,
+        "conviction": 0.85
+      },
+      "discover_by_competitive_score": {
+        "limit": 20,
+        "min_liquidity": 500,
+        "min_score": 0.7
+      },
+      "create_long_term_plan": {
+        "plan_content": "LONG-TERM TRADING STRATEGY (Updated June 24, 2026 ~15:00 UTC)\n\nStarting capital: $10,000 USDC.e\nCurrent cash: ~$7,956 (p"
+      },
+      "discover_by_date_range": {
+        "start_date": "2026-06-24",
+        "end_date": "2026-06-27",
+        "limit": 30,
+        "min_liquidity": 500
+      },
+      "search_tags": {
+        "query": "world cup"
+      }
+    },
+    "output_examples": {
+      "discover_hot_markets": "No hot markets found (ending within 24h, min liquidity $1000.0, min volume $500.0)",
+      "discover_by_time_remaining": "No markets found with 1.0-48.0h remaining",
+      "get_portfolio": "Will the price of Bitcoin be above $70,000 on Apri | No | Size:2.05 | Value:$0.31 | PnL:+$0.00(+0.0%) | Price:$0.1500 | Entry:$0.1500 NHL Playoffs: Who Will Win Series? - Penguins vs.  | Flyers | Size:7.45 | Value:$7.45 | PnL:+$0.45(+6.4%) ",
+      "get_balance": "Current balance: $9,832.220 USDC.e",
+      "get_open_orders": "No open orders.",
+      "discover_events": "Found 5 events for 'World Cup': Which continent will win the World Cup? | id:98349 slug:which-continent-will-win-the-world-cup Vol24h:$260,288 Liq:$1,975,244 Markets:7 M1: Will North America (CONCACAF) win the 2026 FIFA World Cup? | slug:wi",
+      "get_market_details": "Will Brazil win Group C in the 2026 FIFA World Cup? | slug:will-brazil-win-group-c-in-the-2026-fifa-world-cup | Prices: Yes $0.6750 No $0.3250 | Bid:$0.6700 Ask:$0.6800 Spread:$0.0100 | Liq:$37,923 Vol24h:$86,953 | 1dChange:+0.02% | TimeRem",
+      "web_search": "Web search results for 'World Cup 2026 Group C standings Brazil Morocco Scotland June 24 2026 results':  I searched current sources. Short summary (as of June 24, 2026, before/at the start of the final Group C matches):  - Recent Group C ma",
+      "discover_by_price_volatility": "No markets found with volatility >= 1000",
+      "get_event_markets": "World Cup Group C Winner | id:98264 slug:world-cup-group-c-winner Vol24h:$151,241 Liq:$439,904 Markets:5 M1: Will Scotland win Group C in the 2026 FIFA World Cup? | slug:will-scotland-win-group-c-in-the-2026-fifa-world-cup | Prices: Yes $0.",
+      "get_all_active_markets": "Found 30 active markets: New Rihanna Album before GTA VI? | Bid:$0.520 Ask:$0.530 Vol:$521 Liq:$14,565 | slug:new-rhianna-album-before-gta-vi-926 | Description: This market will resolve to \"Yes\" if Rihanna officially releases a new album be",
+      "get_general_beliefs": "1. ID:f4960c9b-4002-4976-9731-dafcba9edf86 [event_analysis] (80%) BRAZIL GROUP C WINNER - MATCH DAY UPDATE (June 24, 2026 - 13:50 UTC): Today's matches at 6:00 PM ET determine Group C winner. Brazil -286 to -340 vs S 2. ID:b5799676-e28e-4d1",
+      "create_next_cycle_plan": "Plan created: fa730125-2e5b-4c38-a8b6-cfe486df64d9",
+      "create_general_belief": "Belief created: 18d8c1cf-738a-430a-a835-1f6a3f7da8a5",
+      "delete_general_belief": "Belief f4960c9b-4002-4976-9731-dafcba9edf86 deactivated (set to inactive)",
+      "get_closed_trades": "No closed trades (sells) found.",
+      "discover_by_volume_trend": "No markets found with 2000 volume trend",
+      "search_general_beliefs": "1. ID:8e4dd6c0-b3b7-47fd-9eb6-13d0f49b00ff [event_analysis] (74%) As of June 24, 2026 UTC, the July 2026 Fed 25bp hike market around 24.25c YES / 75.75c NO is directionally interesting but still only roughly fair to",
+      "get_settlements": "Found 20 recent settlements:    • Will the highest temperature in Atlanta be between 72-73°F o | Outcome: No | Shares: 3.33 | P&L: $-0.50 | Amount: $0.00 | Date: 2026-04-07   • Will Iran conduct a military action against Israel on April  | ",
+      "place_market_order": "Market order executed: BOUGHT 250.00 shares @ $0.2000 (spent $50.00 USDC.e, Order ID: paper-99a57320-f2f2-4f6f-bf4f-30cbd1de986b)",
+      "get_next_cycle_plan": "NEXT CYCLE PLAN - June 24, 2026 (Evening)  PORTFOLIO STATUS: - Cash Balance: $7,000 USDC.e - Total Position Value: $53.43 - Total Unrealized P&L: -$16.39 overall  KEY POSITIONS TO HOLD: 1. March Annual Inflation ≥3.4% NO (13.73 shares @ 50.",
+      "create_long_term_plan": "Plan created: 347821e6-1baa-4612-8d05-cb8779c9208a",
+      "discover_by_date_range": "No markets found in date range 2026-06-24 to 2026-06-27",
+      "search_tags": "product marekt fit (slug:product-marekt-fit events:0) caitlin clark (slug:caitlin-clark events:0) virgins (slug:virgins events:0) Viktoria Plzen (slug:viktoria-plzen events:0) Jerry After Dark (slug:jerry-after-dark events:0) Wildfire (slug"
+    }
+  },
+  "cycle_field_presence": {
+    "agent": 50,
+    "agent_id": 50,
+    "completed_at": 50,
+    "created_at": 50,
+    "cycle_duration_ms": 50,
+    "cycle_id": 50,
+    "id": 50,
+    "initial_account_value": 50,
+    "initial_cash_balance": 50,
+    "initial_open_orders": 50,
+    "initial_positions": 50,
+    "model_id": 50,
+    "post_account_value": 50,
+    "post_cash_balance": 50,
+    "post_orders": 50,
+    "post_positions": 50,
+    "prompt": 50,
+    "reasoning": 50,
+    "research_data": 50,
+    "settlements": 50,
+    "status": 50,
+    "thinking_duration_ms": 33,
+    "tool_calls": 50,
+    "updated_at": 50
+  },
+  "field_types": {
+    "agent": [
+      "dict"
+    ],
+    "agent_id": [
+      "str"
+    ],
+    "completed_at": [
+      "str"
+    ],
+    "created_at": [
+      "str"
+    ],
+    "cycle_duration_ms": [
+      "int"
+    ],
+    "cycle_id": [
+      "str"
+    ],
+    "id": [
+      "str"
+    ],
+    "initial_account_value": [
+      "float"
+    ],
+    "initial_cash_balance": [
+      "float",
+      "int"
+    ],
+    "initial_open_orders": [
+      "list"
+    ],
+    "initial_positions": [
+      "list"
+    ],
+    "model_id": [
+      "str"
+    ],
+    "post_account_value": [
+      "float"
+    ],
+    "post_cash_balance": [
+      "float",
+      "int"
+    ],
+    "post_orders": [
+      "list"
+    ],
+    "post_positions": [
+      "list"
+    ],
+    "prompt": [
+      "str"
+    ],
+    "reasoning": [
+      "str"
+    ],
+    "research_data": [
+      "NoneType",
+      "list"
+    ],
+    "settlements": [
+      "list"
+    ],
+    "status": [
+      "str"
+    ],
+    "thinking_duration_ms": [
+      "NoneType",
+      "int"
+    ],
+    "tool_calls": [
+      "list"
+    ],
+    "updated_at": [
+      "str"
+    ]
+  },
+  "research_data_non_null": 25,
+  "research_data_shapes": [
+    {
+      "type": "list",
+      "keys": null,
+      "length": 10
+    },
+    {
+      "type": "list",
+      "keys": null,
+      "length": 4
+    },
+    {
+      "type": "list",
+      "keys": null,
+      "length": 23
+    },
+    {
+      "type": "list",
+      "keys": null,
+      "length": 10
+    },
+    {
+      "type": "list",
+      "keys": null,
+      "length": 6
+    },
+    {
+      "type": "list",
+      "keys": null,
+      "length": 4
+    },
+    {
+      "type": "list",
+      "keys": null,
+      "length": 8
+    },
+    {
+      "type": "list",
+      "keys": null,
+      "length": 1
+    },
+    {
+      "type": "list",
+      "keys": null,
+      "length": 2
+    },
+    {
+      "type": "list",
+      "keys": null,
+      "length": 2
+    }
+  ],
+  "settlement_counts": {
+    "0": 50
+  }
+}

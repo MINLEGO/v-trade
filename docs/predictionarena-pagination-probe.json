@@ -1,0 +1,558 @@
+{
+  "generated_at": "2026-07-13T01:20:56.451304+00:00",
+  "probes": [
+    {
+      "name": "cycles-limit-1",
+      "url": "https://www.predictionarena.ai/api/polymarket/cycles?offset=0&limit=1",
+      "status": 200,
+      "summary": {
+        "type": "object",
+        "keys": [
+          "count",
+          "cycles",
+          "hasMore"
+        ],
+        "count": 1,
+        "hasMore": false,
+        "collections": {
+          "cycles": {
+            "type": "array",
+            "length": 1,
+            "item_keys": [
+              "agent",
+              "agent_id",
+              "completed_at",
+              "created_at",
+              "cycle_duration_ms",
+              "cycle_id",
+              "id",
+              "initial_account_value",
+              "initial_cash_balance",
+              "initial_open_orders",
+              "initial_positions",
+              "model_id",
+              "post_account_value",
+              "post_cash_balance",
+              "post_orders",
+              "post_positions",
+              "prompt",
+              "reasoning",
+              "research_data",
+              "settlements",
+              "status",
+              "thinking_duration_ms",
+              "tool_calls",
+              "updated_at"
+            ],
+            "first_identity": {
+              "id": "trading-grok-4-1-fast-reasoning-cycle-20260624-180547",
+              "cycle_id": "trading-grok-4-1-fast-reasoning-cycle-20260624-180547",
+              "created_at": "2026-06-24T18:10:19.223758+00:00",
+              "updated_at": "2026-06-24T18:10:41.711228+00:00",
+              "model_id": "grok-4-1-fast-reasoning",
+              "agent_id": "trading-grok-4-1-fast-reasoning",
+              "status": "completed"
+            },
+            "last_identity": {
+              "id": "trading-grok-4-1-fast-reasoning-cycle-20260624-180547",
+              "cycle_id": "trading-grok-4-1-fast-reasoning-cycle-20260624-180547",
+              "created_at": "2026-06-24T18:10:19.223758+00:00",
+              "updated_at": "2026-06-24T18:10:41.711228+00:00",
+              "model_id": "grok-4-1-fast-reasoning",
+              "agent_id": "trading-grok-4-1-fast-reasoning",
+              "status": "completed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "cycles-offset-1",
+      "url": "https://www.predictionarena.ai/api/polymarket/cycles?offset=1&limit=1",
+      "status": 200,
+      "summary": {
+        "type": "object",
+        "keys": [
+          "count",
+          "cycles",
+          "hasMore"
+        ],
+        "count": 1,
+        "hasMore": false,
+        "collections": {
+          "cycles": {
+            "type": "array",
+            "length": 1,
+            "item_keys": [
+              "agent",
+              "agent_id",
+              "completed_at",
+              "created_at",
+              "cycle_duration_ms",
+              "cycle_id",
+              "id",
+              "initial_account_value",
+              "initial_cash_balance",
+              "initial_open_orders",
+              "initial_positions",
+              "model_id",
+              "post_account_value",
+              "post_cash_balance",
+              "post_orders",
+              "post_positions",
+              "prompt",
+              "reasoning",
+              "research_data",
+              "settlements",
+              "status",
+              "thinking_duration_ms",
+              "tool_calls",
+              "updated_at"
+            ],
+            "first_identity": {
+              "id": "trading-claude-opus-4-5-20251101-cycle-20260624-175003",
+              "cycle_id": "trading-claude-opus-4-5-20251101-cycle-20260624-175003",
+              "created_at": "2026-06-24T17:54:27.449772+00:00",
+              "updated_at": "2026-06-24T18:05:41.934198+00:00",
+              "model_id": "claude-opus-4-5-20251101",
+              "agent_id": "trading-claude-opus-4-5-20251101",
+              "status": "completed"
+            },
+            "last_identity": {
+              "id": "trading-claude-opus-4-5-20251101-cycle-20260624-175003",
+              "cycle_id": "trading-claude-opus-4-5-20251101-cycle-20260624-175003",
+              "created_at": "2026-06-24T17:54:27.449772+00:00",
+              "updated_at": "2026-06-24T18:05:41.934198+00:00",
+              "model_id": "claude-opus-4-5-20251101",
+              "agent_id": "trading-claude-opus-4-5-20251101",
+              "status": "completed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "cycles-offset-50",
+      "url": "https://www.predictionarena.ai/api/polymarket/cycles?offset=50&limit=1",
+      "status": 200,
+      "summary": {
+        "type": "object",
+        "keys": [
+          "count",
+          "cycles",
+          "hasMore"
+        ],
+        "count": 1,
+        "hasMore": false,
+        "collections": {
+          "cycles": {
+            "type": "array",
+            "length": 1,
+            "item_keys": [
+              "agent",
+              "agent_id",
+              "completed_at",
+              "created_at",
+              "cycle_duration_ms",
+              "cycle_id",
+              "id",
+              "initial_account_value",
+              "initial_cash_balance",
+              "initial_open_orders",
+              "initial_positions",
+              "model_id",
+              "post_account_value",
+              "post_cash_balance",
+              "post_orders",
+              "post_positions",
+              "prompt",
+              "reasoning",
+              "research_data",
+              "settlements",
+              "status",
+              "thinking_duration_ms",
+              "tool_calls",
+              "updated_at"
+            ],
+            "first_identity": {
+              "id": "trading-grok-4-1-fast-reasoning-cycle-20260624-113322",
+              "cycle_id": "trading-grok-4-1-fast-reasoning-cycle-20260624-113322",
+              "created_at": "2026-06-24T11:37:44.837794+00:00",
+              "updated_at": "2026-06-24T11:38:01.656907+00:00",
+              "model_id": "grok-4-1-fast-reasoning",
+              "agent_id": "trading-grok-4-1-fast-reasoning",
+              "status": "completed"
+            },
+            "last_identity": {
+              "id": "trading-grok-4-1-fast-reasoning-cycle-20260624-113322",
+              "cycle_id": "trading-grok-4-1-fast-reasoning-cycle-20260624-113322",
+              "created_at": "2026-06-24T11:37:44.837794+00:00",
+              "updated_at": "2026-06-24T11:38:01.656907+00:00",
+              "model_id": "grok-4-1-fast-reasoning",
+              "agent_id": "trading-grok-4-1-fast-reasoning",
+              "status": "completed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "cycles-limit-100",
+      "url": "https://www.predictionarena.ai/api/polymarket/cycles?offset=0&limit=100",
+      "status": 200,
+      "summary": {
+        "type": "object",
+        "keys": [
+          "count",
+          "cycles",
+          "hasMore"
+        ],
+        "count": 100,
+        "hasMore": false,
+        "collections": {
+          "cycles": {
+            "type": "array",
+            "length": 100,
+            "item_keys": [
+              "agent",
+              "agent_id",
+              "completed_at",
+              "created_at",
+              "cycle_duration_ms",
+              "cycle_id",
+              "id",
+              "initial_account_value",
+              "initial_cash_balance",
+              "initial_open_orders",
+              "initial_positions",
+              "model_id",
+              "post_account_value",
+              "post_cash_balance",
+              "post_orders",
+              "post_positions",
+              "prompt",
+              "reasoning",
+              "research_data",
+              "settlements",
+              "status",
+              "thinking_duration_ms",
+              "tool_calls",
+              "updated_at"
+            ],
+            "first_identity": {
+              "id": "trading-grok-4-1-fast-reasoning-cycle-20260624-180547",
+              "cycle_id": "trading-grok-4-1-fast-reasoning-cycle-20260624-180547",
+              "created_at": "2026-06-24T18:10:19.223758+00:00",
+              "updated_at": "2026-06-24T18:10:41.711228+00:00",
+              "model_id": "grok-4-1-fast-reasoning",
+              "agent_id": "trading-grok-4-1-fast-reasoning",
+              "status": "completed"
+            },
+            "last_identity": {
+              "id": "trading-mystery-model-alpha-cycle-20260624-051047",
+              "cycle_id": "trading-mystery-model-alpha-cycle-20260624-051047",
+              "created_at": "2026-06-24T05:11:01.904084+00:00",
+              "updated_at": "2026-06-24T05:11:12.578521+00:00",
+              "model_id": "mystery-model-alpha",
+              "agent_id": "trading-mystery-model-alpha",
+              "status": "failed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "actions-limit-1",
+      "url": "https://www.predictionarena.ai/api/polymarket/actions?offset=0&limit=1",
+      "status": 200,
+      "summary": {
+        "type": "array",
+        "length": 1,
+        "item_keys": [
+          "action_result",
+          "action_type",
+          "agent_id",
+          "amount",
+          "created_at",
+          "cycle",
+          "cycle_id",
+          "error_message",
+          "event_slug",
+          "filled_size",
+          "id",
+          "is_realized",
+          "market_slug",
+          "market_title",
+          "model_id",
+          "outcome",
+          "price",
+          "settlement_status",
+          "side",
+          "status",
+          "ticker",
+          "timestamp",
+          "total_cost"
+        ],
+        "first_identity": {
+          "id": 734127,
+          "cycle_id": "trading-claude-opus-4-6-cycle-20260624-171438",
+          "timestamp": "2026-06-24T17:31:37.970111+00:00",
+          "created_at": "2026-06-24T17:31:37.970111+00:00",
+          "model_id": "claude-opus-4-6",
+          "agent_id": "trading-claude-opus-4-6",
+          "status": "completed"
+        },
+        "last_identity": {
+          "id": 734127,
+          "cycle_id": "trading-claude-opus-4-6-cycle-20260624-171438",
+          "timestamp": "2026-06-24T17:31:37.970111+00:00",
+          "created_at": "2026-06-24T17:31:37.970111+00:00",
+          "model_id": "claude-opus-4-6",
+          "agent_id": "trading-claude-opus-4-6",
+          "status": "completed"
+        }
+      }
+    },
+    {
+      "name": "actions-offset-1",
+      "url": "https://www.predictionarena.ai/api/polymarket/actions?offset=1&limit=1",
+      "status": 200,
+      "summary": {
+        "type": "array",
+        "length": 1,
+        "item_keys": [
+          "action_result",
+          "action_type",
+          "agent_id",
+          "amount",
+          "created_at",
+          "cycle",
+          "cycle_id",
+          "error_message",
+          "event_slug",
+          "filled_size",
+          "id",
+          "is_realized",
+          "market_slug",
+          "market_title",
+          "model_id",
+          "outcome",
+          "price",
+          "settlement_status",
+          "side",
+          "status",
+          "ticker",
+          "timestamp",
+          "total_cost"
+        ],
+        "first_identity": {
+          "id": 734096,
+          "cycle_id": "trading-claude-opus-4-6-cycle-20260624-171438",
+          "timestamp": "2026-06-24T17:28:53.76049+00:00",
+          "created_at": "2026-06-24T17:28:53.76049+00:00",
+          "model_id": "claude-opus-4-6",
+          "agent_id": "trading-claude-opus-4-6",
+          "status": "completed"
+        },
+        "last_identity": {
+          "id": 734096,
+          "cycle_id": "trading-claude-opus-4-6-cycle-20260624-171438",
+          "timestamp": "2026-06-24T17:28:53.76049+00:00",
+          "created_at": "2026-06-24T17:28:53.76049+00:00",
+          "model_id": "claude-opus-4-6",
+          "agent_id": "trading-claude-opus-4-6",
+          "status": "completed"
+        }
+      }
+    },
+    {
+      "name": "actions-limit-100",
+      "url": "https://www.predictionarena.ai/api/polymarket/actions?offset=0&limit=100",
+      "status": 200,
+      "summary": {
+        "type": "array",
+        "length": 100,
+        "item_keys": [
+          "action_result",
+          "action_type",
+          "agent_id",
+          "amount",
+          "created_at",
+          "cycle",
+          "cycle_id",
+          "error_message",
+          "event_slug",
+          "filled_size",
+          "id",
+          "is_realized",
+          "market_slug",
+          "market_title",
+          "model_id",
+          "outcome",
+          "price",
+          "settlement_status",
+          "side",
+          "status",
+          "ticker",
+          "timestamp",
+          "total_cost"
+        ],
+        "first_identity": {
+          "id": 734127,
+          "cycle_id": "trading-claude-opus-4-6-cycle-20260624-171438",
+          "timestamp": "2026-06-24T17:31:37.970111+00:00",
+          "created_at": "2026-06-24T17:31:37.970111+00:00",
+          "model_id": "claude-opus-4-6",
+          "agent_id": "trading-claude-opus-4-6",
+          "status": "completed"
+        },
+        "last_identity": {
+          "id": 721479,
+          "cycle_id": "trading-claude-opus-4-6-cycle-20260622-194210",
+          "timestamp": "2026-06-22T19:51:05.893117+00:00",
+          "created_at": "2026-06-22T19:51:05.893117+00:00",
+          "model_id": "claude-opus-4-6",
+          "agent_id": "trading-claude-opus-4-6",
+          "status": "completed"
+        }
+      }
+    },
+    {
+      "name": "agent-actions-limit-1",
+      "url": "https://www.predictionarena.ai/api/polymarket/agents/trading-claude-opus-4-6/actions?limit=1",
+      "status": 200,
+      "summary": {
+        "type": "array",
+        "length": 1,
+        "item_keys": [
+          "action_result",
+          "action_type",
+          "agent_id",
+          "amount",
+          "created_at",
+          "cycle",
+          "cycle_id",
+          "error_message",
+          "event_slug",
+          "filled_size",
+          "id",
+          "is_realized",
+          "market_slug",
+          "market_title",
+          "model_id",
+          "outcome",
+          "price",
+          "settlement_status",
+          "side",
+          "status",
+          "ticker",
+          "timestamp",
+          "total_cost"
+        ],
+        "first_identity": {
+          "id": 734127,
+          "cycle_id": "trading-claude-opus-4-6-cycle-20260624-171438",
+          "timestamp": "2026-06-24T17:31:37.970111+00:00",
+          "created_at": "2026-06-24T17:31:37.970111+00:00",
+          "model_id": "claude-opus-4-6",
+          "agent_id": "trading-claude-opus-4-6",
+          "status": "completed"
+        },
+        "last_identity": {
+          "id": 734127,
+          "cycle_id": "trading-claude-opus-4-6-cycle-20260624-171438",
+          "timestamp": "2026-06-24T17:31:37.970111+00:00",
+          "created_at": "2026-06-24T17:31:37.970111+00:00",
+          "model_id": "claude-opus-4-6",
+          "agent_id": "trading-claude-opus-4-6",
+          "status": "completed"
+        }
+      }
+    },
+    {
+      "name": "agent-actions-offset-limit",
+      "url": "https://www.predictionarena.ai/api/polymarket/agents/trading-claude-opus-4-6/actions?offset=0&limit=1",
+      "status": 200,
+      "summary": {
+        "type": "array",
+        "length": 1,
+        "item_keys": [
+          "action_result",
+          "action_type",
+          "agent_id",
+          "amount",
+          "created_at",
+          "cycle",
+          "cycle_id",
+          "error_message",
+          "event_slug",
+          "filled_size",
+          "id",
+          "is_realized",
+          "market_slug",
+          "market_title",
+          "model_id",
+          "outcome",
+          "price",
+          "settlement_status",
+          "side",
+          "status",
+          "ticker",
+          "timestamp",
+          "total_cost"
+        ],
+        "first_identity": {
+          "id": 734127,
+          "cycle_id": "trading-claude-opus-4-6-cycle-20260624-171438",
+          "timestamp": "2026-06-24T17:31:37.970111+00:00",
+          "created_at": "2026-06-24T17:31:37.970111+00:00",
+          "model_id": "claude-opus-4-6",
+          "agent_id": "trading-claude-opus-4-6",
+          "status": "completed"
+        },
+        "last_identity": {
+          "id": 734127,
+          "cycle_id": "trading-claude-opus-4-6-cycle-20260624-171438",
+          "timestamp": "2026-06-24T17:31:37.970111+00:00",
+          "created_at": "2026-06-24T17:31:37.970111+00:00",
+          "model_id": "claude-opus-4-6",
+          "agent_id": "trading-claude-opus-4-6",
+          "status": "completed"
+        }
+      }
+    },
+    {
+      "name": "settlements-limit-1",
+      "url": "https://www.predictionarena.ai/api/polymarket/agents/trading-claude-opus-4-6/settlements?limit=1",
+      "status": 200,
+      "summary": {
+        "type": "array",
+        "length": 1,
+        "item_keys": [
+          "created_at",
+          "id",
+          "market_slug",
+          "market_title",
+          "outcome",
+          "payout",
+          "quantity",
+          "realized_pnl",
+          "result",
+          "settled_at",
+          "settlement_amount",
+          "side",
+          "ticker",
+          "token_id"
+        ],
+        "first_identity": {
+          "id": "ede7790f-55b9-48fd-8fc5-8db0b58f90b5",
+          "created_at": "2026-06-24T18:33:15.969443+00:00"
+        },
+        "last_identity": {
+          "id": "ede7790f-55b9-48fd-8fc5-8db0b58f90b5",
+          "created_at": "2026-06-24T18:33:15.969443+00:00"
+        }
+      }
+    }
+  ]
+}
