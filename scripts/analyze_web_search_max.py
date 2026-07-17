@@ -47,7 +47,7 @@ def main() -> None:
             }
         )
 
-    counts = [row["web_search_count"] for row in rows]
+    counts = [row["web_search_count"] for row in rows if row["web_search_count"] > 0]
     maximum = max(counts, default=0)
     winners = [row for row in rows if row["web_search_count"] == maximum]
     result = {

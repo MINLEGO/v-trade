@@ -1,0 +1,33 @@
+{
+  "captured_at": "2026-07-16T14:22:32.577298+00:00",
+  "contracts": [
+    {
+      "byte_length": 16127,
+      "name": "events-keyset-limit-1",
+      "sha256": "9f1e4f17156348b52d57c0498563b40c2a4ec7ff04bf6481f64c627972cfa471",
+      "status_code": 200,
+      "url": "https://gamma-api.polymarket.com/events/keyset?limit=1&closed=false"
+    },
+    {
+      "byte_length": 7826,
+      "name": "markets-keyset-limit-1",
+      "sha256": "6b52f9a15056c5665cbf2a06fefcc64362538765c5f6c9015eaee80a57a98f03",
+      "status_code": 200,
+      "url": "https://gamma-api.polymarket.com/markets/keyset?limit=1&closed=false&include_tag=true"
+    },
+    {
+      "byte_length": 2030,
+      "name": "clob-book",
+      "sha256": "2d43609143a1a944e696daa5a8ae9af2b70c28849aae19c08b883cd6fa31ef3a",
+      "status_code": 200,
+      "url": "https://clob.polymarket.com/book?token_id=98022490269692409998126496127597032490334070080325855126491859374983463996227"
+    },
+    {
+      "byte_length": 5535,
+      "name": "resolved-markets-keyset-limit-1",
+      "sha256": "0b7639d0798216cd4b236718f10da51d4d84e1bbac0218372bd364c2fb7bfe7d",
+      "status_code": 200,
+      "url": "https://gamma-api.polymarket.com/markets/keyset?limit=1&closed=true&uma_resolution_status=resolved&id=240379"
+    }
+  ]
+}

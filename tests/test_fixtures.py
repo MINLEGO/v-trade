@@ -50,6 +50,8 @@ class FixtureTests(unittest.TestCase):
                 "2026-07-13T11:00:00Z",
             )
             self.assertEqual(record.source_cutoff, "2026-07-13T10:00:00Z")
+            self.assertEqual(record.cycle_count, 1)
+            self.assertEqual(record.raw_byte_length, len(raw))
             reference = ArtifactRef(record.raw_sha256, len(raw), record.artifact_path)
             self.assertEqual(store.get(reference), raw)
 

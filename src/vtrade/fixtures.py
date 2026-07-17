@@ -23,7 +23,9 @@ class FixtureRecord:
     checked_at: str
     source_cutoff: str | None
     raw_sha256: str
+    raw_byte_length: int
     artifact_path: str
+    cycle_count: int
     completeness: str
 
 
@@ -63,13 +65,13 @@ def _latest_timestamp(cycles: Iterable[dict[str, Any]]) -> str | None:
 def ingest_file(
     source: Path, endpoint: str, store: ContentAddressedArtifactStore, checked_at: str
 ) -> FixtureRecord:
-    raw = source.read_bytes()
     try:
-        payload = json.loads(raw)
+        with source.open("r", encoding="utf-8") as stream:
+            payload = json.load(stream)
     except json.JSONDecodeError as exc:
         raise FixtureValidationError(f"invalid JSON: {exc}") from exc
     cycles = extract_cycles(payload)
-    reference = store.put(raw)
+    reference = store.put_file(source)
     stable_id = hashlib.sha256((endpoint + ":" + reference.sha256).encode()).hexdigest()
     return FixtureRecord(
         stable_id=stable_id,
@@ -77,7 +79,9 @@ def ingest_file(
         checked_at=checked_at,
         source_cutoff=_latest_timestamp(cycles),
         raw_sha256=reference.sha256,
+        raw_byte_length=reference.byte_length,
         artifact_path=reference.relative_path,
+        cycle_count=len(cycles),
         completeness="page_complete" if cycles else "empty",
     )
 

@@ -1,2 +1,13 @@
-[]
-
+[
+  {
+    "artifact_path": "23/2362521d0597263e882c397ab8ef456f64af2cb373ed1888319d157d3b18f2f2.json.gz",
+    "checked_at": "2026-07-16T14:05:37.926003+00:00",
+    "completeness": "page_complete",
+    "cycle_count": 200,
+    "endpoint": "https://www.predictionarena.ai/api/polymarket/cycles?offset=0&limit=200",
+    "raw_byte_length": 20313102,
+    "raw_sha256": "2362521d0597263e882c397ab8ef456f64af2cb373ed1888319d157d3b18f2f2",
+    "source_cutoff": "2026-06-24T18:10:41.711228+00:00",
+    "stable_id": "305322747e60fdfec139756e18a82b077911ce9fa63fdfa309ff83aa956a19a6"
+  }
+]

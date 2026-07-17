@@ -4,7 +4,13 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, Protocol
 
-from vtrade.domain.types import CycleSnapshot, OrderIntent
+from vtrade.domain.types import (
+    CycleSnapshot,
+    MarketDelta,
+    OrderBookSnapshot,
+    OrderIntent,
+    Resolution,
+)
 
 JsonObject = dict[str, Any]
 
@@ -22,11 +28,28 @@ class ResearchProvider(Protocol):
 
 
 class MarketVenue(Protocol):
-    def sync_markets(self, cursor: str | None) -> JsonObject: ...
+    def sync_markets(self, cursor: str | None) -> MarketDelta: ...
 
-    def get_order_book(self, outcome_ids: Sequence[str]) -> JsonObject: ...
+    def get_order_book(self, outcome_ids: Sequence[str]) -> tuple[OrderBookSnapshot, ...]: ...
 
-    def get_resolutions(self, market_ids: Sequence[str], as_of: datetime) -> JsonObject: ...
+    def get_resolutions(
+        self, market_ids: Sequence[str], as_of: datetime
+    ) -> tuple[Resolution, ...]: ...
+
+
+class ArtifactReference(Protocol):
+    @property
+    def sha256(self) -> str: ...
+
+    @property
+    def byte_length(self) -> int: ...
+
+    @property
+    def uri(self) -> str: ...
+
+
+class ArtifactStore(Protocol):
+    def put(self, content: bytes) -> ArtifactReference: ...
 
 
 class Broker(Protocol):

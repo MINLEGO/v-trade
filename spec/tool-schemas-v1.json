@@ -416,12 +416,54 @@
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
-        "properties": {},
+        "properties": {
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "Opaque cursor returned by the preceding page; valid only for the calling agent and agent-cycle snapshot."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 100
+          }
+        },
         "required": []
       },
       "output_schema": {
         "type": "object",
-        "additionalProperties": true
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "position_id": {"type": "string", "format": "uuid"},
+                "market_id": {"type": "string", "format": "uuid"},
+                "market_question": {"type": "string"},
+                "outcome_id": {"type": "string", "format": "uuid"},
+                "outcome": {"type": "string"},
+                "shares": {"type": "string"},
+                "average_cost": {"type": "string"},
+                "cost_basis_micros": {"type": "integer"},
+                "realized_pnl_micros": {"type": "integer"},
+                "updated_at": {"type": "string", "format": "date-time"}
+              },
+              "required": [
+                "position_id", "market_id", "market_question", "outcome_id",
+                "outcome", "shares", "average_cost", "cost_basis_micros",
+                "realized_pnl_micros", "updated_at"
+              ]
+            }
+          },
+          "next_cursor": {"type": ["string", "null"]},
+          "has_more": {"type": "boolean"}
+        },
+        "required": ["items", "next_cursor", "has_more"]
       }
     },
     {
@@ -673,4 +715,3 @@
     }
   ]
 }
-

@@ -1,7 +1,7 @@
 # V-Trade implementation plan
 
-Status: proposed baseline plan  
-Date: 2026-07-13
+Status: approved baseline plan
+Date: 2026-07-16
 
 ## 1. Objective
 
@@ -35,7 +35,7 @@ These rules define experiment version `predictionarena-polymarket-v1`:
 - Each agent starts with an isolated virtual balance of $10,000.
 - Agents share the same harness, prompt template, tool schemas, market snapshot cutoff, risk rules, and search-provider class of service.
 - Agents have private portfolios, beliefs, plans, notes, and previous-cycle reasoning.
-- The scheduler starts a cohort every 60 minutes. A slow or failed cycle is recorded and skipped; missed cycles are not replayed in a burst.
+- Each agent has an independent 60-minute schedule and immutable per-cycle data cutoff. A slow or failed cycle is recorded and skipped; missed cycles are not replayed in a burst.
 - A cycle follows: synchronize markets -> process settlements -> freeze context -> run agent -> validate actions -> execute paper trades -> value portfolio -> persist metrics.
 - Agents can only use explicitly exposed research, discovery, account, trading, belief, and planning tools. They receive no shell, database, filesystem, wallet, or arbitrary HTTP access.
 - The prompt teaches the two documented strategies: fundamental outcome trading and pre-settlement price trading.
@@ -195,12 +195,16 @@ Limits must be configuration, recorded per run:
 
 - maximum model turns, total tool calls, and wall-clock time per cycle;
 - maximum prompt/context and output tokens;
-- expected Exa usage of about 13 web searches per agent-cycle for capacity planning, tracked separately from market-discovery calls;
-- a configurable burst ceiling initially set to 50 Exa searches per agent-cycle, plus a separate total-tool-call ceiling above the observed trace maximum of 92;
-- independent monthly Exa request/credit and all-provider dollar limits;
+- owner-provided empirical planning expectations of 8 web searches on average conditional on a cycle using search and 3.5 across all cycles, not independently verified by this workstream, tracked separately from market-discovery calls;
+- a strict ceiling of 50 Exa searches per agent-cycle, plus a separate total-tool-call ceiling above the observed trace maximum of 92;
+- independent strict monthly Exa limits of 18,000 requests and 18,000 credits, plus a
+  billed-dollar limit for providers other than free-plan Exa;
 - maximum discovery calls and markets returned;
 - maximum trade intents and notional spend per cycle;
-- a hard $40 all-in external API budget per calendar month, with alerts at $20, $32, and $40 and an emergency stop before a request can knowingly exceed the remainder.
+- a hard $40 billed external API budget per calendar month, excluding Exa while it is
+  on the free plan, with alerts at $20, $32, and $40 and an emergency stop before a
+  request can knowingly exceed the remainder. Exa still records nominal value; any
+  positive billed Exa cost halts and alerts Exa immediately.
 
 The baseline prompt should be reconstructed from the public methodology and dated dynamic cycle traces, then frozen as a versioned artifact. Preserve imported rendered prompts byte-for-byte before normalization: observed traces contain an unresolved `{trading_tool_ref}` placeholder and possible repeated/concatenated protocol blocks. V-Trade rendering tests should fail on unintended placeholders or duplicated protocol blocks. Changes require a new experiment version. Do not tailor the prompt to an individual model unless running an explicitly separate ablation.
 
@@ -212,11 +216,10 @@ Support two paper policies from the start, but run only one in the baseline:
 
 ### `predictionarena_unconditional` (baseline)
 
-Represents the documented PredictionArena paper-trading advantage: an otherwise valid order does not fail because a counterparty is absent. The exact unpublished price rule must be chosen during phase 3, documented as inferred, and frozen. Recommended initial approximation:
+Represents the documented PredictionArena paper-trading advantage: an otherwise valid order does not fail because a counterparty is absent. The exact unpublished price rule is owner-confirmed, documented as inferred, and frozen:
 
 - buy at the current best ask and sell at current best bid;
 - if the required side has no quote, reject rather than invent a price;
-- optionally walk the displayed book for price impact only if the published historical traces indicate this behavior;
 - record exchange fees using the market's current fee parameters;
 - use the same tick/minimum-size validation as a live order.
 
@@ -231,7 +234,10 @@ Accounting requirements:
 - sells cannot exceed owned shares;
 - concentration is calculated from cost basis and capped at 15% of current account value;
 - solvency includes fees and pending accepted orders;
-- account value equals cash plus positions valued at current bid; define and test the fallback when no bid exists;
+- account value equals cash plus positions valued at the latest archived executable bid;
+  the bid may be at most 300 seconds old at the immutable valuation cutoff, and a
+  missing or older bid blocks that account snapshot and its scoring rather than using
+  zero or an unbounded stale price;
 - settlements are idempotent and independently reconcilable;
 - resolution and settlement ingestion always applies the cycle's as-of cutoff and stores source creation and settlement timestamps to prevent look-ahead leakage;
 - every derived balance must be reproducible from ledger entries alone.
@@ -281,7 +287,10 @@ Required operational controls:
 - daily database backup verification and periodic restore drill;
 - structured logs with secret and reasoning redaction controls;
 - retention policy and storage-growth alerts;
-- automatic halt at the $40 monthly all-in API budget, not merely a notification. Promotional/student credits still have request counters and nominal usage value recorded even when billed cost is zero.
+- automatic halt at the $40 monthly billed API budget, not merely a notification.
+  Free-plan Exa is excluded from that dollar circuit but has strict atomic 18,000
+  request and 18,000 credit monthly caps. Promotional/student credits retain request
+  counters and nominal usage value even when billed cost is zero.
 
 Run agent model calls sequentially or with very low concurrency to fit the VPS. Freeze data first so execution order does not affect fairness. The external APIs, not CPU, are expected to dominate cycle time.
 
@@ -344,7 +353,7 @@ Deliver:
 - OpenRouter gateway with DeepSeek and MiMo configs;
 - Exa as the enabled baseline adapter and Tavily as a contract-tested alternate behind the same tool schema;
 - bounded tool loop, prompt builder, beliefs/plans, deterministic critical-learning summary;
-- separate web-search versus market-discovery telemetry, token/search/cost accounting, an expected-use target near 13 Exa searches per agent-cycle, burst ceilings, monthly request/credit limits, and the $40 circuit breaker.
+- separate web-search versus market-discovery telemetry, token/search/cost accounting, the owner-provided 8 conditional / 3.5 all-cycle search expectations, burst ceilings, monthly request/credit limits, and the $40 circuit breaker.
 
 Gate: a recorded model response can be replayed without external calls; swapping search adapters does not change AI-facing schemas; one agent cannot read another's memory; malformed tool calls cannot mutate financial state; the hard call ceiling is compatible with the observed 92-call trace maximum.
 
@@ -357,7 +366,7 @@ Verify:
 - hourly scheduling across restarts;
 - settlement and valuation correctness;
 - actual storage growth and a projected all-in API spend no greater than $40/month;
-- Exa searches per cycle and burst distribution against the approximately 13-search planning assumption, plus search-credit consumption and model tool-call compatibility;
+- Exa searches per cycle and burst distribution against the owner-provided 8 conditional / 3.5 all-cycle empirical expectations, plus search-credit consumption and model tool-call compatibility;
 - prompt/context sizes, including comparison to the observed 9,012-27,904-character rendered-prompt range, latency, data freshness, and alerts;
 - no manual database corrections are needed.
 
@@ -377,7 +386,7 @@ Gate: all experiment state is observable without direct database access; every r
 
 ### Phase 7 — Start the frozen baseline
 
-Create a new experiment run with both agents starting at the same timestamp, snapshot, capital, and config version. Do not backfill missed decisions. Generate and store weekly immutable operator summaries and a monthly cost/reliability report.
+Create each configured agent with its own start date, initial capital, immutable per-cycle cutoff and the same frozen experiment config version. Simultaneous start is not required, and adding or removing an agent does not alter existing agents. Do not backfill missed decisions. Generate and store weekly immutable operator summaries and a monthly cost/reliability report.
 
 Gate for calling the baseline operational: 30 consecutive days without accounting discrepancies or silent configuration changes.
 
@@ -409,19 +418,20 @@ Record fixtures with timestamps and source hashes. Never allow a replay to fetch
 
 Frozen owner decisions:
 
-1. **Monthly all-in API budget:** hard ceiling of $40 per calendar month.
+1. **Monthly billed API budget:** hard ceiling of $40 per calendar month, excluding
+   free-plan Exa; a positive billed Exa cost halts and alerts Exa.
 2. **Research provider:** Exa is the enabled baseline provider; Tavily is only an alternate for a future version.
 3. **Language:** Python 3.12.
 4. **Dashboard:** private, authenticated, and admin-focused; no public v1 interface.
-5. **Research capacity:** approximately 13 Exa web searches per agent-cycle is a budgeting assumption, not a fact established by the endpoint sample. The safety ceiling must be much higher; initial proposed ceiling is 100, protected by monthly request/credit and dollar caps.
+5. **Research capacity:** the owner reports empirical expectations of 8 searches on average conditional on a cycle using search and 3.5 across all cycles. This workstream has not independently verified those figures. The strict safety ceilings are 50 searches per agent-cycle, 10 results per search, 18,000 Exa requests/month, and 18,000 Exa credits/month.
 6. **Delivery workflow:** delegate code and heavy research by difficulty to Luna xhigh and Terra medium workstreams, with primary-agent review.
 
-Still to freeze during phase 0:
+Additional frozen owner decisions:
 
-1. **Paper fill rule:** confirm `best ask/bid, no counterparty requirement, reject absent quote` as the initial inferred PredictionArena approximation.
-2. **Model routing:** pin model slug, reasoning effort, allowed providers/quantizations, and fallback policy. Recommendation: no cross-model fallback; retry the same model/provider policy and record failures.
-3. **Prompt/transcript visibility:** reasoning is operator-only in v1 by default; confirm retention and redaction rules.
-4. **Experiment comparison:** simultaneous cohort starts and no adding/removing a model inside a scored run; membership changes create a new cohort/run.
+1. **Paper fill rule:** `best ask/bid, no counterparty requirement, reject absent quote` is the initial inferred PredictionArena approximation.
+2. **Model routing:** DeepSeek permits only `fp8`; MiMo permits `fp8` and `unknown`. Reasoning effort uses the provider default. Every compatible provider is allowed and sorted by price; provider fallback is enabled, but cross-model fallback is forbidden.
+3. **Prompt/transcript visibility:** prompts, transcripts and reasoning are operator-only, retained for six months, with secrets, tokens and authorization headers always redacted.
+4. **Experiment comparison:** agents are isolated and have independent start dates and hourly schedules. Adding/removing one has no effect on the others.
 
 ### 15.1 Evidence from the public Polymarket read API
 
@@ -429,7 +439,7 @@ The endpoint audit found a rendered protocol with five mandatory stages: strateg
 
 ## 16. Definition of done for version 1
 
-V-Trade v1 is complete when two configured OpenRouter models can run hourly for 30 days on the same live Polymarket snapshots, use Exa through a provider-neutral research tool and private persistent knowledge, place validated paper trades through the frozen baseline fill policy, settle and value positions reproducibly, expose a complete audit trail and private authenticated admin dashboard, remain at or below the $40 monthly API cap and storage limits, and recover from restarts without duplicate or missing financial events.
+V-Trade v1 is complete when two configured OpenRouter models can run hourly for 30 days against immutable live Polymarket cutoffs on their independent schedules, use Exa through a provider-neutral research tool and private persistent knowledge, place validated paper trades through the frozen baseline fill policy, settle and value positions reproducibly, expose a complete audit trail and private authenticated admin dashboard, remain at or below the $40 monthly billed API cap and the 18,000/18,000 Exa request/credit caps plus storage limits, and recover from restarts without duplicate or missing financial events.
 
 ## Primary references
 

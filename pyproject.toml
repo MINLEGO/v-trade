@@ -30,6 +30,7 @@ dev = [
 
 [project.scripts]
 vtrade-fixture-ingest = "vtrade.fixtures:main"
+vtrade-bootstrap = "vtrade.bootstrap:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/vtrade"]
@@ -49,4 +50,3 @@ packages = ["vtrade"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-

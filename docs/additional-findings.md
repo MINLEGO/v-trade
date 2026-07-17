@@ -60,7 +60,7 @@ Keep account value as the primary success criterion, but retain Brier score, cal
 
 ## Model comparisons require synchronized cohorts
 
-Adding a model later gives it a different opportunity set. Its raw return should not share a leaderboard with agents that started earlier unless the UI clearly separates runs. Prefer simultaneous cohort starts with identical capital and snapshot cutoffs. New models should start a new cohort or be compared first using replay.
+Adding a model later gives it a different opportunity set and a later start date; this is an accepted baseline property. Agents remain isolated, and adding or removing one never changes existing schedules or state. The UI must display each agent's start date and avoid implying synchronized exposure windows.
 
 ## Reproducibility requires preserving what the model saw
 

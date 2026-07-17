@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-07-13T01:54:39.883696+00:00",
+  "checked_at": "2026-07-16T18:58:37.395228+00:00",
   "url": "https://www.predictionarena.ai/api/polymarket/cycles?offset=0&limit=200",
   "returned_cycles": 200,
   "api_count": 200,
@@ -18,10 +18,9 @@
         "total_tool_calls": 61
       }
     ],
-    "mean": 4.085,
-    "median": 1.0,
+    "mean": 7.294642857142857,
+    "median": 6.0,
     "distribution": {
-      "0": 88,
       "1": 14,
       "2": 11,
       "3": 12,

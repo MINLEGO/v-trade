@@ -33,9 +33,9 @@ upgrades observed behavior into a claim about unpublished internals.
 | Content-addressed compressed object artifacts | inferred | Storage and replay design |
 | Provider-neutral canonical ports | vtrade_deviation | Extensibility design |
 | OpenRouter model gateway | vtrade_deviation | Owner baseline provider |
-| DeepSeek V4 Flash and MiMo V2.5 Pro | vtrade_deviation | Owner baseline models; exact routes pending |
+| DeepSeek V4 Flash and MiMo V2.5 Pro | vtrade_deviation | Owner baseline models; DeepSeek `fp8`, MiMo `fp8`/`unknown`, all compatible providers sorted by price |
 | Exa research | vtrade_deviation | Owner baseline provider |
-| No silent search-provider fallback | inferred | Provider is part of experimental treatment |
+| Same-model provider fallback | vtrade_deviation | All compatible OpenRouter providers allowed and sorted by price; no cross-model fallback |
 | Polymarket live read data | documented | Same venue as target paper cohort |
 | Paper rather than real-money execution | vtrade_deviation | Owner safety/cost choice |
 | Gamma metadata and CLOB executable prices | inferred | Official APIs serve distinct data roles |
@@ -45,9 +45,10 @@ upgrades observed behavior into a claim about unpublished internals.
 | Bounded multi-turn tool loop | documented | Ordered tool-call traces demonstrate a loop |
 | Track cycle and tool statuses separately | inferred | Failed cycles contain successful calls |
 | About 13 Exa searches/cycle planning assumption | inferred | Capacity assumption, not trace-established behavior |
-| $40 monthly hard external-API circuit breaker | vtrade_deviation | Frozen owner budget |
+| $40 monthly billed external-API circuit breaker, excluding free-plan Exa | vtrade_deviation | Frozen owner budget; positive billed Exa cost halts Exa |
+| 18,000 monthly Exa requests and 18,000 monthly Exa credits | vtrade_deviation | Frozen owner caps, atomically reserved in PostgreSQL |
 | Deterministic critical learning without another LLM | inferred | Unpublished mechanism and cost control |
-| Paper fill at best quote, absent quote rejected | inferred / owner_pending | Exact public algorithm unpublished |
+| Paper fill at best quote, absent quote rejected | inferred | Owner-confirmed approximation; no counterparty required |
 | Counterparty-independent valid paper execution | documented | PredictionArena paper describes paper advantage |
 | Separate liquidity-aware comparison policy | inferred | Future experimental comparison only |
 | Double-entry ledger and idempotent settlement | inferred | Reproducible accounting requirement |

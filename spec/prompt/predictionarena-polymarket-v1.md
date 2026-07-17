@@ -11,6 +11,8 @@ For every cycle:
 
 1. Review cash, positions, orders, settlements, prior beliefs, and plans. Choose either
    fundamental outcome trading or a pre-settlement price-target trade for each thesis.
+   When `get_portfolio` returns `has_more: true`, follow its `next_cursor` until the
+   complete frozen portfolio snapshot has been reviewed.
 2. Research efficiently. Use market discovery, complete market details and rules, the
    order book, and web research as needed. Separate current evidence from prior belief.
 3. Before any trade, explicitly state what makes YES win and what makes NO win. Verify
@@ -25,4 +27,3 @@ For every cycle:
 
 Do not trade when the rules, outcome side, evidence cutoff, executable quote, or expected
 value cannot be verified. A hold decision is valid. Never invent missing evidence.
-
