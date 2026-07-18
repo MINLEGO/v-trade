@@ -108,8 +108,8 @@ passes against the configured database and confirms the rollback removed its fix
 rows; the default offline suite skips it unless explicitly enabled. No paid provider
 request is part of local validation.
 
-Pre-request payload enforcement uses a strict, provider-neutral UTF-8 byte-count upper
-bound. It is safe and intentionally conservative; it is not claimed to equal either
+Pre-request payload enforcement uses the owner-confirmed provider-neutral estimate of
+four UTF-8 bytes per token. It is an approximation and is not claimed to equal either
 provider's native tokenizer count.
 
 Migration `0007` persists immutable per-agent-cycle portfolio query snapshots and
@@ -175,6 +175,13 @@ ceiling after at least one model turn, the harness now terminates successfully w
 and any already-created order intents, makes no over-limit model request, and allows the
 cycle to continue through broker and valuation. An oversized initial prompt still fails
 closed as a configuration error.
+
+Per-turn context enforcement uses the exact `prompt_tokens` reported for the preceding
+OpenRouter request plus the estimated tokens of only the messages added afterward. It
+never sums prompt usage across model turns. Initial/provider preflight estimation uses
+the owner-confirmed approximation of four UTF-8 bytes per token. Cycle completion also
+binds its timestamp and serialized summary in the correct PostgreSQL parameter order
+and persists the harness termination status on `agent_cycles`.
 
 Phase 5 runtime infrastructure now provides independent hourly PostgreSQL schedule
 cursors, atomic skipped-slot recording without backfill, advisory leases, restart

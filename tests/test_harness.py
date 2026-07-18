@@ -46,13 +46,15 @@ def config() -> dict:
     }
 
 
-def response(message: dict, *, completion_tokens: int = 1) -> bytes:
+def response(
+    message: dict, *, completion_tokens: int = 1, prompt_tokens: int = 1
+) -> bytes:
     return json.dumps(
         {
             "model": "deepseek/deepseek-v4-flash",
             "choices": [{"message": message}],
             "usage": {
-                "prompt_tokens": 1,
+                "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "cost": 0,
             },
@@ -374,6 +376,129 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(len(result.tool_calls), 1)
         self.assertEqual(len(result.telemetry), 1)
         self.assertEqual(gateway.remaining, 1)
+
+    def test_context_limit_uses_previous_request_not_cumulative_prompt_usage(self) -> None:
+        schema = {
+            "type": "function",
+            "function": {
+                "name": "inspect",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+        gateway = RecordedModelGateway(
+            (
+                response(
+                    {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "id": "inspect-context",
+                                "type": "function",
+                                "function": {"name": "inspect", "arguments": "{}"},
+                            }
+                        ],
+                    },
+                    prompt_tokens=30,
+                ),
+                response(
+                    {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "id": "inspect-context-again",
+                                "type": "function",
+                                "function": {"name": "inspect", "arguments": "{}"},
+                            }
+                        ],
+                    },
+                    prompt_tokens=40,
+                ),
+                response({"role": "assistant", "content": "done"}, prompt_tokens=45),
+            ),
+            self.store,
+        )
+        harness = BoundedToolHarness(
+            gateway,
+            (ToolSpec(schema, lambda _arguments: {"result": "new"}, "market"),),
+            limits(maximum_assembled_input_tokens=50),
+            monotonic=lambda: 0,
+            token_counter=lambda raw: (
+                100 if '"initial"' in raw and '"role":"tool"' in raw else 10
+            ),
+        )
+
+        result = harness.run(
+            [{"role": "user", "content": "initial"}], model_config=config()
+        )
+
+        self.assertEqual(result.termination_status, "stop")
+        self.assertEqual(
+            [item.prompt_tokens for item in result.telemetry], [30, 40, 45]
+        )
+        self.assertEqual(gateway.remaining, 0)
+
+    def test_zero_prompt_usage_falls_back_to_full_context_estimate(self) -> None:
+        schema = {
+            "type": "function",
+            "function": {
+                "name": "inspect",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+        gateway = RecordedModelGateway(
+            (
+                response(
+                    {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "id": "inspect-without-usage",
+                                "type": "function",
+                                "function": {"name": "inspect", "arguments": "{}"},
+                            }
+                        ],
+                    },
+                    prompt_tokens=0,
+                ),
+                response({"role": "assistant", "content": "must not run"}),
+            ),
+            self.store,
+        )
+        harness = BoundedToolHarness(
+            gateway,
+            (ToolSpec(schema, lambda _arguments: {"result": "new"}, "market"),),
+            limits(maximum_assembled_input_tokens=50),
+            monotonic=lambda: 0,
+            token_counter=lambda raw: (
+                100 if '"initial"' in raw and '"role":"tool"' in raw else 10
+            ),
+        )
+
+        result = harness.run(
+            [{"role": "user", "content": "initial"}], model_config=config()
+        )
+
+        self.assertEqual(result.termination_status, "assembled_input_limit")
+        self.assertEqual(len(result.telemetry), 1)
+        self.assertEqual(gateway.remaining, 1)
+
+    def test_default_token_estimate_uses_four_utf8_bytes_per_token(self) -> None:
+        gateway = RecordedModelGateway(
+            (response({"role": "assistant", "content": "done"}),), self.store
+        )
+        harness = BoundedToolHarness(
+            gateway,
+            (),
+            limits(maximum_assembled_input_tokens=100),
+            monotonic=lambda: 0,
+        )
+
+        result = harness.run(
+            [{"role": "user", "content": "x" * 100}], model_config=config()
+        )
+
+        self.assertEqual(result.termination_status, "stop")
+        self.assertEqual(gateway.remaining, 0)
 
     def test_tool_arguments_over_four_thousand_tokens_do_not_reach_handler(self) -> None:
         called = 0

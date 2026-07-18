@@ -295,15 +295,24 @@ class PostgresRuntimeRepository:
         self, claim: CycleClaim, *, now: datetime, summary: dict[str, object]
     ) -> None:
         now = _aware(now)
+        serialized = json.dumps(summary, sort_keys=True, default=str)
+        harness = summary.get("harness")
+        termination_status = (
+            harness.get("termination_status") if isinstance(harness, dict) else None
+        )
+        if termination_status is not None and not isinstance(termination_status, str):
+            raise ValueError("harness termination status must be a string")
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
             _assert_lease(cursor, claim, now)
             cursor.execute(
                 "UPDATE agent_cycles SET status = 'completed', completed_at = %s, "
-                "final_summary = %s::text, lease_owner = NULL, lease_expires_at = NULL "
+                "final_summary = %s::text, model_termination_status = %s, "
+                "lease_owner = NULL, lease_expires_at = NULL "
                 "WHERE id = %s AND lease_owner = %s",
                 (
-                    json.dumps(summary, sort_keys=True, default=str),
                     now,
+                    serialized,
+                    termination_status,
                     claim.cycle_id,
                     claim.lease_owner,
                 ),

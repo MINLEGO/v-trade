@@ -83,6 +83,24 @@ class PhaseFivePostgresIntegrationTests(unittest.TestCase):
             self.assertEqual(
                 repository.load_stage(claim.cycle_id, CycleStage.MARKET_FREEZE), result
             )
+            summary = {"harness": {"termination_status": "assembled_input_limit"}}
+            repository.complete_cycle(claim, now=now, summary=summary)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT status, completed_at, final_summary, model_termination_status "
+                    "FROM agent_cycles WHERE id = %s",
+                    (claim.cycle_id,),
+                )
+                completed = cursor.fetchone()
+            self.assertIsNotNone(completed)
+            assert completed is not None
+            self.assertEqual(completed[0], "completed")
+            self.assertEqual(completed[1], now)
+            self.assertEqual(
+                completed[2],
+                '{"harness": {"termination_status": "assembled_input_limit"}}',
+            )
+            self.assertEqual(completed[3], "assembled_input_limit")
         finally:
             connection.rollback()
             with connection.cursor() as cursor:

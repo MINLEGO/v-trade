@@ -715,4 +715,6 @@ def _request_upper_bound_micros(
 
 def _rough_tokens(values: Sequence[JsonObject]) -> int:
     raw = json.dumps(values, separators=(",", ":"), ensure_ascii=False)
-    return max(1, len(raw.encode("utf-8")))
+    # Provider-neutral preflight estimate; exact per-turn prompt usage returned by
+    # OpenRouter governs later harness turns. Do not equate every UTF-8 byte to a token.
+    return max(1, (len(raw.encode("utf-8")) + 3) // 4)

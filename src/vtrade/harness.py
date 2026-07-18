@@ -142,9 +142,21 @@ class BoundedToolHarness:
         seen_tool_call_ids: set[str] = set()
         started = self._monotonic()
         schemas = [tool.schema for tool in self._tools.values()]
+        previous_prompt_tokens: int | None = None
+        previous_request_message_count = 0
         for _turn in range(self._limits.maximum_model_turns):
             self._check_wall_clock(started)
-            assembled_tokens = self._count_tokens({"messages": messages, "tools": schemas})
+            if previous_prompt_tokens is None:
+                assembled_tokens = self._count_tokens(
+                    {"messages": messages, "tools": schemas}
+                )
+            else:
+                # The provider reports the preceding request's exact prompt size.
+                # Add only messages created since it; summing prompt usage across
+                # turns would confuse cumulative spend with current context size.
+                assembled_tokens = previous_prompt_tokens + self._count_tokens(
+                    {"messages": messages[previous_request_message_count:]}
+                )
             if assembled_tokens > self._limits.maximum_assembled_input_tokens:
                 if telemetry:
                     return HarnessResult(
@@ -175,8 +187,17 @@ class BoundedToolHarness:
                 raise HarnessLimitExceeded("model output ceiling must be configured")
             if not 0 < configured_output <= self._limits.maximum_model_output_tokens:
                 raise HarnessLimitExceeded("configured model output exceeds reserved output")
+            request_message_count = len(messages)
             response = self._gateway.complete(messages, schemas, model_config)
             telemetry.append(response.telemetry)
+            # A zero value means the provider did not supply usable prompt usage.
+            # Re-estimate the complete next request instead of forgetting its history.
+            previous_prompt_tokens = (
+                response.telemetry.prompt_tokens
+                if response.telemetry.prompt_tokens > 0
+                else None
+            )
+            previous_request_message_count = request_message_count
             completion_tokens += response.telemetry.completion_tokens
             if response.telemetry.completion_tokens > self._limits.maximum_model_output_tokens:
                 raise HarnessLimitExceeded("model response exceeded reserved output")
@@ -591,5 +612,5 @@ def _validate_schema_value(value: Any, schema: Mapping[str, Any], *, path: str) 
 
 
 def _conservative_token_upper_bound(raw: str) -> int:
-    """Return a provider-neutral strict upper bound until exact tokenizers are wired."""
-    return max(1, len(raw.encode("utf-8")))
+    """Estimate provider-neutral tokens as four UTF-8 bytes per token."""
+    return max(1, (len(raw.encode("utf-8")) + 3) // 4)

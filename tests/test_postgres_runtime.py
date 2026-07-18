@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 import uuid
 from collections.abc import Sequence
@@ -73,6 +74,33 @@ CYCLE_ID = uuid.UUID("00000000-0000-0000-0000-000000000052")
 
 
 class PostgresSchedulingTests(unittest.TestCase):
+    def test_cycle_completion_binds_timestamp_summary_and_termination_in_order(self) -> None:
+        connection = SchedulingConnection()
+        repository = PostgresRuntimeRepository(
+            "postgresql://unused", connect=lambda _url: connection
+        )
+        claim = CycleClaim(
+            CYCLE_ID,
+            AGENT_ID,
+            NOW.replace(minute=0),
+            NOW,
+            "worker-1",
+            NOW + timedelta(minutes=70),
+        )
+        summary = {"harness": {"termination_status": "assembled_input_limit"}}
+
+        repository.complete_cycle(claim, now=NOW, summary=summary)
+
+        params = next(
+            values
+            for query, values in connection.cursor_instance.queries
+            if query.startswith("UPDATE agent_cycles SET status = 'completed'")
+        )
+        self.assertEqual(params[0], NOW)
+        self.assertEqual(json.loads(str(params[1])), summary)
+        self.assertEqual(params[2], "assembled_input_limit")
+        self.assertEqual(params[3:], (CYCLE_ID, "worker-1"))
+
     def test_overdue_slots_are_atomically_skipped_and_only_current_slot_is_claimed(self) -> None:
         connection = SchedulingConnection()
         repository = PostgresRuntimeRepository(

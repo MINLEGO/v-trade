@@ -49,7 +49,9 @@ must not be simulated with mocks when it is scheduled.
 - Run the `liquidity_aware` paper policy as a separately labelled experiment; never mix
   it into the `predictionarena_unconditional` baseline ranking.
 - Replace the conservative provider-neutral byte bound with verified provider-native
-  token accounting if stable tokenizer contracts become available.
+  token accounting if stable tokenizer contracts become available. Evaluate `tiktoken`
+  for this purpose, while first verifying that its encoding is representative enough
+  for both frozen OpenRouter model families; until then use four UTF-8 bytes per token.
 - Evaluate a deterministic context-compaction policy as a separately versioned harness
   change. The baseline currently preserves the full transcript and terminates cleanly
   at the 88,000-token assembled-input ceiling instead of deleting evidence or risking
