@@ -138,6 +138,11 @@ PostgreSQL verifiers pass: normalized freeze/frozen same-cycle fee lookup, pendi
 quota enforcement/reconciliation, RLS/grants/stage constraints, and explicit isolated
 bootstrap all complete without leaving fixture rows.
 
+Migration `0012` permits an unchanged frozen configuration fingerprint to be registered
+under a distinct code version. The executable definition is uniquely identified by the
+pair `(config_sha256, code_version)`, so a bug-fix rerun remains auditable without
+mutating or relabelling the owner-approved experiment configuration.
+
 Phase 5 runtime infrastructure now provides independent hourly PostgreSQL schedule
 cursors, atomic skipped-slot recording without backfill, advisory leases, restart
 recovery from typed stage checkpoints, idempotent orchestration boundaries, actual
