@@ -143,6 +143,10 @@ under a distinct code version. The executable definition is uniquely identified 
 pair `(config_sha256, code_version)`, so a bug-fix rerun remains auditable without
 mutating or relabelling the owner-approved experiment configuration.
 
+Migration `0013` applies the same definition scope to the immutable prompt fingerprint.
+A byte-identical prompt may therefore be attached to a new code-versioned definition,
+while remaining unique and immutable within that definition.
+
 Phase 5 runtime infrastructure now provides independent hourly PostgreSQL schedule
 cursors, atomic skipped-slot recording without backfill, advisory leases, restart
 recovery from typed stage checkpoints, idempotent orchestration boundaries, actual
