@@ -555,7 +555,12 @@ def _register_artifact(
     artifact: ArtifactRegistration,
     created_at: datetime,
 ) -> None:
-    minimum = six_month_retain_until(created_at)
+    # Artifact creation and stage registration are separate operations. Using the
+    # later registration clock makes an exact six-calendar-month retention fail by
+    # the few milliseconds spent completing the stage. The scheduled cycle instant
+    # is the deterministic causal lower bound; artifacts calculate their expiry from
+    # their later, actual creation time.
+    minimum = six_month_retain_until(claim.scheduled_at)
     if artifact.retain_until < minimum:
         raise ValueError("runtime artifacts must be retained for at least six calendar months")
     cursor.execute(

@@ -205,6 +205,42 @@ class PostgresSchedulingTests(unittest.TestCase):
         ):
             self.assertIn(reactivation, upsert)
 
+    def test_artifact_retention_uses_deterministic_cycle_schedule_lower_bound(self) -> None:
+        connection = SchedulingConnection()
+        repository = PostgresRuntimeRepository(
+            "postgresql://unused", connect=lambda _url: connection
+        )
+        scheduled = NOW.replace(minute=0)
+        claim = CycleClaim(
+            CYCLE_ID,
+            AGENT_ID,
+            scheduled,
+            NOW,
+            "worker-1",
+            NOW + timedelta(minutes=70),
+        )
+        artifact = ArtifactRegistration(
+            "memory://freeze",
+            "d" * 64,
+            42,
+            scheduled.replace(year=2027, month=1),
+        )
+
+        repository.complete_stage(
+            claim,
+            CycleStage.MARKET_FREEZE,
+            "e" * 64,
+            StageResult({}, (artifact,)),
+            now=NOW,
+        )
+
+        self.assertTrue(
+            any(
+                query.startswith("INSERT INTO artifact_inventory")
+                for query, _params in connection.cursor_instance.queries
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
