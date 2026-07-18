@@ -555,14 +555,17 @@ def _register_artifact(
     artifact: ArtifactRegistration,
     created_at: datetime,
 ) -> None:
-    # Artifact creation and stage registration are separate operations. Using the
-    # later registration clock makes an exact six-calendar-month retention fail by
-    # the few milliseconds spent completing the stage. The scheduled cycle instant
-    # is the deterministic causal lower bound; artifacts calculate their expiry from
-    # their later, actual creation time.
+    # The schedule is the deterministic causal lower bound used to reject malformed
+    # registrations. Inventory creation happens slightly after artifact creation, so
+    # extend (never shorten) the authoritative expiry to preserve six full calendar
+    # months from the timestamp enforced by the database constraint as well.
     minimum = six_month_retain_until(claim.scheduled_at)
     if artifact.retain_until < minimum:
         raise ValueError("runtime artifacts must be retained for at least six calendar months")
+    effective_retain_until = max(
+        artifact.retain_until,
+        six_month_retain_until(created_at),
+    )
     cursor.execute(
         "INSERT INTO artifact_inventory "
         "(id, agent_cycle_id, stage, uri, sha256, byte_length, retain_until, status, created_at) "
@@ -577,7 +580,7 @@ def _register_artifact(
             artifact.uri,
             artifact.sha256,
             artifact.byte_length,
-            artifact.retain_until,
+            effective_retain_until,
             created_at,
         ),
     )

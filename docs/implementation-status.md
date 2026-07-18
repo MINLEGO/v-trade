@@ -147,6 +147,11 @@ Migration `0013` applies the same definition scope to the immutable prompt finge
 A byte-identical prompt may therefore be attached to a new code-versioned definition,
 while remaining unique and immutable within that definition.
 
+Artifact inventory registration now extends, but never shortens, the authoritative
+expiry to six calendar months from the later database registration timestamp. This
+removes a millisecond-scale timestamp race observed on both first v3 cycles while
+preserving the original strict database constraint and preventing early cleanup.
+
 Phase 5 runtime infrastructure now provides independent hourly PostgreSQL schedule
 cursors, atomic skipped-slot recording without backfill, advisory leases, restart
 recovery from typed stage checkpoints, idempotent orchestration boundaries, actual

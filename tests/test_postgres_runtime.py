@@ -234,12 +234,49 @@ class PostgresSchedulingTests(unittest.TestCase):
             now=NOW,
         )
 
-        self.assertTrue(
-            any(
-                query.startswith("INSERT INTO artifact_inventory")
-                for query, _params in connection.cursor_instance.queries
-            )
+        inventory = next(
+            params
+            for query, params in connection.cursor_instance.queries
+            if query.startswith("INSERT INTO artifact_inventory")
         )
+        self.assertEqual(inventory[6], datetime(2027, 1, 16, 10, 5, tzinfo=UTC))
+
+    def test_artifact_registration_extends_retention_across_month_boundary(self) -> None:
+        connection = SchedulingConnection()
+        repository = PostgresRuntimeRepository(
+            "postgresql://unused", connect=lambda _url: connection
+        )
+        scheduled = datetime(2026, 1, 31, 23, 59, 59, tzinfo=UTC)
+        registered = datetime(2026, 2, 1, 0, 0, tzinfo=UTC)
+        claim = CycleClaim(
+            CYCLE_ID,
+            AGENT_ID,
+            scheduled,
+            registered,
+            "worker-1",
+            registered + timedelta(minutes=70),
+        )
+        artifact = ArtifactRegistration(
+            "memory://month-boundary",
+            "f" * 64,
+            42,
+            datetime(2026, 7, 31, 23, 59, 59, tzinfo=UTC),
+        )
+
+        repository.complete_stage(
+            claim,
+            CycleStage.PROMPT,
+            "a" * 64,
+            StageResult({}, (artifact,)),
+            now=registered,
+        )
+
+        inventory = next(
+            params
+            for query, params in connection.cursor_instance.queries
+            if query.startswith("INSERT INTO artifact_inventory")
+        )
+        self.assertEqual(inventory[6], datetime(2026, 8, 1, tzinfo=UTC))
 
 
 if __name__ == "__main__":
