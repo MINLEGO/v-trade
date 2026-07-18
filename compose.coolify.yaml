@@ -1,9 +1,22 @@
+x-vtrade-environment: &vtrade-environment
+  VTRADE_ENVIRONMENT: ${VTRADE_ENVIRONMENT:-production}
+  VTRADE_EXPERIMENT_CONFIG: ${VTRADE_EXPERIMENT_CONFIG:-config/experiments/predictionarena-polymarket-v1.json}
+  VTRADE_DATABASE_URL: ${VTRADE_DATABASE_URL:?required}
+  VTRADE_ARTIFACT_ROOT: ${VTRADE_ARTIFACT_ROOT:-artifacts}
+  VTRADE_SUPABASE_BUCKET: ${VTRADE_SUPABASE_BUCKET:?required}
+  VTRADE_SUPABASE_URL: ${VTRADE_SUPABASE_URL:?required}
+  VTRADE_SUPABASE_SERVICE_ROLE_KEY: ${VTRADE_SUPABASE_SERVICE_ROLE_KEY:?required}
+  VTRADE_OPENROUTER_API_KEY: ${VTRADE_OPENROUTER_API_KEY:?required}
+  VTRADE_EXA_API_KEY: ${VTRADE_EXA_API_KEY:?required}
+  VTRADE_TAVILY_API_KEY: ${VTRADE_TAVILY_API_KEY:-}
+  VTRADE_ADMIN_AUTH_SECRET: ${VTRADE_ADMIN_AUTH_SECRET:?required}
+
 services:
   migrate:
     build: .
     command: ["python", "-m", "vtrade.migrate"]
     restart: "no"
-    env_file: [.env]
+    environment: *vtrade-environment
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
@@ -13,7 +26,8 @@ services:
     build: .
     command: ["uvicorn", "vtrade.api:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
     restart: unless-stopped
-    env_file: [.env]
+    environment: *vtrade-environment
+    expose: ["8000"]
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
@@ -38,7 +52,7 @@ services:
     build: .
     command: ["python", "-m", "vtrade.worker"]
     restart: unless-stopped
-    env_file: [.env]
+    environment: *vtrade-environment
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
