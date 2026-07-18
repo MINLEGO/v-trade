@@ -146,6 +146,14 @@ class BoundedToolHarness:
             self._check_wall_clock(started)
             assembled_tokens = self._count_tokens({"messages": messages, "tools": schemas})
             if assembled_tokens > self._limits.maximum_assembled_input_tokens:
+                if telemetry:
+                    return HarnessResult(
+                        tuple(messages),
+                        tuple(records),
+                        tuple(telemetry),
+                        "assembled_input_limit",
+                        completion_tokens,
+                    )
                 raise HarnessLimitExceeded(
                     "assembled input token ceiling reached before model request"
                 )
@@ -153,6 +161,14 @@ class BoundedToolHarness:
                 assembled_tokens + self._limits.maximum_model_output_tokens
                 > self._limits.maximum_context_tokens
             ):
+                if telemetry:
+                    return HarnessResult(
+                        tuple(messages),
+                        tuple(records),
+                        tuple(telemetry),
+                        "assembled_input_limit",
+                        completion_tokens,
+                    )
                 raise HarnessLimitExceeded("reserved model output would exceed context")
             configured_output = model_config.get("maximum_output_tokens")
             if not isinstance(configured_output, int) or isinstance(configured_output, bool):

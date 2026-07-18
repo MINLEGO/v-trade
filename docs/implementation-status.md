@@ -162,6 +162,20 @@ Migration `0014` corrects the Exa response-cost semantics discovered by the firs
 search. It resolves only the false `exa_unexpected_billed_cost` alert and clears its
 derived halt/billed counters while preserving the completed request and credit usage.
 
+OpenRouter 429 and 503 pre-inference responses now receive at most three total attempts,
+honoring a numeric `Retry-After` value up to 60 seconds and otherwise using a one/two
+second backoff. A longer requested delay ends the attempts instead of retrying early.
+Exhaustion releases the single request reservation with zero billed and nominal usage
+before the cycle fails closed. Other HTTP and transport failures are not retried because
+their side-effect status may be ambiguous.
+
+If accumulated messages and tool results reach the frozen 88,000-token assembled-input
+ceiling after at least one model turn, the harness now terminates successfully with
+`assembled_input_limit`. It preserves the complete transcript, telemetry, tool records,
+and any already-created order intents, makes no over-limit model request, and allows the
+cycle to continue through broker and valuation. An oversized initial prompt still fails
+closed as a configuration error.
+
 Phase 5 runtime infrastructure now provides independent hourly PostgreSQL schedule
 cursors, atomic skipped-slot recording without backfill, advisory leases, restart
 recovery from typed stage checkpoints, idempotent orchestration boundaries, actual

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -174,6 +175,7 @@ class OpenRouterModelGateway:
         *,
         client: httpx.Client | None = None,
         clock: Callable[[], datetime] | None = None,
+        sleep: Callable[[float], None] | None = None,
     ) -> None:
         if not api_key:
             raise ProviderConfigurationError("OpenRouter API key is required")
@@ -185,6 +187,7 @@ class OpenRouterModelGateway:
         self._budget = budget
         self._client = client or httpx.Client(timeout=httpx.Timeout(120.0, connect=10.0))
         self._clock = clock
+        self._sleep = sleep or time.sleep
 
     def complete(
         self,
@@ -236,8 +239,26 @@ class OpenRouterModelGateway:
         if "models" in payload or "models" in model_config:
             raise ProviderConfigurationError("models[] cross-model fallback is forbidden")
         started = _clock_ms(self._clock)
-        response = self._client.post(OPENROUTER_URL, headers=self._headers, json=payload)
+        response: httpx.Response | None = None
+        for attempt in range(3):
+            response = self._client.post(OPENROUTER_URL, headers=self._headers, json=payload)
+            if response.status_code not in {429, 503} or attempt == 2:
+                break
+            delay = _openrouter_retry_delay(response, attempt)
+            if delay is None:
+                break
+            self._sleep(delay)
+        if response is None:  # pragma: no cover - range(3) is statically non-empty
+            raise RuntimeError("OpenRouter retry loop did not execute")
         latency = _clock_ms(self._clock) - started
+        if response.status_code in {429, 503}:
+            # Both statuses are explicit pre-inference routing failures. Release the
+            # one request reservation after all bounded attempts are exhausted.
+            self._budget.reconcile(
+                reservation,
+                billed_cost_micros=0,
+                nominal_cost_micros=0,
+            )
         response.raise_for_status()
         raw = response.content
         parsed = _json_object(raw, "OpenRouter response")
@@ -663,6 +684,20 @@ def _maximum_prices(value: Any) -> JsonObject:
             raise ProviderConfigurationError("provider max prices must be non-negative")
         normalized[key] = str(price)
     return normalized
+
+
+def _openrouter_retry_delay(response: httpx.Response, attempt: int) -> float | None:
+    raw = response.headers.get("Retry-After")
+    if raw is not None:
+        try:
+            delay = float(raw)
+        except ValueError:
+            delay = float(2**attempt)
+    else:
+        delay = float(2**attempt)
+    if delay > 60:
+        return None
+    return max(delay, 0.0)
 
 
 def _request_upper_bound_micros(

@@ -334,6 +334,47 @@ class HarnessTests(unittest.TestCase):
             output_harness.run([], model_config=oversized_output)
         self.assertEqual(gateway.remaining, 1)
 
+    def test_assembled_input_limit_after_tool_turn_terminates_cleanly(self) -> None:
+        schema = {
+            "type": "function",
+            "function": {
+                "name": "inspect",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+        gateway = RecordedModelGateway(
+            (
+                response(
+                    {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "id": "inspect-1",
+                                "type": "function",
+                                "function": {"name": "inspect", "arguments": "{}"},
+                            }
+                        ],
+                    }
+                ),
+                response({"role": "assistant", "content": "not reached"}),
+            ),
+            self.store,
+        )
+        harness = BoundedToolHarness(
+            gateway,
+            (ToolSpec(schema, lambda _arguments: {"large": "result"}, "market"),),
+            limits(maximum_assembled_input_tokens=10),
+            monotonic=lambda: 0,
+            token_counter=lambda raw: 11 if '"role":"tool"' in raw else 1,
+        )
+
+        result = harness.run([], model_config=config())
+
+        self.assertEqual(result.termination_status, "assembled_input_limit")
+        self.assertEqual(len(result.tool_calls), 1)
+        self.assertEqual(len(result.telemetry), 1)
+        self.assertEqual(gateway.remaining, 1)
+
     def test_tool_arguments_over_four_thousand_tokens_do_not_reach_handler(self) -> None:
         called = 0
 

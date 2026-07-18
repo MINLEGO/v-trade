@@ -66,6 +66,13 @@ worker recovers expired work and reuses completed checkpoints; downstream financ
 operations must retain their existing idempotency keys, so a crash after a side effect
 cannot authorize a duplicate trade or settlement.
 
+OpenRouter retries only explicit pre-inference 429 and 503 responses, at most three
+total attempts, while respecting numeric `Retry-After` delays up to 60 seconds. Other
+HTTP and transport failures remain fail-closed because their billing/side-effect state
+can be ambiguous. If accumulated tool dialogue reaches the 88,000-token input ceiling,
+the harness preserves the full transcript and ends normally as `assembled_input_limit`;
+it does not compact evidence or issue an over-limit request.
+
 The production worker claims one cycle per batch. Harness recovery reuses only a fully
 persisted harness run and its inventoried artifacts; otherwise it fails closed and does
 not recall OpenRouter or Exa. Exact resume within an unfinished model turn is deferred,

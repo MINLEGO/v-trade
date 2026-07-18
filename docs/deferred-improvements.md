@@ -50,6 +50,10 @@ must not be simulated with mocks when it is scheduled.
   it into the `predictionarena_unconditional` baseline ranking.
 - Replace the conservative provider-neutral byte bound with verified provider-native
   token accounting if stable tokenizer contracts become available.
+- Evaluate a deterministic context-compaction policy as a separately versioned harness
+  change. The baseline currently preserves the full transcript and terminates cleanly
+  at the 88,000-token assembled-input ceiling instead of deleting evidence or risking
+  broken assistant/tool-call pairs.
 - Optimize large immutable snapshot reads, pagination, and reporting projections after
   shadow measurements identify actual bottlenecks.
 - Add richer operator visualizations, downloadable audit bundles, and longer-horizon

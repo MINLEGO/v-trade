@@ -162,6 +162,77 @@ class ProviderTests(unittest.TestCase):
         with self.assertRaises(ProviderPayloadError):
             gateway.complete([], [], model_config())
 
+    def test_openrouter_retries_503_with_retry_after_then_succeeds(self) -> None:
+        attempts = 0
+        sleeps: list[float] = []
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                return httpx.Response(503, headers={"Retry-After": "0.25"})
+            return httpx.Response(200, content=model_payload())
+
+        gateway = OpenRouterModelGateway(
+            "key",
+            self.store,
+            self.budget,
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+            sleep=sleeps.append,
+        )
+
+        response = gateway.complete([], [], model_config())
+
+        self.assertEqual(attempts, 2)
+        self.assertEqual(sleeps, [0.25])
+        self.assertEqual(response.response["id"], "generation-1")
+
+    def test_openrouter_exhausted_503_releases_reservation(self) -> None:
+        budget = CapturingBudget()
+        attempts = 0
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            nonlocal attempts
+            attempts += 1
+            return httpx.Response(503)
+
+        gateway = OpenRouterModelGateway(
+            "key",
+            self.store,
+            budget,
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+            sleep=lambda _seconds: None,
+        )
+
+        with self.assertRaises(httpx.HTTPStatusError):
+            gateway.complete([], [], model_config())
+
+        self.assertEqual(attempts, 3)
+        self.assertEqual(budget.reconciliations, [(0, 0, 0, Decimal(0))])
+
+    def test_openrouter_does_not_retry_before_long_retry_after(self) -> None:
+        budget = CapturingBudget()
+        attempts = 0
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            nonlocal attempts
+            attempts += 1
+            return httpx.Response(503, headers={"Retry-After": "120"})
+
+        gateway = OpenRouterModelGateway(
+            "key",
+            self.store,
+            budget,
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+            sleep=lambda _seconds: self.fail("long Retry-After must not be shortened"),
+        )
+
+        with self.assertRaises(httpx.HTTPStatusError):
+            gateway.complete([], [], model_config())
+
+        self.assertEqual(attempts, 1)
+        self.assertEqual(budget.reconciliations, [(0, 0, 0, Decimal(0))])
+
     def test_recorded_response_replays_without_any_network_transport(self) -> None:
         gateway = RecordedModelGateway((model_payload(),), self.store)
         response = gateway.complete([], [WEB_SEARCH_TOOL_SCHEMA], model_config())
