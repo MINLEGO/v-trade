@@ -218,6 +218,20 @@ class MarketFreezeTests(unittest.TestCase):
         self.assertEqual(len(venue.resolution_batches[0]), 45)
         self.assertEqual(result.payload["order_book_token_ids"], list(held_tokens))
 
+    def test_bounded_market_universe_accepts_a_remaining_source_cursor(self) -> None:
+        market = _market(1, 10)
+        page = MarketDelta("markets", None, "next-page", NOW, (), (market,), ARTIFACT)
+        venue = _Venue(page)
+        repository = _Repository()
+        claim = CycleClaim(
+            uuid.uuid4(), uuid.uuid4(), NOW, None, "worker", NOW + timedelta(minutes=10)
+        )
+
+        result = PolymarketFreezeService(venue, repository, clock=lambda: NOW).freeze(claim)
+
+        self.assertTrue(repository.persisted)
+        self.assertEqual(len(result.payload["market_snapshot_ids"]), 1)
+
     def test_finalized_cutoff_forbids_any_venue_fetch(self) -> None:
         page = MarketDelta("markets", None, None, NOW, (), (), ARTIFACT)
         venue = _Venue(page)

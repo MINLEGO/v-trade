@@ -392,8 +392,8 @@ class PolymarketFreezeService:
         if claim.data_cutoff is not None:
             raise ValueError("market freeze cannot fetch after a cycle cutoff is finalized")
         pages = self._venue.sync_all_markets()
-        if not pages or pages[-1].next_cursor is not None:
-            raise RuntimeError("bounded Polymarket market synchronization is incomplete")
+        if not pages:
+            raise RuntimeError("bounded Polymarket market synchronization returned no pages")
         held_tokens, held_markets = self._repository.held_universe(claim.agent_id)
         historical_tokens, historical_markets = self._repository.historical_universe(
             claim.agent_id,
