@@ -43,8 +43,9 @@ and Exa quotas are frozen. No owner decision remains `owner_pending`:
 - OpenRouter reserves 14,000 micro-dollars per DeepSeek request and 50,000
   micro-dollars per MiMo request, rounding upward from the exact full-context bounds
   under the owner-approved $0.12/$0.24 and $0.44/$0.88 price ceilings;
-- Exa records a nominal 20,000 micro-dollars per search without consuming the dollar
-  breaker; any positive billed cost reported by Exa halts and alerts its circuit.
+- Exa records a conservative nominal 20,000 micro-dollars per search without consuming
+  the dollar breaker; `costDollars` is provider-estimated nominal cost, not evidence of
+  actual billing. The strict 18,000-request cap remains below the free allowance;
   Tavily's future basic route retains an 8,000-micro-dollar bound, but the current
   adapter is intentionally disabled and never contacts the provider;
 - every configured model has a 100,000-token context, reserves 12,000 tokens for
@@ -130,7 +131,7 @@ new search atomically reserve one request and ten credits (the strict maximum re
 count), then reconciles actual credits and releases unused pending capacity. It caps
 both monthly totals at 18,000, persists nominal
 cost independently of the global billed-dollar breaker, and records a critical alert
-before raising if Exa reports any positive billed cost or more credits than reserved.
+before raising if Exa reports more credits than reserved.
 Migration `0011` also adds `pre_settlement` to the durable stage checks and applies RLS
 plus exact V-Trade-object revokes for `anon`/`authenticated`, without changing shared
 schema/default privileges. Migrations `0009` through `0011` are applied. Their real
@@ -156,6 +157,10 @@ The OpenRouter Chat Completions payload uses the provider-advertised `max_tokens
 parameter. Sending `max_completion_tokens` together with strict parameter support had
 excluded every otherwise-compatible endpoint and produced a pre-inference 404 on both
 v4 routes. A bounded live probe confirmed the corrected field routes successfully.
+
+Migration `0014` corrects the Exa response-cost semantics discovered by the first v5
+search. It resolves only the false `exa_unexpected_billed_cost` alert and clears its
+derived halt/billed counters while preserving the completed request and credit usage.
 
 Phase 5 runtime infrastructure now provides independent hourly PostgreSQL schedule
 cursors, atomic skipped-slot recording without backfill, advisory leases, restart

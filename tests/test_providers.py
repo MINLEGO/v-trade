@@ -18,7 +18,6 @@ from vtrade.providers import (
     OPENROUTER_URL,
     TAVILY_MAX_SEARCH_COST_MICROS,
     WEB_SEARCH_TOOL_SCHEMA,
-    BudgetExceeded,
     BudgetReservation,
     ExaResearchProvider,
     OpenRouterModelGateway,
@@ -265,7 +264,7 @@ class ProviderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported search options"):
             exa.search("query", {"estimated_cost_micros": 1})
 
-    def test_exa_positive_billed_cost_is_reconciled_then_raises(self) -> None:
+    def test_exa_cost_dollars_is_nominal_and_does_not_halt_free_route(self) -> None:
         budget = CapturingBudget()
         exa = ExaResearchProvider(
             "exa-key",
@@ -284,9 +283,10 @@ class ProviderTests(unittest.TestCase):
                 )
             ),
         )
-        with self.assertRaisesRegex(BudgetExceeded, "Exa reported a billed cost"):
-            exa.search("query", {})
-        self.assertEqual(budget.reconciliations, [(1_000, 20_000, 1, Decimal("1.5"))])
+        response = exa.search("query", {})
+        self.assertEqual(response.telemetry.billed_cost_micros, 0)
+        self.assertEqual(response.telemetry.nominal_cost_micros, 20_000)
+        self.assertEqual(budget.reconciliations, [(0, 20_000, 1, Decimal("1.5"))])
 
     def test_tavily_is_disabled_without_inventing_or_requiring_a_key(self) -> None:
         provider = TavilyResearchProvider(None, self.store, self.budget)

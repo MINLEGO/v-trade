@@ -377,7 +377,11 @@ class ExaResearchProvider:
         parsed = _json_object(response.content, "Exa response")
         output = _normalize_search_output(str(payload["query"]), parsed, provider="exa")
         cost = _object(parsed.get("costDollars", {}), "Exa costDollars")
-        billed = _dollars_to_micros(cost.get("total", 0))
+        # Exa defines costDollars as an endpoint-dependent estimated cost and states
+        # that billing is computed separately. The strict 18,000-request ceiling is
+        # below the owner's 20,000-request free allowance, so this response field is
+        # nominal telemetry and must not trip the billed-dollar circuit.
+        _dollars_to_micros(cost.get("total", 0))
         credits = _nonnegative_decimal(parsed.get("requestCredits", 1), "requestCredits")
         artifact = self._store.put(canonical_redacted_json(parsed))
         telemetry = ProviderTelemetry(
@@ -390,7 +394,7 @@ class ExaResearchProvider:
             completion_tokens=0,
             reasoning_tokens=0,
             cached_tokens=0,
-            billed_cost_micros=billed,
+            billed_cost_micros=0,
             nominal_cost_micros=estimate,
             latency_ms=max(latency, 0),
             artifact_uri=artifact.uri,
@@ -399,13 +403,11 @@ class ExaResearchProvider:
         )
         self._budget.reconcile(
             reservation,
-            billed_cost_micros=billed,
+            billed_cost_micros=0,
             nominal_cost_micros=estimate,
             request_count=1,
             credit_count=credits,
         )
-        if billed > 0:
-            raise BudgetExceeded("Exa reported a billed cost on the free-plan route; Exa is halted")
         return SearchResponse(output, telemetry)
 
 

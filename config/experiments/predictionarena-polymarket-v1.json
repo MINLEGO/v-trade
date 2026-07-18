@@ -48,6 +48,7 @@
     "monthly_request_cap": 18000,
     "monthly_credit_cap": 18000,
     "excluded_from_dollar_circuit_breaker": true,
+    "cost_dollars_semantics": "provider_estimated_nominal_not_actual_billing",
     "unexpected_positive_billed_cost": "halt_alert_and_raise",
     "ceiling_enforcement": "strict"
   },
@@ -216,6 +217,7 @@
       "enforcement": "strict_atomic_postgresql",
       "dollar_circuit_breaker": "excluded_while_free",
       "nominal_cost_accounting": "required",
+      "cost_dollars_semantics": "provider_estimated_nominal_not_actual_billing",
       "unexpected_positive_billed_cost": "halt_alert_and_raise"
     },
     "tavily_runtime_policy": {

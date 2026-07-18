@@ -89,6 +89,10 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.raw["research"]["monthly_request_cap"], 18_000)
         self.assertEqual(config.raw["research"]["monthly_credit_cap"], 18_000)
         self.assertTrue(config.raw["research"]["excluded_from_dollar_circuit_breaker"])
+        self.assertEqual(
+            config.raw["research"]["cost_dollars_semantics"],
+            "provider_estimated_nominal_not_actual_billing",
+        )
         self.assertEqual(config.raw["research"]["maximum_exa_cost_per_search_micros"], 20_000)
         self.assertEqual(
             config.raw["research"]["maximum_tavily_basic_cost_per_search_micros"], 8_000

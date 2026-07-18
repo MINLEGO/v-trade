@@ -82,9 +82,10 @@ Exa is governed by a separate monthly PostgreSQL circuit: 18,000 requests and 18
 credits. Each search atomically reserves one request and ten credits (the strict
 ten-result maximum) before network I/O. Exa's nominal 20,000-micro-dollar search value
 remains auditable but does not consume the $40 billed API breaker while the route is
-free. Reconciliation records actual credits and releases unused pending capacity. A
-positive `costDollars.total` or credit use above the reservation records a critical
-alert, halts Exa, and raises instead of silently entering the dollar ledger.
+free. Exa documents `costDollars.total` as an estimated nominal endpoint cost rather
+than actual billing; it remains outside the billed-dollar ledger. Reconciliation records
+actual credits and releases unused pending capacity. Credit use above the reservation
+still records a critical alert, halts Exa, and raises.
 
 The Tavily credential is present, but Tavily is intentionally disabled and future-only
 for this experiment version. Credential presence does not enable the adapter, and no
