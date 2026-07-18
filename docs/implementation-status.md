@@ -152,6 +152,11 @@ expiry to six calendar months from the later database registration timestamp. Th
 removes a millisecond-scale timestamp race observed on both first v3 cycles while
 preserving the original strict database constraint and preventing early cleanup.
 
+The OpenRouter Chat Completions payload uses the provider-advertised `max_tokens`
+parameter. Sending `max_completion_tokens` together with strict parameter support had
+excluded every otherwise-compatible endpoint and produced a pre-inference 404 on both
+v4 routes. A bounded live probe confirmed the corrected field routes successfully.
+
 Phase 5 runtime infrastructure now provides independent hourly PostgreSQL schedule
 cursors, atomic skipped-slot recording without backfill, advisory leases, restart
 recovery from typed stage checkpoints, idempotent orchestration boundaries, actual

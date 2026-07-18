@@ -219,7 +219,10 @@ class OpenRouterModelGateway:
             "model": route.model,
             "messages": list(messages),
             "tools": list(tools),
-            "max_completion_tokens": maximum_output_tokens,
+            # OpenRouter Chat Completions and its provider capability metadata use
+            # max_tokens. With require_parameters enabled, max_completion_tokens
+            # excludes every otherwise-compatible tool-capable endpoint.
+            "max_tokens": maximum_output_tokens,
             "reasoning": {"effort": route.reasoning_effort},
             "stream": False,
             "provider": {

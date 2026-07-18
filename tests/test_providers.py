@@ -135,6 +135,8 @@ class ProviderTests(unittest.TestCase):
         body = json.loads(requests[0].content)
         self.assertEqual(body["model"], "deepseek/deepseek-v4-flash")
         self.assertNotIn("models", body)
+        self.assertNotIn("max_completion_tokens", body)
+        self.assertEqual(body["max_tokens"], 1_000)
         self.assertEqual(body["reasoning"], {"effort": "max"})
         self.assertEqual(
             body["provider"],
