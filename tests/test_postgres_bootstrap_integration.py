@@ -22,7 +22,7 @@ pytestmark = pytest.mark.skipif(
 def test_real_postgres_bootstrap_is_explicit_and_agent_isolated() -> None:
     import psycopg
 
-    database_url = os.environ["DATABASE_URL"]
+    database_url = os.environ["VTRADE_DATABASE_URL"]
     original = load_experiment_config(
         "config/experiments/predictionarena-polymarket-v1.json"
     )
@@ -73,6 +73,22 @@ def test_real_postgres_bootstrap_is_explicit_and_agent_isolated() -> None:
             )
             enabled = {uuid.UUID(str(row[0])): bool(row[1]) for row in cursor.fetchall()}
             assert enabled == {first: True, second: False}
+            cursor.execute(
+                "SELECT le.agent_id, sum(lp.amount_micros), "
+                "sum(lp.amount_micros) FILTER (WHERE lp.account = 'cash') "
+                "FROM ledger_entries le JOIN ledger_postings lp ON lp.ledger_entry_id = le.id "
+                "WHERE le.agent_id IN (%s, %s) AND le.event_type = 'initial_capital' "
+                "GROUP BY le.agent_id",
+                (first, second),
+            )
+            capital = {
+                uuid.UUID(str(row[0])): (int(str(row[1])), int(str(row[2])))
+                for row in cursor.fetchall()
+            }
+            assert capital == {
+                first: (0, 10_000_000_000),
+                second: (0, 10_000_000_000),
+            }
             cursor.execute(
                 "SELECT status FROM experiment_runs WHERE id = %s", (registration.run_id,)
             )

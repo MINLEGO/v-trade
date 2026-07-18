@@ -112,6 +112,32 @@ class PolymarketContractReplayTests(unittest.TestCase):
             (),
         )
 
+    def test_resolved_fifty_fifty_payload_has_no_singular_winner(self) -> None:
+        payload = json.loads(
+            (FIXTURES / "resolved-markets-keyset-limit-1.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        market_payload = payload["markets"][0]
+        market_payload["outcomePrices"] = json.dumps(["0.5", "0.5"])
+        raw = json.dumps(payload).encode()
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=raw, request=request)
+
+        venue = PolymarketVenue(
+            ContentAddressedArtifactStore(Path(self.directory.name) / "fifty-fifty"),
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+            rate_limiter=RequestRateLimiter({}),
+            clock=lambda: self.replay.captured_at,
+        )
+
+        resolutions = venue.sync_resolutions([market_payload["id"]])
+
+        self.assertEqual(len(resolutions), 1)
+        self.assertIsNone(resolutions[0].winning_outcome_id)
+        self.assertEqual(resolutions[0].result, "50/50")
+
     def test_versioned_discovery_cache_never_serves_future_delta(self) -> None:
         delta = self.venue.sync_markets(limit=1)
         cache = MarketDiscoveryCache()

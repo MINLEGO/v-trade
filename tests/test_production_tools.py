@@ -21,9 +21,10 @@ NOW = datetime(2026, 7, 16, 10, 5, tzinfo=UTC)
 
 
 class _Cursor:
-    def __init__(self) -> None:
+    def __init__(self, *, book_observed_at: datetime = NOW) -> None:
         self.rows: list[tuple[object, ...]] = []
         self.queries: list[tuple[str, tuple[object, ...]]] = []
+        self.book_observed_at = book_observed_at
 
     def __enter__(self):
         return self
@@ -37,8 +38,8 @@ class _Cursor:
             self.rows = [
                 (
                     uuid.uuid4(),
-                    NOW,
-                    NOW,
+                    self.book_observed_at,
+                    self.book_observed_at,
                     [{"price": "0.49", "size": "10"}],
                     [{"price": "0.51", "size": "10"}],
                     Decimal("0.49"),
@@ -48,6 +49,29 @@ class _Cursor:
             ]
         elif query.startswith("SELECT o.id, o.market_id"):
             self.rows = [(uuid.uuid4(), uuid.uuid4())]
+        elif query.startswith("SELECT obs.best_ask"):
+            self.rows = [(Decimal("0.51"),)]
+        elif query.startswith("SELECT m.id"):
+            self.rows = [
+                (
+                    uuid.uuid4(),
+                    "venue-market",
+                    "snapshot-slug",
+                    uuid.uuid4(),
+                    "Snapshot question",
+                    "Snapshot rules",
+                    NOW - timedelta(days=1),
+                    NOW + timedelta(days=1),
+                    1_000_000,
+                    2_000_000,
+                    "open",
+                    True,
+                    {"tags": [{"label": "Politics"}]},
+                    [{"venue_token_id": "token", "name": "Yes"}],
+                )
+            ]
+        elif query.startswith("SELECT b.id, b.active"):
+            self.rows = [(uuid.uuid4(), False, Decimal("0.4"), "old", "macro", [], NOW)]
         else:
             self.rows = []
         return self
@@ -81,6 +105,8 @@ def _context(cursor: _Cursor, *, cutoff=NOW) -> ToolContext:
         NOW + timedelta(minutes=10),
     )
     connection = _Connection(cursor)
+    market_snapshot_id = uuid.uuid4()
+    book_snapshot_id = uuid.uuid4()
     return ToolContext(
         "postgresql://unused",
         claim,
@@ -89,6 +115,8 @@ def _context(cursor: _Cursor, *, cutoff=NOW) -> ToolContext:
         cast(Any, lambda arguments: {"items": [], "has_more": False}),
         lambda _url: connection,
         lambda: NOW,
+        (market_snapshot_id,),
+        (book_snapshot_id,),
     )
 
 
@@ -111,7 +139,10 @@ class ProductionToolRegistryTests(unittest.TestCase):
         self.assertEqual(output["best_bid"], "0.49")
         query, params = cursor.queries[0]
         self.assertIn("obs.cutoff <= %s", query)
-        self.assertEqual(params, ("token", NOW))
+        self.assertEqual(params[0], "token")
+        self.assertEqual(len(params[1]), 1)
+        self.assertEqual(params[2], NOW)
+        self.assertIn("obs.id = ANY(%s::uuid[])", query)
 
     def test_place_order_persists_only_pending_intent(self) -> None:
         cursor = _Cursor()
@@ -124,7 +155,31 @@ class ProductionToolRegistryTests(unittest.TestCase):
             query for query, _params in cursor.queries if "INSERT INTO order_intents" in query
         )
         self.assertIn("pending_broker_validation", insert)
+        self.assertIn("amount_micros, shares", insert)
         self.assertFalse(any("INSERT INTO orders" in query for query, _ in cursor.queries))
+
+    def test_orderbook_rejects_current_cycle_member_older_than_five_minutes(self) -> None:
+        cursor = _Cursor(book_observed_at=NOW - timedelta(minutes=5, microseconds=1))
+        tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
+        with self.assertRaisesRegex(ToolContextUnavailable, "older than 300 seconds"):
+            tools["get_orderbook"].handler({"token_id": "token"})
+
+    def test_discovery_reads_snapshot_payload_and_current_cycle_membership(self) -> None:
+        cursor = _Cursor()
+        tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
+        output = tools["get_all_active_markets"].handler({"limit": 1})
+        self.assertEqual(output["markets"][0]["question"], "Snapshot question")
+        self.assertEqual(output["markets"][0]["outcomes"][0]["venue_token_id"], "token")
+        query, params = cursor.queries[0]
+        self.assertIn("snapshot.payload->>'question'", query)
+        self.assertIn("ms.id = ANY(%s::uuid[])", query)
+        self.assertEqual(len(params[1]), 1)
+
+    def test_include_inactive_beliefs_really_returns_inactive_rows(self) -> None:
+        cursor = _Cursor()
+        tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
+        output = tools["get_general_beliefs"].handler({"include_inactive": True})
+        self.assertFalse(output["beliefs"][0]["active"])
 
     def test_tools_refuse_unfinalized_cutoff(self) -> None:
         with self.assertRaisesRegex(ToolContextUnavailable, "finalized"):

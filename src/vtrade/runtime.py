@@ -24,6 +24,7 @@ class LeaseLost(RuntimeError):
 
 class CycleStage(StrEnum):
     MARKET_FREEZE = "market_freeze"
+    PRE_SETTLEMENT = "pre_settlement"
     PROMPT = "prompt"
     HARNESS = "harness"
     BROKER = "broker"
@@ -32,11 +33,15 @@ class CycleStage(StrEnum):
 
 STAGE_ORDER = (
     CycleStage.MARKET_FREEZE,
+    CycleStage.PRE_SETTLEMENT,
     CycleStage.PROMPT,
     CycleStage.HARNESS,
     CycleStage.BROKER,
     CycleStage.SETTLEMENT_VALUATION,
 )
+
+MINIMUM_CYCLE_LEASE_DURATION = timedelta(seconds=3_300)
+DEFAULT_CYCLE_LEASE_DURATION = timedelta(minutes=70)
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +97,16 @@ class MarketFreezeResult(StageResult):
 
 
 @dataclass(frozen=True, slots=True)
+class PreSettlementResult(StageResult):
+    settled_positions: int = 0
+
+    def __post_init__(self) -> None:
+        StageResult.__post_init__(self)
+        if self.settled_positions < 0:
+            raise ValueError("settled position count cannot be negative")
+
+
+@dataclass(frozen=True, slots=True)
 class PromptResult(StageResult):
     rendered_characters: int = 0
 
@@ -136,6 +151,12 @@ class SettlementValuationResult(StageResult):
 
 class MarketFreezePort(Protocol):
     def freeze(self, claim: CycleClaim) -> MarketFreezeResult: ...
+
+
+class PreSettlementPort(Protocol):
+    def settle_before_prompt(
+        self, claim: CycleClaim, frozen: JsonObject
+    ) -> PreSettlementResult: ...
 
 
 class PromptPort(Protocol):
@@ -243,12 +264,15 @@ class ProjectionInputs:
     completed_cycles: int
 
     def __post_init__(self) -> None:
-        if min(
-            self.artifact_bytes,
-            self.billed_cost_micros,
-            self.nominal_cost_micros,
-            self.completed_cycles,
-        ) < 0:
+        if (
+            min(
+                self.artifact_bytes,
+                self.billed_cost_micros,
+                self.nominal_cost_micros,
+                self.completed_cycles,
+            )
+            < 0
+        ):
             raise ValueError("projection inputs cannot be negative")
 
 
@@ -381,18 +405,20 @@ class CycleOrchestrator:
         *,
         repository: RuntimeRepository,
         market_freezer: MarketFreezePort,
+        pre_settlement: PreSettlementPort,
         prompt: PromptPort,
         harness: HarnessPort,
         broker: BrokerPort,
         settlement_valuation: SettlementValuationPort,
         clock: Callable[[], datetime],
         alert_policy: RuntimeAlertPolicy | None = None,
-        lease_duration: timedelta = timedelta(minutes=10),
+        lease_duration: timedelta = DEFAULT_CYCLE_LEASE_DURATION,
     ) -> None:
-        if lease_duration <= timedelta(0):
-            raise ValueError("lease duration must be positive")
+        if lease_duration < MINIMUM_CYCLE_LEASE_DURATION:
+            raise ValueError("cycle lease must cover the configured 3300-second wall clock")
         self._repository = repository
         self._market_freezer = market_freezer
+        self._pre_settlement = pre_settlement
         self._prompt = prompt
         self._harness = harness
         self._broker = broker
@@ -413,9 +439,7 @@ class CycleOrchestrator:
                     typed[stage] = stored
                     continue
                 now = _aware(self._clock())
-                self._repository.renew_lease(
-                    active_claim, now=now, duration=self._lease_duration
-                )
+                self._repository.renew_lease(active_claim, now=now, duration=self._lease_duration)
                 fingerprint = _fingerprint_inputs(active_claim, stage, outputs)
                 self._repository.begin_stage(active_claim, stage, fingerprint, now=now)
                 result = self._invoke(stage, active_claim, outputs)
@@ -460,6 +484,8 @@ class CycleOrchestrator:
         if stage is CycleStage.MARKET_FREEZE:
             return self._market_freezer.freeze(claim)
         frozen = _required(outputs, CycleStage.MARKET_FREEZE)
+        if stage is CycleStage.PRE_SETTLEMENT:
+            return self._pre_settlement.settle_before_prompt(claim, frozen)
         if stage is CycleStage.PROMPT:
             return self._prompt.render(claim, frozen)
         prompt = _required(outputs, CycleStage.PROMPT)
@@ -480,12 +506,16 @@ class HourlyRuntime:
         orchestrator: CycleOrchestrator,
         lease_owner: str,
         clock: Callable[[], datetime],
-        lease_duration: timedelta = timedelta(minutes=10),
+        lease_duration: timedelta = DEFAULT_CYCLE_LEASE_DURATION,
         missed_grace: timedelta = timedelta(minutes=10),
         batch_size: int = 10,
     ) -> None:
         if not lease_owner or batch_size <= 0:
             raise RuntimeConfigurationError("lease owner and positive batch size are required")
+        if lease_duration < MINIMUM_CYCLE_LEASE_DURATION:
+            raise RuntimeConfigurationError(
+                "scheduler lease must cover the configured 3300-second wall clock"
+            )
         self._repository = repository
         self._orchestrator = orchestrator
         self._lease_owner = lease_owner
@@ -503,13 +533,17 @@ class HourlyRuntime:
             limit=self._batch_size,
         )
         remaining = max(0, self._batch_size - len(recovered))
-        due = self._repository.claim_due_cycles(
-            now=now,
-            lease_owner=self._lease_owner,
-            lease_duration=self._lease_duration,
-            missed_grace=self._missed_grace,
-            limit=remaining,
-        ) if remaining else ()
+        due = (
+            self._repository.claim_due_cycles(
+                now=now,
+                lease_owner=self._lease_owner,
+                lease_duration=self._lease_duration,
+                missed_grace=self._missed_grace,
+                limit=remaining,
+            )
+            if remaining
+            else ()
+        )
         claims = recovered + due
         processed: list[uuid.UUID] = []
         failures: list[tuple[uuid.UUID, str]] = []
@@ -617,6 +651,9 @@ def stage_checkpoint(result: StageResult) -> JsonObject:
     if isinstance(result, MarketFreezeResult):
         kind = CycleStage.MARKET_FREEZE.value
         metadata["freshest_observed_at"] = result.freshest_observed_at.isoformat()
+    elif isinstance(result, PreSettlementResult):
+        kind = CycleStage.PRE_SETTLEMENT.value
+        metadata["settled_positions"] = result.settled_positions
     elif isinstance(result, PromptResult):
         kind = CycleStage.PROMPT.value
         metadata["rendered_characters"] = result.rendered_characters
@@ -649,6 +686,8 @@ def restore_stage(stage: CycleStage, checkpoint: Mapping[str, object]) -> StageR
         if not isinstance(observed, str):
             raise ValueError("market checkpoint lacks freshness")
         return MarketFreezeResult(payload, artifacts, datetime.fromisoformat(observed))
+    if stage is CycleStage.PRE_SETTLEMENT:
+        return PreSettlementResult(payload, artifacts, int(metadata["settled_positions"]))
     if stage is CycleStage.PROMPT:
         return PromptResult(payload, artifacts, int(metadata["rendered_characters"]))
     if stage is CycleStage.HARNESS:

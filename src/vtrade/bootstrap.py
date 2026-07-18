@@ -129,7 +129,7 @@ class PostgresExperimentBootstrap:
             if int(str(row[2])) != initial_cash_micros:
                 raise BootstrapError("initial cash differs from the frozen experiment config")
             cursor.execute(
-                "SELECT id, model_config_id, initial_cash_micros FROM agents "
+                "SELECT id, model_config_id, initial_cash_micros, created_at FROM agents "
                 "WHERE run_id = %s AND name = %s FOR UPDATE",
                 (run_id, name),
             )
@@ -143,13 +143,26 @@ class PostgresExperimentBootstrap:
                     raise BootstrapError(
                         "existing agent differs from requested frozen registration"
                     )
-                return uuid.UUID(str(existing[0]))
+                agent_id = uuid.UUID(str(existing[0]))
+                self._ensure_initial_capital(
+                    cursor,
+                    agent_id=agent_id,
+                    initial_cash_micros=initial_cash_micros,
+                    occurred_at=_aware(cast(datetime, existing[3])),
+                )
+                return agent_id
             agent_id = uuid.uuid4()
             cursor.execute(
                 "INSERT INTO agents "
                 "(id, run_id, model_config_id, name, initial_cash_micros, paused_at, created_at) "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s)",
                 (agent_id, run_id, model_id, name, initial_cash_micros, now, now),
+            )
+            self._ensure_initial_capital(
+                cursor,
+                agent_id=agent_id,
+                initial_cash_micros=initial_cash_micros,
+                occurred_at=now,
             )
             cursor.execute(
                 "INSERT INTO agent_runtime_schedules "
@@ -158,6 +171,51 @@ class PostgresExperimentBootstrap:
                 (agent_id, now, now, now),
             )
             return agent_id
+
+    @staticmethod
+    def _ensure_initial_capital(
+        cursor: _Cursor,
+        *,
+        agent_id: uuid.UUID,
+        initial_cash_micros: int,
+        occurred_at: datetime,
+    ) -> None:
+        """Create or verify the balanced owner-equity event for ledger-only replay."""
+        key = f"initial-capital:{agent_id}"
+        cursor.execute(
+            "SELECT le.agent_id, le.event_type, count(lp.id), "
+            "COALESCE(sum(lp.amount_micros), 0), "
+            "COALESCE(sum(lp.amount_micros) FILTER (WHERE lp.account = 'cash'), 0), "
+            "COALESCE(sum(lp.amount_micros) FILTER (WHERE lp.account = 'owner_equity'), 0) "
+            "FROM ledger_entries le JOIN ledger_postings lp ON lp.ledger_entry_id = le.id "
+            "WHERE le.idempotency_key = %s GROUP BY le.id, le.agent_id, le.event_type",
+            (key,),
+        )
+        existing = cursor.fetchone()
+        if existing is not None:
+            matches = (
+                uuid.UUID(str(existing[0])) == agent_id
+                and str(existing[1]) == "initial_capital"
+                and int(str(existing[2])) == 2
+                and int(str(existing[3])) == 0
+                and int(str(existing[4])) == initial_cash_micros
+                and int(str(existing[5])) == -initial_cash_micros
+            )
+            if not matches:
+                raise BootstrapError("existing initial-capital ledger event differs")
+            return
+        ledger_id = uuid.uuid5(uuid.NAMESPACE_URL, f"vtrade:ledger:{key}")
+        cursor.execute(
+            "INSERT INTO ledger_entries "
+            "(id, agent_id, event_type, source_table, source_id, idempotency_key, occurred_at) "
+            "VALUES (%s, %s, 'initial_capital', 'agents', %s, %s, %s)",
+            (ledger_id, agent_id, agent_id, key, occurred_at),
+        )
+        cursor.execute(
+            "INSERT INTO ledger_postings (ledger_entry_id, account, amount_micros) "
+            "VALUES (%s, 'cash', %s), (%s, 'owner_equity', %s)",
+            (ledger_id, initial_cash_micros, ledger_id, -initial_cash_micros),
+        )
 
     def start_agent(
         self, *, experiment_version: str, run_label: str, name: str, starts_at: datetime

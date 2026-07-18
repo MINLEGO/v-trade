@@ -16,6 +16,7 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 EXA_SEARCH_URL = "https://api.exa.ai/search"
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 EXA_MAX_SEARCH_COST_MICROS = 20_000
+EXA_MAX_CREDITS_PER_SEARCH = Decimal(10)
 TAVILY_MAX_SEARCH_COST_MICROS = 8_000
 
 WEB_SEARCH_TOOL_SCHEMA: JsonObject = {
@@ -108,6 +109,7 @@ class ProviderTelemetry:
     latency_ms: int
     artifact_uri: str
     raw_sha256: str
+    artifact_byte_length: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +128,7 @@ class SearchResponse:
 class OpenRouterRoute:
     model: str
     quantizations: tuple[str, ...]
+    reasoning_effort: str
     allow_provider_fallbacks: bool = True
 
     @classmethod
@@ -155,7 +158,11 @@ class OpenRouterRoute:
             raise ProviderConfigurationError("same-model provider fallback must be enabled")
         if config.get("cross_model_fallback") is not False:
             raise ProviderConfigurationError("cross-model fallback is forbidden")
-        return cls(slug, expected)
+        if config.get("reasoning_effort") != "max":
+            raise ProviderConfigurationError("baseline reasoning effort must be owner-fixed max")
+        if config.get("reasoning_effort_policy") != "owner_fixed":
+            raise ProviderConfigurationError("baseline reasoning effort policy must be owner-fixed")
+        return cls(slug, expected, "max")
 
 
 class OpenRouterModelGateway:
@@ -213,6 +220,7 @@ class OpenRouterModelGateway:
             "messages": list(messages),
             "tools": list(tools),
             "max_completion_tokens": maximum_output_tokens,
+            "reasoning": {"effort": route.reasoning_effort},
             "stream": False,
             "provider": {
                 "quantizations": list(route.quantizations),
@@ -248,14 +256,13 @@ class OpenRouterModelGateway:
             reasoning_tokens=_nested_nonnegative_int(
                 usage, "completion_tokens_details", "reasoning_tokens"
             ),
-            cached_tokens=_nested_nonnegative_int(
-                usage, "prompt_tokens_details", "cached_tokens"
-            ),
+            cached_tokens=_nested_nonnegative_int(usage, "prompt_tokens_details", "cached_tokens"),
             billed_cost_micros=billed,
             nominal_cost_micros=nominal,
             latency_ms=max(latency, 0),
             artifact_uri=artifact.uri,
             raw_sha256=artifact.sha256,
+            artifact_byte_length=artifact.byte_length,
         )
         self._budget.reconcile(
             reservation,
@@ -316,6 +323,7 @@ class RecordedModelGateway:
                 latency_ms=0,
                 artifact_uri=artifact.uri,
                 raw_sha256=artifact.sha256,
+                artifact_byte_length=artifact.byte_length,
             ),
         )
 
@@ -354,7 +362,10 @@ class ExaResearchProvider:
 
     def _request(self, payload: JsonObject, estimate: int) -> SearchResponse:
         reservation = self._budget.reserve(
-            "exa", estimate, request_count=1, credit_count=Decimal(1)
+            "exa",
+            estimate,
+            request_count=1,
+            credit_count=EXA_MAX_CREDITS_PER_SEARCH,
         )
         started = _clock_ms(self._clock)
         response = self._client.post(EXA_SEARCH_URL, headers=self._headers, json=payload)
@@ -381,6 +392,7 @@ class ExaResearchProvider:
             latency_ms=max(latency, 0),
             artifact_uri=artifact.uri,
             raw_sha256=artifact.sha256,
+            artifact_byte_length=artifact.byte_length,
         )
         self._budget.reconcile(
             reservation,
@@ -390,9 +402,7 @@ class ExaResearchProvider:
             credit_count=credits,
         )
         if billed > 0:
-            raise BudgetExceeded(
-                "Exa reported a billed cost on the free-plan route; Exa is halted"
-            )
+            raise BudgetExceeded("Exa reported a billed cost on the free-plan route; Exa is halted")
         return SearchResponse(output, telemetry)
 
 
@@ -462,6 +472,7 @@ class TavilyResearchProvider:
             latency_ms=max(latency, 0),
             artifact_uri=artifact.uri,
             raw_sha256=artifact.sha256,
+            artifact_byte_length=artifact.byte_length,
         )
         self._budget.reconcile(
             reservation,
@@ -480,9 +491,7 @@ _BEARER = re.compile(r"Bearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE)
 def redact_secrets(value: Any) -> Any:
     if isinstance(value, dict):
         return {
-            str(key): (
-                "[REDACTED]" if _SECRET_KEYS.search(str(key)) else redact_secrets(item)
-            )
+            str(key): ("[REDACTED]" if _SECRET_KEYS.search(str(key)) else redact_secrets(item))
             for key, item in value.items()
         }
     if isinstance(value, list):
@@ -659,9 +668,9 @@ def _request_upper_bound_micros(
     prompt = Decimal(str(prices["prompt"])) * maximum_prompt_tokens / 1_000_000
     completion = Decimal(str(prices["completion"])) * maximum_output_tokens / 1_000_000
     request = Decimal(str(prices["request"]))
-    return int(((prompt + completion + request) * 1_000_000).to_integral_value(
-        rounding=ROUND_HALF_UP
-    ))
+    return int(
+        ((prompt + completion + request) * 1_000_000).to_integral_value(rounding=ROUND_HALF_UP)
+    )
 
 
 def _rough_tokens(values: Sequence[JsonObject]) -> int:

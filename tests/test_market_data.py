@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 import uuid
 from collections.abc import Sequence
@@ -73,31 +74,59 @@ class _Venue:
     def __init__(self, page: MarketDelta) -> None:
         self.page = page
         self.requested_tokens: tuple[str, ...] = ()
+        self.book_batches: list[tuple[str, ...]] = []
+        self.fee_batches: list[tuple[str, ...]] = []
+        self.resolution_batches: list[tuple[str, ...]] = []
 
     def sync_all_markets(self):
         return (self.page,)
 
     def get_order_book(self, tokens):
         self.requested_tokens = tuple(tokens)
+        self.book_batches.append(tuple(tokens))
         return ()
 
-    def get_fee_rates(self, _tokens):
+    def get_fee_rates(self, tokens):
+        self.fee_batches.append(tuple(tokens))
         return ()
 
-    def sync_resolutions(self, _markets):
+    def sync_resolutions(self, markets):
+        self.resolution_batches.append(tuple(markets))
         return ()
 
 
 class _Repository:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        held_tokens: tuple[str, ...] = (),
+        held_markets: tuple[str, ...] = (),
+    ) -> None:
         self.persisted = False
+        self.held_tokens = held_tokens
+        self.held_markets = held_markets
+        self.persisted_market_ids: dict[str, uuid.UUID] = {}
 
-    def historical_universe(self, _agent_id):
+    def held_universe(self, _agent_id):
+        return self.held_tokens, self.held_markets
+
+    def historical_universe(self, _agent_id, *, maximum_outcomes=20):
+        del maximum_outcomes
         return (), ()
 
     def persist_freeze(self, pages, books, resolutions, fee_rates=()):
         self.persisted = bool(pages) and not books and not resolutions and not fee_rates
-        return FrozenPersistence((uuid.uuid4(),), (), ())
+        market_ids = tuple(
+            uuid.uuid5(uuid.NAMESPACE_URL, f"test-market-snapshot:{market.id}")
+            for page in pages
+            for market in page.markets
+        )
+        self.persisted_market_ids = {
+            market.id: snapshot_id
+            for page in pages
+            for market, snapshot_id in zip(page.markets, market_ids, strict=False)
+        }
+        return FrozenPersistence(market_ids, (), ())
 
 
 class _Cursor:
@@ -166,6 +195,28 @@ class MarketFreezeTests(unittest.TestCase):
         self.assertEqual(venue.requested_tokens[:2], ("t-11-YES", "t-11-NO"))
         self.assertTrue(repository.persisted)
         self.assertEqual(result.freshest_observed_at, NOW)
+        selected_ids = set(result.payload["market_snapshot_ids"])
+        self.assertEqual(len(selected_ids), 10)
+        self.assertNotIn(str(repository.persisted_market_ids[markets[0].id]), selected_ids)
+        self.assertNotIn(str(repository.persisted_market_ids[markets[1].id]), selected_ids)
+
+    def test_all_held_outcomes_are_frozen_in_batches_beyond_shortlist_limit(self) -> None:
+        page = MarketDelta("markets", None, None, NOW, (), (), ARTIFACT)
+        held_tokens = tuple(f"held-{index:02d}" for index in range(45))
+        held_markets = tuple(f"market-{index:02d}" for index in range(45))
+        venue = _Venue(page)
+        repository = _Repository(
+            held_tokens=held_tokens,
+            held_markets=held_markets,
+        )
+        claim = CycleClaim(
+            uuid.uuid4(), uuid.uuid4(), NOW, None, "worker", NOW + timedelta(minutes=10)
+        )
+        result = PolymarketFreezeService(venue, repository, clock=lambda: NOW).freeze(claim)
+        self.assertEqual([len(batch) for batch in venue.book_batches], [20, 20, 5])
+        self.assertEqual([len(batch) for batch in venue.fee_batches], [20, 20, 5])
+        self.assertEqual(len(venue.resolution_batches[0]), 45)
+        self.assertEqual(result.payload["order_book_token_ids"], list(held_tokens))
 
     def test_finalized_cutoff_forbids_any_venue_fetch(self) -> None:
         page = MarketDelta("markets", None, None, NOW, (), (), ARTIFACT)
@@ -202,40 +253,51 @@ class MarketFreezeTests(unittest.TestCase):
         )
         repository.persist_freeze((page,), (), ())
         params = next(
-            values
-            for query, values in cursor.queries
-            if query.startswith("INSERT INTO events")
+            values for query, values in cursor.queries if query.startswith("INSERT INTO events")
         )
         self.assertIsNone(params[5])
         self.assertNotEqual(params[5], event.opens_at)
 
+        snapshot_params = next(
+            values
+            for query, values in cursor.queries
+            if query.startswith("INSERT INTO market_snapshots")
+        )
+        frozen = json.loads(str(snapshot_params[6]))
+        self.assertEqual(frozen["question"], market.question)
+        self.assertEqual(frozen["status"], "open")
+        self.assertTrue(frozen["tradeable"])
+        self.assertEqual(frozen["metadata"], market.venue_metadata)
+        self.assertEqual(frozen["outcomes"][0]["venue_token_id"], "t-1-YES")
+        self.assertEqual(frozen["outcomes"][0]["tick_size"], "0.01")
+
     def test_fee_policy_uses_only_fresh_frozen_persisted_basis_points(self) -> None:
+        snapshot_id = uuid.uuid4()
         cursor = _Cursor(((30, NOW - timedelta(seconds=10), None),))
         repository = PostgresMarketDataRepository(
             "postgresql://unused", connect=lambda _url: _Connection(cursor)
         )
         policy = repository.frozen_fee_policy(
-            "token", cutoff=NOW, maximum_age=timedelta(minutes=5)
+            "token", cutoff=NOW, fee_rate_snapshot_ids=(snapshot_id,)
         )
         self.assertEqual(policy.rate, Decimal("0.003"))
+        query, params = cursor.queries[-1]
+        self.assertIn("id = ANY", query)
+        self.assertEqual(params, ("token", [snapshot_id]))
 
-    def test_missing_or_stale_frozen_fee_rate_fails_closed(self) -> None:
+    def test_missing_foreign_or_after_cutoff_fee_rate_fails_closed(self) -> None:
         missing = PostgresMarketDataRepository(
             "postgresql://unused", connect=lambda _url: _Connection(_Cursor())
         )
         with self.assertRaises(FrozenFeePolicyUnavailable):
-            missing.frozen_fee_policy(
-                "token", cutoff=NOW, maximum_age=timedelta(minutes=5)
-            )
-        stale = PostgresMarketDataRepository(
+            missing.frozen_fee_policy("token", cutoff=NOW, fee_rate_snapshot_ids=(uuid.uuid4(),))
+        after_cutoff = PostgresMarketDataRepository(
             "postgresql://unused",
-            connect=lambda _url: _Connection(
-                _Cursor(((30, NOW - timedelta(minutes=6), None),))
-            ),
+            connect=lambda _url: _Connection(_Cursor(((30, NOW + timedelta(seconds=1), None),))),
         )
-        with self.assertRaisesRegex(FrozenFeePolicyUnavailable, "stale"):
-            stale.frozen_fee_policy(
-                "token", cutoff=NOW, maximum_age=timedelta(minutes=5)
+        with self.assertRaisesRegex(FrozenFeePolicyUnavailable, "after cycle cutoff"):
+            after_cutoff.frozen_fee_policy(
+                "token", cutoff=NOW, fee_rate_snapshot_ids=(uuid.uuid4(),)
             )
 
 

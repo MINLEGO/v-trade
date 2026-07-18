@@ -562,8 +562,9 @@ def _register_artifact(
         "INSERT INTO artifact_inventory "
         "(id, agent_cycle_id, stage, uri, sha256, byte_length, retain_until, status, created_at) "
         "VALUES (%s, %s, %s, %s, %s, %s, %s, 'active', %s) "
-        "ON CONFLICT (uri) DO UPDATE SET retain_until = GREATEST(" 
-        "artifact_inventory.retain_until, EXCLUDED.retain_until)",
+        "ON CONFLICT (uri) DO UPDATE SET retain_until = GREATEST("
+        "artifact_inventory.retain_until, EXCLUDED.retain_until), status = 'active', "
+        "lease_owner = NULL, lease_expires_at = NULL, deletion_error = NULL, deleted_at = NULL",
         (
             uuid.uuid4(),
             claim.cycle_id,

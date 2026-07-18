@@ -11,6 +11,7 @@ from pathlib import Path
 from vtrade.harness import BeliefRecord, HarnessResult, PlanRecord, PlanType, ToolCallRecord
 from vtrade.harness_repository import PostgresHarnessRepository
 from vtrade.providers import ProviderTelemetry
+from vtrade.runtime import ArtifactRegistration
 
 NOW = datetime(2026, 7, 16, 15, 0, tzinfo=UTC)
 AGENT_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -31,9 +32,7 @@ class RecordingCursor:
     def __exit__(self, *_args: object) -> None:
         return None
 
-    def execute(
-        self, query: str, params: Sequence[object] = ()
-    ) -> RecordingCursor:
+    def execute(self, query: str, params: Sequence[object] = ()) -> RecordingCursor:
         values = tuple(params)
         self.queries.append((query, values))
         self.selected = None
@@ -116,6 +115,9 @@ class PostgresHarnessRepositoryTests(unittest.TestCase):
 
     def test_run_replay_is_idempotent_and_retains_raw_artifacts(self) -> None:
         retain_until = NOW + timedelta(days=183)
+        artifact = ArtifactRegistration(
+            "supabase://private/provider.json.gz", "c" * 64, 73, retain_until
+        )
         first = self.repository.persist_run(
             agent_cycle_id=CYCLE_ID,
             result=harness_result(),
@@ -123,6 +125,7 @@ class PostgresHarnessRepositoryTests(unittest.TestCase):
             transcript_sha256="b" * 64,
             completed_at=NOW,
             retain_until=retain_until,
+            artifacts=(artifact,),
         )
         second = self.repository.persist_run(
             agent_cycle_id=CYCLE_ID,
@@ -147,6 +150,36 @@ class PostgresHarnessRepositoryTests(unittest.TestCase):
         self.assertEqual(len(usages), 1)
         self.assertEqual(inserts[0][1][10], retain_until)
         self.assertEqual(usages[0][1][-2], retain_until)
+        inventory = next(
+            params
+            for query, params in self.connection.cursor_instance.queries
+            if query.startswith("INSERT INTO artifact_inventory")
+        )
+        self.assertEqual(inventory[4], 73)
+
+    def test_total_model_turns_excludes_research_telemetry(self) -> None:
+        result = harness_result()
+        search = replace(
+            result.telemetry[0],
+            provider="exa",
+            usage_kind="web_search",
+            prompt_tokens=0,
+            completion_tokens=0,
+        )
+        self.repository.persist_run(
+            agent_cycle_id=CYCLE_ID,
+            result=replace(result, telemetry=(*result.telemetry, search)),
+            transcript_uri="supabase://private/transcript.json.gz",
+            transcript_sha256="b" * 64,
+            completed_at=NOW,
+            retain_until=NOW + timedelta(days=183),
+        )
+        insert = next(
+            params
+            for query, params in self.connection.cursor_instance.queries
+            if query.startswith("INSERT INTO harness_runs")
+        )
+        self.assertEqual(insert[3], 1)
 
     def test_run_idempotency_conflict_and_invalid_retention_fail_closed(self) -> None:
         result = harness_result()
@@ -222,9 +255,7 @@ class PostgresHarnessRepositoryTests(unittest.TestCase):
             self.repository.read_plans(actor_id=AGENT_ID, target_agent_id=other)
 
     def test_phase_four_migration_contains_budget_replay_and_retention_tables(self) -> None:
-        migration = Path("migrations/0004_model_research_harness.sql").read_text(
-            encoding="utf-8"
-        )
+        migration = Path("migrations/0004_model_research_harness.sql").read_text(encoding="utf-8")
         for required in (
             "monthly_provider_budgets",
             "provider_budget_reservations",

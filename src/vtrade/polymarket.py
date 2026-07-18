@@ -661,8 +661,14 @@ class PolymarketVenue:
         active: bool, closed: bool, outcomes: tuple[Outcome, ...], uma_status: Any
     ) -> MarketStatus:
         final = [outcome for outcome in outcomes if outcome.indicative_price == 1]
-        if closed and uma_status == "resolved" and len(final) == 1 and all(
+        singular_resolution = len(final) == 1 and all(
             outcome.indicative_price in (Decimal(0), Decimal(1)) for outcome in outcomes
+        )
+        split_resolution = len(outcomes) == 2 and all(
+            outcome.indicative_price == Decimal("0.5") for outcome in outcomes
+        )
+        if closed and uma_status == "resolved" and (
+            singular_resolution or split_resolution
         ):
             return MarketStatus.RESOLVED
         if closed:
@@ -681,7 +687,10 @@ class PolymarketVenue:
         if market.status is not MarketStatus.RESOLVED:
             return None
         winners = [outcome for outcome in market.outcomes if outcome.indicative_price == 1]
-        if len(winners) != 1:
+        split_resolution = len(market.outcomes) == 2 and all(
+            outcome.indicative_price == Decimal("0.5") for outcome in market.outcomes
+        )
+        if len(winners) != 1 and not split_resolution:
             return None
         source_created_at = (
             _parse_datetime(payload.get("closedTime"), "closedTime")
@@ -699,8 +708,8 @@ class PolymarketVenue:
         eligible_after = market.closes_at or source_created_at
         return Resolution(
             market_id=market.id,
-            winning_outcome_id=winners[0].id,
-            result=winners[0].name,
+            winning_outcome_id=None if split_resolution else winners[0].id,
+            result="50/50" if split_resolution else winners[0].name,
             source_created_at=source_created_at,
             observed_at=effective_cutoff,
             eligible_after=eligible_after,

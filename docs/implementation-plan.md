@@ -429,7 +429,7 @@ Frozen owner decisions:
 Additional frozen owner decisions:
 
 1. **Paper fill rule:** `best ask/bid, no counterparty requirement, reject absent quote` is the initial inferred PredictionArena approximation.
-2. **Model routing:** DeepSeek permits only `fp8`; MiMo permits `fp8` and `unknown`. Reasoning effort uses the provider default. Every compatible provider is allowed and sorted by price; provider fallback is enabled, but cross-model fallback is forbidden.
+2. **Model routing:** DeepSeek permits only `fp8`; MiMo permits `fp8` and `unknown`. Both explicitly request the owner-fixed maximum reasoning effort. Every compatible provider is allowed and sorted by price; provider fallback is enabled, but cross-model fallback is forbidden.
 3. **Prompt/transcript visibility:** prompts, transcripts and reasoning are operator-only, retained for six months, with secrets, tokens and authorization headers always redacted.
 4. **Experiment comparison:** agents are isolated and have independent start dates and hourly schedules. Adding/removing one has no effect on the others.
 

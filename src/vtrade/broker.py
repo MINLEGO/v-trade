@@ -657,7 +657,7 @@ class PredictionArenaPaperBroker:
 class SettlementObservation:
     id: str
     market_id: str
-    winning_outcome_id: str
+    winning_outcome_id: str | None
     source_created_at: datetime
     observed_at: datetime
     eligible_after: datetime
@@ -717,11 +717,12 @@ class SettlementEngine:
             if previous_resolution != resolution or previous_position != position:
                 raise ValueError("settlement idempotency key reused with different inputs")
             return result
-        payout = (
-            _money_micros(position.shares)
-            if position.outcome_id == resolution.winning_outcome_id
-            else MicroDollars(0)
-        )
+        if resolution.winning_outcome_id is None:
+            payout = _money_micros(position.shares * Decimal("0.5"))
+        elif position.outcome_id == resolution.winning_outcome_id:
+            payout = _money_micros(position.shares)
+        else:
+            payout = MicroDollars(0)
         realized = MicroDollars(int(payout) - int(position.cost_basis_micros))
         positions = tuple(
             item for item in portfolio.positions if item.outcome_id != position.outcome_id

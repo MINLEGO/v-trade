@@ -5,7 +5,7 @@ import uuid
 from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Protocol, cast
 
@@ -76,6 +76,23 @@ class PostgresMarketDataRepository:
             tuple(dict.fromkeys(str(row[1]) for row in rows)),
         )
 
+    def held_universe(self, agent_id: uuid.UUID) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """Return every currently held outcome; valuation may never truncate this set."""
+        with self._connect(self._database_url) as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT o.venue_token_id, m.venue_market_id FROM positions p "
+                "JOIN outcomes o ON o.id = p.outcome_id "
+                "JOIN markets m ON m.id = o.market_id "
+                "WHERE p.agent_id = %s AND p.shares > 0 "
+                "ORDER BY o.venue_token_id",
+                (agent_id,),
+            )
+            rows = cursor.fetchall()
+        return (
+            tuple(str(row[0]) for row in rows),
+            tuple(dict.fromkeys(str(row[1]) for row in rows)),
+        )
+
     def persist_freeze(
         self,
         pages: Sequence[MarketDelta],
@@ -135,7 +152,7 @@ class PostgresMarketDataRepository:
                             market.status.value,
                             int(market.volume_micros),
                             int(market.liquidity_micros),
-                            json.dumps({"tradeable": market.tradeable}),
+                            json.dumps(_market_snapshot_payload(market), default=str),
                             page.artifact.uri,
                             page.artifact.sha256,
                         ),
@@ -186,7 +203,11 @@ class PostgresMarketDataRepository:
                     (
                         resolution_id,
                         _id("market", resolution.market_id),
-                        _id("outcome", resolution.winning_outcome_id),
+                        (
+                            _id("outcome", resolution.winning_outcome_id)
+                            if resolution.winning_outcome_id is not None
+                            else None
+                        ),
                         resolution.result,
                         resolution.source_created_at,
                         resolution.observed_at,
@@ -297,8 +318,11 @@ class PostgresMarketDataRepository:
             "(%s, %s, 'polymarket', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
             "%s::jsonb, %s, %s) ON CONFLICT (venue, venue_market_id) DO UPDATE SET "
             "question = EXCLUDED.question, resolution_rules = EXCLUDED.resolution_rules, "
-            "status = EXCLUDED.status, observed_at = EXCLUDED.observed_at, "
-            "metadata = EXCLUDED.metadata, tradeable = EXCLUDED.tradeable",
+            "slug = EXCLUDED.slug, status = EXCLUDED.status, category = EXCLUDED.category, "
+            "opens_at = EXCLUDED.opens_at, closes_at = EXCLUDED.closes_at, "
+            "source_updated_at = EXCLUDED.source_updated_at, "
+            "observed_at = EXCLUDED.observed_at, metadata = EXCLUDED.metadata, "
+            "tradeable = EXCLUDED.tradeable, resolution_source = EXCLUDED.resolution_source",
             (
                 _id("market", market.id),
                 _id("event", market.event_id),
@@ -325,8 +349,10 @@ class PostgresMarketDataRepository:
                 "minimum_order_size, indicative_price, tradeable, metadata) VALUES "
                 "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb) "
                 "ON CONFLICT (venue_token_id) DO UPDATE SET name = EXCLUDED.name, "
-                "indicative_price = EXCLUDED.indicative_price, "
-                "tradeable = EXCLUDED.tradeable, metadata = EXCLUDED.metadata",
+                "outcome_index = EXCLUDED.outcome_index, tick_size = EXCLUDED.tick_size, "
+                "minimum_order_size = EXCLUDED.minimum_order_size, "
+                "indicative_price = EXCLUDED.indicative_price, tradeable = EXCLUDED.tradeable, "
+                "metadata = EXCLUDED.metadata",
                 (
                     _id("outcome", outcome.id),
                     _id("market", market.id),
@@ -351,10 +377,16 @@ class PolymarketFreezeService:
         repository: PostgresMarketDataRepository,
         *,
         clock: Callable[[], datetime],
+        maximum_additional_outcomes: int = 20,
+        venue_batch_size: int = 20,
     ) -> None:
+        if maximum_additional_outcomes <= 0 or not 1 <= venue_batch_size <= 20:
+            raise ValueError("freeze shortlist and venue batch bounds are invalid")
         self._venue = venue
         self._repository = repository
         self._clock = clock
+        self._maximum_additional_outcomes = maximum_additional_outcomes
+        self._venue_batch_size = venue_batch_size
 
     def freeze(self, claim: CycleClaim) -> MarketFreezeResult:
         if claim.data_cutoff is not None:
@@ -362,10 +394,17 @@ class PolymarketFreezeService:
         pages = self._venue.sync_all_markets()
         if not pages or pages[-1].next_cursor is not None:
             raise RuntimeError("bounded Polymarket market synchronization is incomplete")
+        held_tokens, held_markets = self._repository.held_universe(claim.agent_id)
         historical_tokens, historical_markets = self._repository.historical_universe(
-            claim.agent_id
+            claim.agent_id,
+            maximum_outcomes=self._maximum_additional_outcomes,
         )
-        tokens = list(historical_tokens)
+        tokens = list(dict.fromkeys(held_tokens))
+        additional = 0
+        for token in historical_tokens:
+            if token not in tokens and additional < self._maximum_additional_outcomes:
+                tokens.append(token)
+                additional += 1
         candidates = sorted(
             (market for page in pages for market in page.markets if market.tradeable),
             key=lambda market: (
@@ -377,16 +416,40 @@ class PolymarketFreezeService:
         )
         for market in candidates:
             for outcome in market.outcomes:
-                if outcome.venue_token_id not in tokens and len(tokens) < 20:
+                if (
+                    outcome.venue_token_id not in tokens
+                    and additional < self._maximum_additional_outcomes
+                ):
                     tokens.append(outcome.venue_token_id)
-        books = self._venue.get_order_book(tokens) if tokens else ()
-        fee_rates = self._venue.get_fee_rates(tokens) if tokens else ()
-        resolutions = (
-            self._venue.sync_resolutions(historical_markets[:100])
-            if historical_markets
-            else ()
+                    additional += 1
+        books = tuple(
+            item
+            for batch in _batches(tokens, self._venue_batch_size)
+            for item in self._venue.get_order_book(batch)
+        )
+        fee_rates = tuple(
+            item
+            for batch in _batches(tokens, self._venue_batch_size)
+            for item in self._venue.get_fee_rates(batch)
+        )
+        resolution_markets = tuple(dict.fromkeys((*held_markets, *historical_markets)))
+        resolutions = tuple(
+            item
+            for batch in _batches(resolution_markets, 100)
+            for item in self._venue.sync_resolutions(batch)
         )
         persisted = self._repository.persist_freeze(pages, books, resolutions, fee_rates)
+        selected_tokens = set(tokens)
+        persisted_markets = tuple(market for page in pages for market in page.markets)
+        if len(persisted.market_snapshot_ids) != len(persisted_markets):
+            raise RuntimeError("persisted market snapshot membership is incomplete")
+        selected_market_snapshot_ids = tuple(
+            snapshot_id
+            for snapshot_id, market in zip(
+                persisted.market_snapshot_ids, persisted_markets, strict=True
+            )
+            if any(outcome.venue_token_id in selected_tokens for outcome in market.outcomes)
+        )
         completed = self._aware(self._clock())
         artifacts = tuple(
             ArtifactRegistration(
@@ -412,14 +475,12 @@ class PolymarketFreezeService:
             raise ValueError("frozen market data is newer than freeze completion")
         return MarketFreezeResult(
             {
-                "market_snapshot_ids": [str(value) for value in persisted.market_snapshot_ids],
+                "market_snapshot_ids": [str(value) for value in selected_market_snapshot_ids],
                 "order_book_snapshot_ids": [
                     str(value) for value in persisted.order_book_snapshot_ids
                 ],
                 "resolution_ids": [str(value) for value in persisted.resolution_ids],
-                "fee_rate_snapshot_ids": [
-                    str(value) for value in persisted.fee_rate_snapshot_ids
-                ],
+                "fee_rate_snapshot_ids": [str(value) for value in persisted.fee_rate_snapshot_ids],
                 "order_book_token_ids": tokens,
             },
             artifacts,
@@ -435,6 +496,50 @@ class PolymarketFreezeService:
 
 def _id(kind: str, *parts: str) -> uuid.UUID:
     return uuid.uuid5(uuid.NAMESPACE_URL, ":".join(("vtrade", kind, *parts)))
+
+
+def _batches(values: Sequence[str], size: int) -> tuple[tuple[str, ...], ...]:
+    if size <= 0:
+        raise ValueError("batch size must be positive")
+    return tuple(tuple(values[index : index + size]) for index in range(0, len(values), size))
+
+
+def _market_snapshot_payload(market: Market) -> dict[str, object]:
+    """Freeze every mutable normalized field consumed by tools or paper execution."""
+    return {
+        "venue_market_id": market.venue_id,
+        "slug": market.slug or market.venue_id,
+        "event_id": str(_id("event", market.event_id)),
+        "question": market.question,
+        "resolution_rules": market.resolution_rules,
+        "opens_at": market.opens_at.isoformat() if market.opens_at else None,
+        "closes_at": market.closes_at.isoformat() if market.closes_at else None,
+        "category": market.category,
+        "status": market.status.value,
+        "tradeable": market.tradeable,
+        "source_updated_at": (
+            market.source_updated_at.isoformat() if market.source_updated_at else None
+        ),
+        "observed_at": market.observed_at.isoformat() if market.observed_at else None,
+        "resolution_source": market.resolution_source,
+        "metadata": market.venue_metadata,
+        "outcomes": [
+            {
+                "id": outcome.id,
+                "venue_token_id": outcome.venue_token_id,
+                "name": outcome.name,
+                "outcome_index": outcome.outcome_index,
+                "tick_size": str(outcome.tick_size_micros / 1_000_000),
+                "minimum_order_size": str(outcome.minimum_order_micros / 1_000_000),
+                "indicative_price": (
+                    str(outcome.indicative_price) if outcome.indicative_price is not None else None
+                ),
+                "tradeable": outcome.tradeable,
+                "metadata": outcome.venue_metadata,
+            }
+            for outcome in market.outcomes
+        ],
+    }
 
 
 def _default_connect(database_url: str) -> AbstractContextManager[_Connection]:

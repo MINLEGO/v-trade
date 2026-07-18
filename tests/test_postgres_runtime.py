@@ -7,7 +7,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from vtrade.postgres_runtime import PostgresRuntimeRepository
-from vtrade.runtime import CycleClaim, CycleStage, MarketFreezeResult
+from vtrade.runtime import (
+    ArtifactRegistration,
+    CycleClaim,
+    CycleStage,
+    MarketFreezeResult,
+    StageResult,
+)
 
 NOW = datetime(2026, 7, 16, 10, 5, tzinfo=UTC)
 ANCHOR = datetime(2026, 7, 16, 7, 0, tzinfo=UTC)
@@ -156,6 +162,48 @@ class PostgresSchedulingTests(unittest.TestCase):
         self.assertLess(checkpoint, cutoff)
         cutoff_params = connection.cursor_instance.queries[cutoff][1]
         self.assertEqual(cutoff_params, (NOW, CYCLE_ID, "worker-1"))
+
+    def test_registering_an_existing_deleted_artifact_reactivates_it(self) -> None:
+        connection = SchedulingConnection()
+        repository = PostgresRuntimeRepository(
+            "postgresql://unused", connect=lambda _url: connection
+        )
+        claim = CycleClaim(
+            CYCLE_ID,
+            AGENT_ID,
+            NOW.replace(minute=0),
+            NOW,
+            "worker-1",
+            NOW + timedelta(minutes=70),
+        )
+        artifact = ArtifactRegistration(
+            "memory://transcript",
+            "b" * 64,
+            42,
+            datetime(2027, 2, 1, tzinfo=UTC),
+        )
+
+        repository.complete_stage(
+            claim,
+            CycleStage.PROMPT,
+            "c" * 64,
+            StageResult({}, (artifact,)),
+            now=NOW,
+        )
+
+        upsert = next(
+            query
+            for query, _params in connection.cursor_instance.queries
+            if query.startswith("INSERT INTO artifact_inventory")
+        )
+        for reactivation in (
+            "status = 'active'",
+            "lease_owner = NULL",
+            "lease_expires_at = NULL",
+            "deletion_error = NULL",
+            "deleted_at = NULL",
+        ):
+            self.assertIn(reactivation, upsert)
 
 
 if __name__ == "__main__":

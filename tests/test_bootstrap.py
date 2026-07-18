@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -102,7 +103,7 @@ def test_register_rejects_prompt_fingerprint_before_database(tmp_path: Path) -> 
 def test_agent_add_is_paused_and_start_remove_only_touch_selected_agent() -> None:
     run_id = "00000000-0000-0000-0000-000000000001"
     model_id = "00000000-0000-0000-0000-000000000002"
-    add_cursor = Cursor([(run_id, model_id, 10_000_000_000), None])
+    add_cursor = Cursor([(run_id, model_id, 10_000_000_000), None, None])
     service = PostgresExperimentBootstrap(
         "postgres://test",
         connect=connector(add_cursor),
@@ -118,6 +119,8 @@ def test_agent_add_is_paused_and_start_remove_only_touch_selected_agent() -> Non
     add_sql = "\n".join(query for query, _ in add_cursor.queries)
     assert agent_id
     assert "INSERT INTO agents" in add_sql
+    assert "INSERT INTO ledger_entries" in add_sql
+    assert "'owner_equity'" in add_sql
     assert "enabled, created_at" in add_sql
     assert "false" in add_sql
 
@@ -145,6 +148,32 @@ def test_agent_add_is_paused_and_start_remove_only_touch_selected_agent() -> Non
     assert "SET paused_at" in remove_sql
     assert "SET enabled = false" in remove_sql
     assert "DELETE" not in remove_sql
+
+
+def test_existing_agent_requires_the_exact_balanced_initial_capital_event() -> None:
+    run_id = "00000000-0000-0000-0000-000000000001"
+    model_id = "00000000-0000-0000-0000-000000000002"
+    agent_id = "00000000-0000-0000-0000-000000000003"
+    created_at = datetime(2026, 7, 16, tzinfo=UTC)
+    cursor = Cursor(
+        [
+            (run_id, model_id, 10_000_000_000),
+            (agent_id, model_id, 10_000_000_000, created_at),
+            (agent_id, "initial_capital", 2, 0, 10_000_000_000, -10_000_000_000),
+        ]
+    )
+    service = PostgresExperimentBootstrap("postgres://test", connect=connector(cursor))
+    result = service.add_agent(
+        experiment_version="predictionarena-polymarket-v1",
+        run_label="baseline",
+        model_label="DeepSeek V4 Flash",
+        name="deepseek-1",
+        initial_cash_micros=10_000_000_000,
+    )
+    sql = "\n".join(query for query, _ in cursor.queries)
+    assert result == uuid.UUID(agent_id)
+    assert "INSERT INTO ledger_entries" not in sql
+    assert "INSERT INTO agent_runtime_schedules" not in sql
 
 
 def test_cli_timestamp_requires_timezone() -> None:

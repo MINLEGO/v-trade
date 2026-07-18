@@ -15,9 +15,11 @@ from vtrade.runtime import (
     HarnessExecutionResult,
     HourlyRuntime,
     MarketFreezeResult,
+    PreSettlementResult,
     ProjectionInputs,
     PromptResult,
     RetentionCleaner,
+    RuntimeConfigurationError,
     RuntimeProjection,
     SettlementValuationResult,
     StageResult,
@@ -91,9 +93,7 @@ class MemoryRuntimeRepository:
         self.purge_calls += 1
         return 0
 
-    def complete_artifact_deletion(
-        self, artifact: ExpiredArtifact, **kwargs: object
-    ) -> None:
+    def complete_artifact_deletion(self, artifact: ExpiredArtifact, **kwargs: object) -> None:
         self.deletion_results.append((artifact.inventory_id, cast(str | None, kwargs["error"])))
 
 
@@ -110,6 +110,12 @@ class Ports:
     def render(self, _claim: CycleClaim, _frozen: dict[str, Any]) -> PromptResult:
         self.calls.append("prompt")
         return PromptResult({"messages": []}, (), 10_000)
+
+    def settle_before_prompt(
+        self, _claim: CycleClaim, _frozen: dict[str, Any]
+    ) -> PreSettlementResult:
+        self.calls.append("pre_settlement")
+        return PreSettlementResult({"settlement_ids": []}, (), 0)
 
     def run(
         self, _claim: CycleClaim, _frozen: dict[str, Any], _prompt: dict[str, Any]
@@ -136,18 +142,51 @@ class Ports:
 
 
 def claim() -> CycleClaim:
-    return CycleClaim(
-        uuid.uuid4(), uuid.uuid4(), NOW, NOW, "worker-1", NOW + timedelta(minutes=10)
-    )
+    return CycleClaim(uuid.uuid4(), uuid.uuid4(), NOW, NOW, "worker-1", NOW + timedelta(minutes=10))
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_runtime_rejects_a_lease_shorter_than_the_cycle_wall_clock(self) -> None:
+        repository = MemoryRuntimeRepository()
+        ports = Ports()
+        with self.assertRaisesRegex(ValueError, "3300-second"):
+            CycleOrchestrator(
+                repository=repository,
+                market_freezer=ports,
+                pre_settlement=ports,
+                prompt=ports,
+                harness=ports,
+                broker=ports,
+                settlement_valuation=ports,
+                clock=lambda: NOW,
+                lease_duration=timedelta(seconds=3_299),
+            )
+        orchestrator = CycleOrchestrator(
+            repository=repository,
+            market_freezer=ports,
+            pre_settlement=ports,
+            prompt=ports,
+            harness=ports,
+            broker=ports,
+            settlement_valuation=ports,
+            clock=lambda: NOW,
+        )
+        with self.assertRaisesRegex(RuntimeConfigurationError, "3300-second"):
+            HourlyRuntime(
+                repository=repository,
+                orchestrator=orchestrator,
+                lease_owner="worker-1",
+                clock=lambda: NOW,
+                lease_duration=timedelta(seconds=3_299),
+            )
+
     def test_ordered_boundaries_and_restart_do_not_duplicate_financial_event(self) -> None:
         repository = MemoryRuntimeRepository()
         ports = Ports(fail_after_broker_side_effect=True)
         orchestrator = CycleOrchestrator(
             repository=repository,
             market_freezer=ports,
+            pre_settlement=ports,
             prompt=ports,
             harness=ports,
             broker=ports,
@@ -164,6 +203,7 @@ class RuntimeTests(unittest.TestCase):
             ports.calls,
             [
                 "market_freeze",
+                "pre_settlement",
                 "prompt",
                 "harness",
                 "broker",
@@ -181,6 +221,9 @@ class RuntimeTests(unittest.TestCase):
                 (cycle.cycle_id, CycleStage.MARKET_FREEZE): MarketFreezeResult(
                     {"snapshot": "old"}, (), NOW - timedelta(minutes=20)
                 ),
+                (cycle.cycle_id, CycleStage.PRE_SETTLEMENT): PreSettlementResult(
+                    {"settlement_ids": []}, (), 0
+                ),
                 (cycle.cycle_id, CycleStage.PROMPT): PromptResult({"messages": []}, (), 9_012),
                 (cycle.cycle_id, CycleStage.HARNESS): HarnessExecutionResult({}, (), 13, 15),
                 (cycle.cycle_id, CycleStage.BROKER): BrokerExecutionResult({}, (), 0),
@@ -192,6 +235,7 @@ class RuntimeTests(unittest.TestCase):
         CycleOrchestrator(
             repository=repository,
             market_freezer=ports,
+            pre_settlement=ports,
             prompt=ports,
             harness=ports,
             broker=ports,
@@ -206,9 +250,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_six_calendar_month_retention_handles_month_ends(self) -> None:
         created = datetime(2026, 8, 31, 12, tzinfo=UTC)
-        self.assertEqual(
-            six_month_retain_until(created), datetime(2027, 2, 28, 12, tzinfo=UTC)
-        )
+        self.assertEqual(six_month_retain_until(created), datetime(2027, 2, 28, 12, tzinfo=UTC))
 
     def test_retention_purges_database_payloads_before_deleting_storage(self) -> None:
         repository = MemoryRuntimeRepository()
@@ -242,6 +284,7 @@ class RuntimeTests(unittest.TestCase):
         orchestrator = CycleOrchestrator(
             repository=repository,
             market_freezer=ports,
+            pre_settlement=ports,
             prompt=ports,
             harness=ports,
             broker=ports,

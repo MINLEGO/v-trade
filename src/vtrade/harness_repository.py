@@ -10,7 +10,13 @@ from decimal import Decimal
 from typing import Protocol, cast
 
 from vtrade.harness import BeliefRecord, HarnessResult, PlanRecord
-from vtrade.providers import BudgetExceeded, BudgetReservation, ProviderTelemetry
+from vtrade.providers import (
+    EXA_MAX_CREDITS_PER_SEARCH,
+    BudgetExceeded,
+    BudgetReservation,
+    ProviderTelemetry,
+)
+from vtrade.runtime import ArtifactRegistration
 
 
 class _Cursor(Protocol):
@@ -204,9 +210,9 @@ class PostgresBudgetGuard:
     ) -> BudgetReservation:
         if (
             reservation.reserved_request_count != 1
-            or reservation.reserved_credit_count != Decimal(1)
+            or reservation.reserved_credit_count != EXA_MAX_CREDITS_PER_SEARCH
         ):
-            raise ValueError("each Exa search must reserve exactly one request and one credit")
+            raise ValueError("each Exa search must reserve one request and ten worst-case credits")
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
             _lock_exa_month(cursor, month)
             _ensure_exa_quota_row(cursor, month, now)
@@ -231,21 +237,20 @@ class PostgresBudgetGuard:
             pending_requests = int(str(pending_row[0])) if pending_row else 0
             pending_credits = Decimal(str(pending_row[1])) if pending_row else Decimal(0)
             projected_requests = int(str(row[2])) + pending_requests + 1
-            projected_credits = Decimal(str(row[3])) + pending_credits + Decimal(1)
-            if (
-                bool(row[4])
-                or projected_requests > 18_000
-                or projected_credits > Decimal(18_000)
-            ):
+            projected_credits = (
+                Decimal(str(row[3])) + pending_credits + reservation.reserved_credit_count
+            )
+            if bool(row[4]) or projected_requests > 18_000 or projected_credits > Decimal(18_000):
                 raise BudgetExceeded("pre-request Exa monthly request/credit cap reached")
             cursor.execute(
                 "INSERT INTO exa_quota_reservations "
                 "(id, month_start, reserved_request_count, reserved_credit_count, "
                 "nominal_cost_micros, status, reserved_at) "
-                "VALUES (%s, %s, 1, 1, %s, 'reserved', %s)",
+                "VALUES (%s, %s, 1, %s, %s, 'reserved', %s)",
                 (
                     uuid.UUID(reservation.id),
                     month,
+                    EXA_MAX_CREDITS_PER_SEARCH,
                     reservation.estimated_cost_micros,
                     now,
                 ),
@@ -266,6 +271,7 @@ class PostgresBudgetGuard:
         if request_count != 1:
             raise ValueError("an Exa search must reconcile exactly one request")
         halted = False
+        credit_overrun = credit_count > reservation.reserved_credit_count
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
             _lock_exa_month(cursor, month)
             cursor.execute(
@@ -312,6 +318,7 @@ class PostgresBudgetGuard:
                 "nominal_cost_micros = nominal_cost_micros + %s, "
                 "unexpected_billed_cost_micros = unexpected_billed_cost_micros + %s, "
                 "halted = halted OR %s > 0 "
+                "OR %s "
                 "OR request_count + %s + %s > request_limit "
                 "OR credit_count + %s + %s > credit_limit, updated_at = %s "
                 "WHERE month_start = %s RETURNING halted, request_count, credit_count",
@@ -321,6 +328,7 @@ class PostgresBudgetGuard:
                     nominal_cost_micros,
                     billed_cost_micros,
                     billed_cost_micros,
+                    credit_overrun,
                     request_count,
                     pending_requests,
                     credit_count,
@@ -348,10 +356,25 @@ class PostgresBudgetGuard:
                         now,
                     ),
                 )
-            over_quota = (
-                int(str(quota[1])) + pending_requests > 18_000
-                or Decimal(str(quota[2])) + pending_credits > Decimal(18_000)
-            )
+            if credit_overrun:
+                cursor.execute(
+                    "INSERT INTO alerts (severity, code, details, opened_at) "
+                    "VALUES ('critical', 'exa_credit_reservation_exceeded', %s, %s)",
+                    (
+                        json.dumps(
+                            {
+                                "month": month.isoformat(),
+                                "actual_credit_count": str(credit_count),
+                                "reserved_credit_count": str(reservation.reserved_credit_count),
+                                "reservation_id": reservation.id,
+                            }
+                        ),
+                        now,
+                    ),
+                )
+            over_quota = int(str(quota[1])) + pending_requests > 18_000 or Decimal(
+                str(quota[2])
+            ) + pending_credits > Decimal(18_000)
             if over_quota:
                 cursor.execute(
                     "INSERT INTO alerts (severity, code, details, opened_at) "
@@ -387,6 +410,7 @@ class PostgresHarnessRepository:
         transcript_sha256: str,
         completed_at: datetime,
         retain_until: datetime,
+        artifacts: Sequence[ArtifactRegistration] = (),
     ) -> uuid.UUID:
         completed = _aware(completed_at)
         retained = _aware(retain_until)
@@ -415,7 +439,11 @@ class PostgresHarnessRepository:
                     run_id,
                     agent_cycle_id,
                     result.termination_status,
-                    len(result.telemetry),
+                    sum(
+                        1
+                        for usage in result.telemetry
+                        if usage.usage_kind in {"model", "model_replay"}
+                    ),
                     len(result.tool_calls),
                     web_searches,
                     result.total_completion_tokens,
@@ -447,6 +475,30 @@ class PostgresHarnessRepository:
                 )
             for telemetry in result.telemetry:
                 _insert_usage(cursor, agent_cycle_id, telemetry, completed, retained)
+            for artifact in artifacts:
+                cursor.execute(
+                    "INSERT INTO artifact_inventory "
+                    "(id, agent_cycle_id, stage, uri, sha256, byte_length, retain_until, "
+                    "status, created_at) VALUES "
+                    "(%s, %s, 'harness', %s, %s, %s, %s, 'active', %s) "
+                    "ON CONFLICT (uri) DO UPDATE SET retain_until = GREATEST("
+                    "artifact_inventory.retain_until, EXCLUDED.retain_until), "
+                    "byte_length = EXCLUDED.byte_length, status = 'active', "
+                    "lease_owner = NULL, lease_expires_at = NULL, deletion_error = NULL, "
+                    "deleted_at = NULL",
+                    (
+                        uuid.uuid5(
+                            uuid.NAMESPACE_URL,
+                            f"vtrade:artifact-inventory:{artifact.uri}",
+                        ),
+                        agent_cycle_id,
+                        artifact.uri,
+                        artifact.sha256,
+                        artifact.byte_length,
+                        artifact.retain_until,
+                        completed,
+                    ),
+                )
         return run_id
 
     def append_belief(
@@ -498,9 +550,7 @@ class PostgresHarnessRepository:
                 ),
             )
 
-    def append_plan(
-        self, plan: PlanRecord, *, actor_id: uuid.UUID, cycle_id: uuid.UUID
-    ) -> None:
+    def append_plan(self, plan: PlanRecord, *, actor_id: uuid.UUID, cycle_id: uuid.UUID) -> None:
         if str(actor_id) != plan.agent_id:
             raise PermissionError("agent cannot write another agent's plan")
         fingerprint = _memory_fingerprint(
@@ -649,8 +699,7 @@ def _open_budget_alerts(
                 (month,),
             )
             cursor.execute(
-                "INSERT INTO alerts "
-                "(severity, code, details, opened_at) VALUES (%s, %s, %s, %s)",
+                "INSERT INTO alerts (severity, code, details, opened_at) VALUES (%s, %s, %s, %s)",
                 (
                     "critical" if threshold == thresholds[-1] else "warning",
                     f"monthly_api_budget_{threshold}",

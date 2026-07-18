@@ -21,6 +21,10 @@ class ToolValidationError(ValueError):
     pass
 
 
+class ToolHandlerError(RuntimeError):
+    """Expected, agent-visible tool failure that is safe to record and continue."""
+
+
 class ModelGateway(Protocol):
     def complete(
         self,
@@ -135,6 +139,7 @@ class BoundedToolHarness:
         telemetry: list[ProviderTelemetry] = []
         web_searches = 0
         completion_tokens = 0
+        seen_tool_call_ids: set[str] = set()
         started = self._monotonic()
         schemas = [tool.schema for tool in self._tools.values()]
         for _turn in range(self._limits.maximum_model_turns):
@@ -176,9 +181,29 @@ class BoundedToolHarness:
             if web_searches + proposed_web > self._limits.maximum_web_searches:
                 raise HarnessLimitExceeded("strict web-search ceiling would be exceeded")
             web_searches += proposed_web
+            call_ids = [call.get("id") for call in calls]
+            duplicate_ids = {
+                call_id
+                for call_id in call_ids
+                if isinstance(call_id, str)
+                and call_id
+                and (call_ids.count(call_id) > 1 or call_id in seen_tool_call_ids)
+            }
             for call in calls:
                 self._check_wall_clock(started)
-                record, tool_telemetry = self._execute_tool(call)
+                raw_call_id = call.get("id")
+                tool_telemetry: tuple[ProviderTelemetry, ...]
+                if isinstance(raw_call_id, str) and raw_call_id in duplicate_ids:
+                    record = self._failed_tool_call(
+                        call,
+                        raw_call_id,
+                        ToolValidationError("duplicate tool-call ID; call was not executed"),
+                    )
+                    tool_telemetry = ()
+                else:
+                    record, tool_telemetry = self._execute_tool(call)
+                if isinstance(raw_call_id, str) and raw_call_id:
+                    seen_tool_call_ids.add(raw_call_id)
                 records.append(record)
                 telemetry.extend(tool_telemetry)
                 messages.append(
@@ -194,10 +219,15 @@ class BoundedToolHarness:
     def _execute_tool(
         self, call: JsonObject
     ) -> tuple[ToolCallRecord, tuple[ProviderTelemetry, ...]]:
-        call_id = call.get("id")
-        if not isinstance(call_id, str) or not call_id:
-            call_id = str(uuid.uuid4())
+        raw_call_id = call.get("id")
+        call_id = (
+            raw_call_id
+            if isinstance(raw_call_id, str) and raw_call_id
+            else str(uuid.uuid4())
+        )
         try:
+            if not isinstance(raw_call_id, str) or not raw_call_id:
+                raise ToolValidationError("tool call requires a non-empty provider call ID")
             name = _tool_name(call)
             tool = self._tools.get(name)
             if tool is None:
@@ -232,20 +262,22 @@ class BoundedToolHarness:
                 ToolCallRecord(call_id, name, arguments, True, output, tool.category),
                 tool_telemetry,
             )
-        except (ToolValidationError, json.JSONDecodeError) as exc:
-            name = _safe_tool_name(call)
-            category = self._tools[name].category if name in self._tools else "invalid"
-            return (
-                ToolCallRecord(
-                    call_id,
-                    name,
-                    None,
-                    False,
-                    {"error": type(exc).__name__, "message": str(exc)},
-                    category,
-                ),
-                (),
-            )
+        except (ToolValidationError, ToolHandlerError, ValueError, json.JSONDecodeError) as exc:
+            return self._failed_tool_call(call, call_id, exc), ()
+
+    def _failed_tool_call(
+        self, call: JsonObject, call_id: str, error: Exception
+    ) -> ToolCallRecord:
+        name = _safe_tool_name(call)
+        category = self._tools[name].category if name in self._tools else "invalid"
+        return ToolCallRecord(
+            call_id,
+            name,
+            None,
+            False,
+            {"error": type(error).__name__, "message": str(error)},
+            category,
+        )
 
     def _check_wall_clock(self, started: float) -> None:
         if self._monotonic() - started > self._limits.maximum_wall_clock_seconds:

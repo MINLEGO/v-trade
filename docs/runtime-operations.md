@@ -1,6 +1,6 @@
 # Runtime and private administration
 
-Checked: 2026-07-16.
+Checked: 2026-07-18.
 
 ## Deployment order
 
@@ -33,11 +33,14 @@ Starting or soft-removing one agent addresses only that agent and preserves all
 history. Use a real configured model for the shadow run; no stub is authorized.
 
 ```powershell
-vtrade-bootstrap add-agent --run-label shadow-2026-07 `
+vtrade-bootstrap add-agent --experiment-version predictionarena-polymarket-v1 `
+  --run-label shadow-2026-07 `
   --model-label "DeepSeek V4 Flash" --name deepseek-shadow
-vtrade-bootstrap start-agent --run-label shadow-2026-07 `
+vtrade-bootstrap start-agent --experiment-version predictionarena-polymarket-v1 `
+  --run-label shadow-2026-07 `
   --name deepseek-shadow --starts-at 2026-07-20T00:00:00Z
-vtrade-bootstrap remove-agent --run-label shadow-2026-07 --name deepseek-shadow
+vtrade-bootstrap remove-agent --experiment-version predictionarena-polymarket-v1 `
+  --run-label shadow-2026-07 --name deepseek-shadow
 ```
 
 The database URL is read from `VTRADE_DATABASE_URL` by default; `--database-url-env` may name
@@ -56,11 +59,18 @@ holds an advisory lock, locks due cursors with `SKIP LOCKED`, records missed ins
 never backfills model decisions. Global and per-agent pause state is checked in the
 claim query.
 
-Cycles use expiring leases and immutable data cutoffs. The five persisted checkpoints
-are market freeze, prompt, harness, broker, and settlement/valuation. A replacement
+Cycles use expiring leases and immutable data cutoffs. The six persisted checkpoints
+are market freeze, pre-prompt settlement, prompt, harness, broker, and final
+settlement/valuation. A replacement
 worker recovers expired work and reuses completed checkpoints; downstream financial
 operations must retain their existing idempotency keys, so a crash after a side effect
 cannot authorize a duplicate trade or settlement.
+
+The production worker claims one cycle per batch. Harness recovery reuses only a fully
+persisted harness run and its inventoried artifacts; otherwise it fails closed and does
+not recall OpenRouter or Exa. Exact resume within an unfinished model turn is deferred,
+so an operator must review that failed cycle instead of the runtime guessing whether an
+external side effect occurred.
 
 Raw artifacts are registered with at least six calendar months of retention. Cleanup
 leases expired inventory rows, purges expired prompt/transcript/reasoning payloads,
@@ -69,10 +79,16 @@ retains audit metadata. Storage and billed/nominal cost projections are persiste
 does not claim that the seven-day observation window has elapsed.
 
 Exa is governed by a separate monthly PostgreSQL circuit: 18,000 requests and 18,000
-credits. Each search atomically reserves one of each before network I/O. Exa's nominal
-20,000-micro-dollar search value remains auditable but does not consume the $40 billed
-API breaker while the route is free. A positive `costDollars.total` response records a
-critical alert, halts Exa, and raises instead of silently entering the dollar ledger.
+credits. Each search atomically reserves one request and ten credits (the strict
+ten-result maximum) before network I/O. Exa's nominal 20,000-micro-dollar search value
+remains auditable but does not consume the $40 billed API breaker while the route is
+free. Reconciliation records actual credits and releases unused pending capacity. A
+positive `costDollars.total` or credit use above the reservation records a critical
+alert, halts Exa, and raises instead of silently entering the dollar ledger.
+
+The Tavily credential is present, but Tavily is intentionally disabled and future-only
+for this experiment version. Credential presence does not enable the adapter, and no
+live Tavily validation call belongs to the baseline procedure.
 
 ## Private administration
 
@@ -99,10 +115,12 @@ integration tests are opt-in and rollback-only:
 $env:VTRADE_RUN_POSTGRES_INTEGRATION='1'
 python -m pytest tests/test_postgres_phase5_integration.py tests/test_postgres_phase6_integration.py
 python -m pytest tests/test_postgres_phase9_integration.py
+python -m pytest tests/test_postgres_phase10_integration.py `
+  tests/test_postgres_phase11_integration.py tests/test_postgres_bootstrap_integration.py
 ```
 
-Both verifiers pass against the configured database after migrations `0005` and
-`0006`; rollback checks confirm that their fixture rows are absent afterward.
+The phase 5, 6, 9, 10, 11, and bootstrap verifiers pass against the configured database;
+rollback checks confirm that their fixture rows are absent afterward.
 
 The seven-day shadow observation, a scored baseline, and the 30-consecutive-day
 operational gate remain time-based work. They cannot be claimed by code completion.

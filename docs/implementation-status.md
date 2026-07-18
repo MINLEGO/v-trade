@@ -1,6 +1,6 @@
 # Implementation status
 
-Checked: 2026-07-16.
+Checked: 2026-07-18.
 
 ## Stable local lot
 
@@ -23,7 +23,7 @@ and Exa quotas are frozen. No owner decision remains `owner_pending`:
 
 - model slugs are `deepseek/deepseek-v4-flash` and `xiaomi/mimo-v2.5-pro`;
 - DeepSeek uses `fp8`; MiMo permits `fp8` and `unknown`;
-- reasoning effort uses the provider default;
+- both models explicitly request the owner-fixed maximum reasoning effort;
 - all compatible OpenRouter providers are allowed and sorted by price, with provider
   fallback enabled but cross-model fallback forbidden;
 - the paper broker buys at best ask, sells at best bid, does not require a counterparty,
@@ -40,12 +40,13 @@ and Exa quotas are frozen. No owner decision remains `owner_pending`:
 - the owner-provided empirical expectations are 8 searches on average among cycles
   that use search and 3.5 searches on average across all cycles; this workstream has
   not independently verified those two planning figures;
-- OpenRouter is bounded to 11,000 micro-dollars per DeepSeek request and 40,000
-  micro-dollars per MiMo request, with the owner-approved provider price ceilings
-  encoded in each model configuration;
+- OpenRouter reserves 14,000 micro-dollars per DeepSeek request and 50,000
+  micro-dollars per MiMo request, rounding upward from the exact full-context bounds
+  under the owner-approved $0.12/$0.24 and $0.44/$0.88 price ceilings;
 - Exa records a nominal 20,000 micro-dollars per search without consuming the dollar
   breaker; any positive billed cost reported by Exa halts and alerts its circuit.
-  Tavily basic still reserves 8,000 micro-dollars before contacting the provider;
+  Tavily's future basic route retains an 8,000-micro-dollar bound, but the current
+  adapter is intentionally disabled and never contacts the provider;
 - every configured model has a 100,000-token context, reserves 12,000 tokens for
   output, and therefore accepts at most 88,000 tokens of assembled input;
 - tool-call arguments and ordinary tool results are capped at 4,000 tokens;
@@ -66,11 +67,18 @@ printed into logs or documentation.
 
 All currently required owner resources are valid:
 
-- PostgreSQL migration `0001` applied with 34 foundation tables;
+- PostgreSQL migrations `0001` through `0011` applied to the configured database;
 - Supabase service-role format accepted and the private bucket validated end-to-end by
   metadata read, byte-exact authenticated upload/read and delete;
-- OpenRouter and Exa credentials accepted;
+- OpenRouter and Exa credentials accepted; the Tavily credential is present but remains
+  intentionally unused under the owner-frozen future-only policy;
 - admin authentication secret supplied.
+
+The authenticated readiness probe was rerun on 2026-07-18 against the real services:
+an unauthenticated request returned `401`, while the authenticated request returned
+`200` with PostgreSQL at migration `0011`, private Supabase storage healthy, and the
+experiment configuration runnable. The final offline suite has 159 passing tests and
+8 explicitly skipped opt-in integrations; Ruff, mypy, and `git diff --check` pass.
 
 Phase 2 adds the real read-only Gamma/CLOB adapter, a mandatory
 `SupabaseArtifactStore`, bounded live public contract probes and byte-exact offline
@@ -86,7 +94,7 @@ fingerprints and optimistic portfolio versions. It has been applied successfully
 the configured PostgreSQL database.
 
 Phase 4 adds strict OpenRouter routing for the two frozen model slugs, an Exa search
-adapter, a deliberately disabled Tavily adapter pending its real credential, recursive
+adapter, a deliberately disabled future-only Tavily adapter, recursive
 tool-schema validation, the bounded 32-turn/100-tool/50-search harness, private
 per-agent beliefs and plans, deterministic critical learning, offline model replay,
 redacted raw-response artifacts, and monthly budget reservations with separate billed
@@ -107,31 +115,44 @@ Migration `0007` persists immutable per-agent-cycle portfolio query snapshots an
 server-side opaque page cursors. Pages never re-query mutable live positions, so
 portfolio mutations between calls cannot create overlap or gaps. Page assembly trims
 before the strict provider-neutral 24,000-token upper bound. The pagination owner
-decision is resolved. Tavily remains disabled until a real key is supplied and has no
-claimed live or mocked contract validation.
+decision is resolved. The Tavily key is supplied, but owner policy keeps the adapter
+disabled and future-only; no live Tavily call is made or claimed.
 
 The fee-policy source is resolved to the official public Polymarket CLOB
 `GET /fee-rate/{token_id}` endpoint. Fee payloads are archived before normalization,
 persisted as immutable per-token basis-point observations, and accepted by the broker
-only when present, fresh, and no newer than the finalized cycle cutoff. No zero or 5%
-default is substituted. No required owner decision remains unresolved.
+only when their IDs belong to the current cycle freeze and their timestamps are no newer
+than the finalized cycle cutoff. No zero or 5% default is substituted. Migration `0009`
+adds the immutable fee snapshots. No required owner decision remains unresolved.
 
-Migration `0009` adds the owner-frozen Exa quota ledger. It atomically reserves one
-request and one credit per search, caps both monthly totals at 18,000, persists nominal
+Migration `0010` adds the owner-frozen Exa quota ledger. Migration `0011` makes every
+new search atomically reserve one request and ten credits (the strict maximum result
+count), then reconciles actual credits and releases unused pending capacity. It caps
+both monthly totals at 18,000, persists nominal
 cost independently of the global billed-dollar breaker, and records a critical alert
-before raising if Exa reports any positive billed cost. The migration is present but
-is not claimed as applied until the real PostgreSQL deployment verifier is run.
+before raising if Exa reports any positive billed cost or more credits than reserved.
+Migration `0011` also adds `pre_settlement` to the durable stage checks and applies RLS
+plus exact V-Trade-object revokes for `anon`/`authenticated`, without changing shared
+schema/default privileges. Migrations `0009` through `0011` are applied. Their real
+PostgreSQL verifiers pass: normalized freeze/frozen same-cycle fee lookup, pending Exa
+quota enforcement/reconciliation, RLS/grants/stage constraints, and explicit isolated
+bootstrap all complete without leaving fixture rows.
 
 Phase 5 runtime infrastructure now provides independent hourly PostgreSQL schedule
 cursors, atomic skipped-slot recording without backfill, advisory leases, restart
 recovery from typed stage checkpoints, idempotent orchestration boundaries, actual
 post-sync cutoff finalization, transactional normalized Polymarket snapshot persistence,
+fail-closed harness recovery from a fully persisted run without repeating provider calls,
 six-month
 Supabase retention cleanup, payload purging, storage/cost projections, and deduplicated
 stale-data/failure/budget/ledger/drawdown alerts. Migration `0005` has been applied to
 the configured PostgreSQL database. Its rollback-only real PostgreSQL verifier passes
 without leaving fixture rows. The required
 seven-day shadow observation has not been completed.
+
+Exact per-model-turn continuation inside an interrupted, not-yet-persisted harness run
+is deferred. Such a recovery fails the cycle closed; it never repeats OpenRouter or Exa
+calls. A later scheduled cycle may proceed independently after operator review.
 
 Phase 6 adds an authenticated private API and HTML dashboard, real PostgreSQL/Supabase/
 config readiness probes, fixed bounded operator views, strict stale-bid display,

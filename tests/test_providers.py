@@ -12,6 +12,7 @@ import httpx
 from vtrade.artifacts import ContentAddressedArtifactStore
 from vtrade.budget import MonthlyBudgetCircuitBreaker
 from vtrade.providers import (
+    EXA_MAX_CREDITS_PER_SEARCH,
     EXA_MAX_SEARCH_COST_MICROS,
     EXA_SEARCH_URL,
     OPENROUTER_URL,
@@ -76,6 +77,8 @@ def model_config(slug: str = "deepseek/deepseek-v4-flash") -> dict:
         "provider_selection": "all_compatible_sorted_by_price",
         "allow_provider_fallbacks": True,
         "cross_model_fallback": False,
+        "reasoning_effort": "max",
+        "reasoning_effort_policy": "owner_fixed",
         "estimated_max_cost_micros": 100_000,
         "maximum_context_tokens": 100_000,
         "maximum_prompt_tokens": 10_000,
@@ -132,6 +135,7 @@ class ProviderTests(unittest.TestCase):
         body = json.loads(requests[0].content)
         self.assertEqual(body["model"], "deepseek/deepseek-v4-flash")
         self.assertNotIn("models", body)
+        self.assertEqual(body["reasoning"], {"effort": "max"})
         self.assertEqual(
             body["provider"],
             {
@@ -248,8 +252,12 @@ class ProviderTests(unittest.TestCase):
         )
         exa.search("query", {})
         self.assertEqual(budget.estimates, [("exa", 20_000)])
-        self.assertEqual(budget.reservations, [("exa", 1, Decimal(1))])
+        self.assertEqual(
+            budget.reservations,
+            [("exa", 1, EXA_MAX_CREDITS_PER_SEARCH)],
+        )
         self.assertEqual(budget.reconciliations, [(0, 20_000, 1, Decimal(1))])
+        self.assertEqual(EXA_MAX_CREDITS_PER_SEARCH, Decimal(10))
         self.assertEqual(EXA_MAX_SEARCH_COST_MICROS, 20_000)
         self.assertEqual(TAVILY_MAX_SEARCH_COST_MICROS, 8_000)
         with self.assertRaisesRegex(ValueError, "unsupported search options"):

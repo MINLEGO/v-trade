@@ -17,6 +17,8 @@ from vtrade.broker import (
     PortfolioState,
     PositionState,
     RejectionCode,
+    SettlementEngine,
+    SettlementObservation,
 )
 from vtrade.broker_repository import PostgresBrokerRepository
 from vtrade.domain.types import MicroDollars, OrderBookSnapshot, RawArtifact, Side
@@ -30,8 +32,13 @@ class RecordingCursor:
     def __init__(self) -> None:
         self.queries: list[tuple[str, tuple[object, ...]]] = []
         self.orders: dict[str, tuple[uuid.UUID, str]] = {}
+        self.settlements: dict[str, tuple[uuid.UUID, str]] = {}
         self.selected: tuple[object, ...] | None = None
         self.portfolio_version = 0
+        self.rowcount = 1
+        self.execution_relation: tuple[object, ...] | None = None
+        self.settlement_relation: tuple[object, ...] | None = None
+        self.position_update_rowcount = 1
 
     def __enter__(self):
         return self
@@ -42,14 +49,26 @@ class RecordingCursor:
     def execute(self, query: str, params=()):
         values = tuple(params)
         self.queries.append((query, values))
-        if query.startswith("SELECT id, execution_fingerprint FROM orders"):
+        self.selected = None
+        self.rowcount = 1
+        if query.startswith("SELECT ac.agent_id, oi.market_id"):
+            self.selected = self.execution_relation
+        elif query.startswith("SELECT p.agent_id, o.market_id"):
+            self.selected = self.settlement_relation
+        elif query.startswith("SELECT id, execution_fingerprint FROM orders"):
             self.selected = self.orders.get(str(values[0]))
+        elif query.startswith("SELECT id, execution_fingerprint FROM settlements"):
+            self.selected = self.settlements.get(str(values[0]))
         elif query.startswith("SELECT portfolio_version FROM agents"):
             self.selected = (self.portfolio_version,)
         elif query.startswith("INSERT INTO orders"):
             self.orders[str(values[8])] = (values[0], str(values[-1]))
+        elif query.startswith("INSERT INTO settlements"):
+            self.settlements[str(values[7])] = (values[0], str(values[-1]))
         elif query.startswith("UPDATE agents SET portfolio_version"):
             self.portfolio_version = int(values[0])
+        elif query.startswith("UPDATE positions SET shares"):
+            self.rowcount = self.position_update_rowcount
         return self
 
     def fetchone(self):
@@ -177,6 +196,16 @@ class PostgresBrokerRepositoryTests(unittest.TestCase):
             "outcome_id": uuid.uuid4(),
             "snapshot_id": uuid.uuid4(),
         }
+        self.connection.cursor_instance.execution_relation = (
+            AGENT_ID,
+            self.ids["market_id"],
+            self.ids["outcome_id"],
+            Side.BUY.value,
+            "yes",
+            self.ids["outcome_id"],
+            NOW - timedelta(seconds=1),
+            "a" * 64,
+        )
 
     def test_repeated_place_is_one_insert_and_returns_existing_record(self) -> None:
         result = rejected_result()
@@ -223,6 +252,126 @@ class PostgresBrokerRepositoryTests(unittest.TestCase):
         persisted = self.repository.persist_execution(accepted_result(), **self.ids)
         self.assertTrue(persisted.created)
         self.assertEqual(self.connection.cursor_instance.portfolio_version, 8)
+
+    def test_execution_relation_mismatch_fails_before_order_insert(self) -> None:
+        relation = self.connection.cursor_instance.execution_relation
+        assert relation is not None
+        self.connection.cursor_instance.execution_relation = (
+            uuid.uuid4(),
+            *relation[1:],
+        )
+        with self.assertRaisesRegex(ValueError, "ownership or dimensions"):
+            self.repository.persist_execution(rejected_result(), **self.ids)
+        self.assertFalse(self.connection.cursor_instance.orders)
+
+    def test_settlement_relations_are_locked_and_position_update_is_owned(self) -> None:
+        result, ids = self._settlement_result_and_ids()
+        self.connection.cursor_instance.portfolio_version = 3
+        self.connection.cursor_instance.settlement_relation = self._settlement_relation(
+            result, ids
+        )
+
+        persisted = self.repository.persist_settlement(result, **ids)
+
+        self.assertTrue(persisted.created)
+        self.assertEqual(self.connection.cursor_instance.portfolio_version, 4)
+
+    def test_settlement_relation_mismatch_fails_before_insert(self) -> None:
+        result, ids = self._settlement_result_and_ids()
+        relation = self._settlement_relation(result, ids)
+        self.connection.cursor_instance.settlement_relation = (
+            uuid.uuid4(),
+            *relation[1:],
+        )
+        with self.assertRaisesRegex(ValueError, "ownership, resolution"):
+            self.repository.persist_settlement(result, **ids)
+        self.assertFalse(self.connection.cursor_instance.settlements)
+
+    def test_settlement_position_update_requires_exact_owned_row(self) -> None:
+        result, ids = self._settlement_result_and_ids()
+        self.connection.cursor_instance.portfolio_version = 3
+        self.connection.cursor_instance.settlement_relation = self._settlement_relation(
+            result, ids
+        )
+        self.connection.cursor_instance.position_update_rowcount = 0
+        with self.assertRaisesRegex(ValueError, "position update"):
+            self.repository.persist_settlement(result, **ids)
+
+    def test_fifty_fifty_settlement_accepts_null_database_winner(self) -> None:
+        result, ids = self._settlement_result_and_ids(winner=None)
+        self.connection.cursor_instance.portfolio_version = 3
+        self.connection.cursor_instance.settlement_relation = self._settlement_relation(
+            result, ids
+        )
+
+        persisted = self.repository.persist_settlement(result, **ids)
+
+        self.assertTrue(persisted.created)
+        self.assertEqual(result.payout_micros, 5_000_000)
+
+    def _settlement_result_and_ids(
+        self, *, winner: str | None = "polymarket:outcome:yes"
+    ):
+        position = PositionState(
+            "polymarket:market:1",
+            "polymarket:outcome:yes",
+            Decimal(10),
+            Decimal("0.4"),
+            MicroDollars(4_000_000),
+        )
+        portfolio = PortfolioState(
+            str(AGENT_ID),
+            MicroDollars(10_000_000_000),
+            positions=(position,),
+            version=3,
+        )
+        resolution = SettlementObservation(
+            id="resolution-1",
+            market_id=position.market_id,
+            winning_outcome_id=winner,
+            source_created_at=NOW - timedelta(seconds=4),
+            observed_at=NOW - timedelta(seconds=3),
+            eligible_after=NOW - timedelta(seconds=2),
+        )
+        result = SettlementEngine().settle(
+            resolution=resolution,
+            position=position,
+            portfolio=portfolio,
+            as_of=NOW - timedelta(seconds=1),
+            settled_at=NOW,
+        )
+        ids = {
+            "agent_id": AGENT_ID,
+            "position_id": uuid.uuid4(),
+            "resolution_id": uuid.uuid4(),
+            "market_id": self.ids["market_id"],
+            "outcome_id": self.ids["outcome_id"],
+        }
+        return result, ids
+
+    @staticmethod
+    def _settlement_relation(result, ids):
+        return (
+            AGENT_ID,
+            ids["market_id"],
+            ids["outcome_id"],
+            result.position.shares,
+            result.position.average_cost,
+            int(result.position.cost_basis_micros),
+            int(result.position.realized_pnl_micros),
+            ids["market_id"],
+            (
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"vtrade:outcome:{result.resolution.winning_outcome_id}",
+                )
+                if result.resolution.winning_outcome_id is not None
+                else None
+            ),
+            result.resolution.source_created_at,
+            result.resolution.observed_at,
+            result.resolution.eligible_after,
+        )
 
 
 if __name__ == "__main__":

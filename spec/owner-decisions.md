@@ -1,6 +1,6 @@
 # Owner decisions
 
-Recorded: 2026-07-16.
+Recorded: 2026-07-18.
 
 ## Resolved
 
@@ -9,7 +9,7 @@ Recorded: 2026-07-16.
 - DeepSeek quantization: `fp8` only.
 - MiMo quantizations: `fp8` and `unknown` (its only published route is accepted even
   when OpenRouter reports no more precise quantization label).
-- Reasoning effort: omit an explicit effort and use the provider default.
+- Reasoning effort: explicitly request the owner-fixed maximum effort for both models.
 - Provider routing: allow every compatible provider, sort by price, and permit
   OpenRouter to fall back between those providers.
 - Cross-model fallback: forbidden.
@@ -27,11 +27,12 @@ Recorded: 2026-07-16.
   8 searches on average conditional on a cycle using search, and 3.5 searches on
   average across all cycles. These are owner-provided empirical expectations and were
   not independently verified by this workstream.
-- OpenRouter request bounds: at most $0.011 (11,000 micro-dollars) for
-  `deepseek/deepseek-v4-flash`, using provider maximum prices of $0.09 prompt and $0.18
-  completion per million tokens with no request fee; at most $0.040 (40,000
-  micro-dollars) for `xiaomi/mimo-v2.5-pro`, using $0.348 prompt and $0.696 completion
-  per million tokens with no request fee.
+- OpenRouter request bounds: reserve at most $0.014 (14,000 micro-dollars) for
+  `deepseek/deepseek-v4-flash`, using provider maximum prices of $0.12 prompt and $0.24
+  completion per million tokens with no request fee; reserve at most $0.050 (50,000
+  micro-dollars) for `xiaomi/mimo-v2.5-pro`, using $0.44 prompt and $0.88 completion
+  per million tokens with no request fee. These request reservations round the exact
+  88,000-input/12,000-output upper bounds of $0.01344 and $0.04928 upward.
 - Research request bounds: reserve at most $0.020 (20,000 micro-dollars) for every
   Exa search and $0.008 (8,000 micro-dollars) for every Tavily basic search before the
   provider call.
@@ -54,13 +55,19 @@ cycles, but it is not required for normal scheduling and does not control member
 
 The pagination contract is resolved. Market data uses the actual completed freeze time
 as the cycle cutoff over a bounded pre-freeze market universe; the owner accepts the
-resulting few minutes of schedule drift. Tavily remains disabled until its real
-credential is supplied.
+resulting few minutes of schedule drift. The Tavily credential is supplied, but the
+owner explicitly keeps Tavily disabled and future-only; credential presence must never
+enable it or trigger a live call.
+- Fee source: archive and persist `base_fee` from the official public Polymarket CLOB
+  `GET /fee-rate/{token_id}` endpoint during the cycle freeze; only snapshot IDs from
+  that same cycle may determine paper-broker fees, and no default rate is allowed.
+- Exa monthly capacity: atomically cap both requests and credits at 18,000 per calendar
+  month. Free-plan Exa is excluded from the billed-dollar breaker, while nominal cost
+  remains auditable; any positive billed amount halts and alerts Exa.
 
 ## Pending
 
-- Authorize the official Polymarket CLOB fee-rate endpoint as the runtime fee-policy
-  source, or provide another exact source.
-- Define strict monthly Exa request and credit caps. No default is inferred.
+No owner decision remains pending. Tavily remains outside the active baseline by owner
+decision and has no live-call validation requirement for this version.
 Provider fallback is strictly a same-model provider-route fallback; it never authorizes
 substituting one configured model for another.

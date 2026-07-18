@@ -5,20 +5,27 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Protocol, cast
 
 from vtrade.domain.ports import JsonObject
-from vtrade.harness import BeliefRecord, PlanRecord, PlanType, ToolExecution, ToolSpec
+from vtrade.harness import (
+    BeliefRecord,
+    PlanRecord,
+    PlanType,
+    ToolExecution,
+    ToolHandlerError,
+    ToolSpec,
+)
 from vtrade.harness_repository import PostgresHarnessRepository
 from vtrade.portfolio import PostgresPortfolioHandler
 from vtrade.providers import ExaResearchProvider
 from vtrade.runtime import CycleClaim
 
 
-class ToolContextUnavailable(RuntimeError):
+class ToolContextUnavailable(ToolHandlerError):
     pass
 
 
@@ -44,10 +51,18 @@ class ToolContext:
     portfolio: PostgresPortfolioHandler
     connect: _Connect
     clock: Callable[[], datetime]
+    market_snapshot_ids: tuple[uuid.UUID, ...] = ()
+    order_book_snapshot_ids: tuple[uuid.UUID, ...] = ()
+    maximum_default_result_tokens: int = 4_000
+    maximum_book_age: timedelta = timedelta(minutes=5)
 
     def __post_init__(self) -> None:
         if not self.database_url or self.claim.data_cutoff is None:
             raise ToolContextUnavailable("tools require a finalized cycle cutoff")
+        if self.maximum_default_result_tokens <= 0:
+            raise ToolContextUnavailable("tool result ceiling must be positive")
+        if self.maximum_book_age < timedelta(0):
+            raise ToolContextUnavailable("order-book age ceiling cannot be negative")
 
     @property
     def cutoff(self) -> datetime:
@@ -73,6 +88,7 @@ class ProductionToolRegistry:
         schema_path: str | Path = "spec/tool-schemas-v1.json",
     ) -> None:
         self._context = context
+        self._mutation_sequence = 0
         raw = json.loads(Path(schema_path).read_text(encoding="utf-8"))
         rows = raw.get("tools")
         if not isinstance(rows, list):
@@ -102,12 +118,34 @@ class ProductionToolRegistry:
         return tuple(
             ToolSpec(
                 self._schemas[name],
-                handlers[name],
+                self._bounded_handler(name, handlers[name]),
                 self._category(name),
                 mutates_financial_state=name == "place_market_order",
             )
             for name in self._schemas
         )
+
+    def _bounded_handler(
+        self,
+        name: str,
+        handler: Callable[[JsonObject], JsonObject | ToolExecution],
+    ) -> Callable[[JsonObject], JsonObject | ToolExecution]:
+        if name == "get_portfolio":
+            return handler
+
+        def bounded(arguments: JsonObject) -> JsonObject | ToolExecution:
+            result = handler(arguments)
+            if isinstance(result, ToolExecution):
+                return ToolExecution(
+                    _bounded_output(
+                        result.output,
+                        self._context.maximum_default_result_tokens,
+                    ),
+                    result.telemetry,
+                )
+            return _bounded_output(result, self._context.maximum_default_result_tokens)
+
+        return bounded
 
     def _handlers(self) -> dict[str, Callable[[JsonObject], JsonObject | ToolExecution]]:
         discovery = {
@@ -154,8 +192,9 @@ class ProductionToolRegistry:
         if name == "get_market_details":
             slug = _required_string(arguments, "slug")
             rows = self._query(
-                _MARKET_SELECT + " AND m.slug = %s ORDER BY snapshot.cutoff DESC LIMIT 1",
-                (self._context.cutoff, slug),
+                _MARKET_SELECT + " AND snapshot.payload->>'slug' = %s "
+                "ORDER BY snapshot.cutoff DESC LIMIT 1",
+                (self._context.cutoff, list(self._context.market_snapshot_ids), slug),
             )
             if not rows:
                 raise ToolContextUnavailable("market slug is absent from frozen snapshots")
@@ -163,9 +202,15 @@ class ProductionToolRegistry:
         if name == "get_event_markets":
             event_id = _required_string(arguments, "event_id")
             rows = self._query(
-                _MARKET_SELECT + " AND (e.id::text = %s OR e.venue_event_id = %s) "
+                _MARKET_SELECT
+                + " AND (snapshot.payload->>'event_id' = %s OR e.venue_event_id = %s) "
                 "ORDER BY snapshot.volume_micros DESC LIMIT 100",
-                (self._context.cutoff, event_id, event_id),
+                (
+                    self._context.cutoff,
+                    list(self._context.market_snapshot_ids),
+                    event_id,
+                    event_id,
+                ),
             )
             return self._market_output(rows)
         if name == "search_tags":
@@ -247,11 +292,16 @@ class ProductionToolRegistry:
             )
             event["total_volume_micros"] = int(event["total_volume_micros"]) + int(str(row[8]))
             created = _metadata_string(row[12], "created_at")
-            if created and (event["newest_market_created_at"] is None or created > str(event["newest_market_created_at"])):
+            if created and (
+                event["newest_market_created_at"] is None
+                or created > str(event["newest_market_created_at"])
+            ):
                 event["newest_market_created_at"] = created
         values = list(grouped.values())
         if name == "get_newest_events":
-            values.sort(key=lambda event: str(event["newest_market_created_at"] or ""), reverse=True)
+            values.sort(
+                key=lambda event: str(event["newest_market_created_at"] or ""), reverse=True
+            )
         elif name == "discover_events":
             values.sort(key=lambda event: int(event["volume_24hr_micros"]), reverse=True)
         else:
@@ -260,9 +310,10 @@ class ProductionToolRegistry:
 
     def _market_rows(self, limit: int) -> Sequence[Sequence[object]]:
         return self._query(
-            _MARKET_SELECT + " AND m.tradeable = true AND m.status = 'open' "
+            _MARKET_SELECT + " AND snapshot.status = 'open' "
+            "AND COALESCE((snapshot.payload->>'tradeable')::boolean, false) "
             "ORDER BY snapshot.volume_micros DESC, m.id LIMIT %s",
-            (self._context.cutoff, limit),
+            (self._context.cutoff, list(self._context.market_snapshot_ids), limit),
         )
 
     def _market_output(self, rows: Sequence[Sequence[object]]) -> JsonObject:
@@ -288,17 +339,35 @@ class ProductionToolRegistry:
             "SELECT obs.id, obs.cutoff, obs.source_created_at, obs.bids, obs.asks, "
             "obs.best_bid, obs.best_ask, obs.raw_sha256 FROM order_book_snapshots obs "
             "JOIN outcomes o ON o.id = obs.outcome_id WHERE o.venue_token_id = %s "
-            "AND obs.cutoff <= %s ORDER BY obs.cutoff DESC, obs.id DESC LIMIT 1",
-            (token, self._context.cutoff),
+            "AND obs.id = ANY(%s::uuid[]) AND obs.cutoff <= %s "
+            "ORDER BY obs.cutoff DESC, obs.id DESC LIMIT 1",
+            (
+                token,
+                list(self._context.order_book_snapshot_ids),
+                self._context.cutoff,
+            ),
         )
         if not rows:
             raise ToolContextUnavailable("token has no order book frozen at cycle cutoff")
         row = rows[0]
+        observed_at = row[1]
+        if not isinstance(observed_at, datetime):
+            raise ToolContextUnavailable("frozen order-book timestamp is malformed")
+        observed_at = observed_at.astimezone(UTC)
+        source_created_at = row[2]
+        if source_created_at is not None:
+            if not isinstance(source_created_at, datetime):
+                raise ToolContextUnavailable("frozen order-book source timestamp is malformed")
+            source_created_at = source_created_at.astimezone(UTC)
+            if source_created_at > observed_at or source_created_at > self._context.cutoff:
+                raise ToolContextUnavailable("frozen order book violates cutoff causality")
+        if self._context.cutoff - observed_at > self._context.maximum_book_age:
+            raise ToolContextUnavailable("frozen order book is older than 300 seconds")
         return {
             "as_of": self._context.cutoff.isoformat(),
             "snapshot_id": str(row[0]),
-            "observed_at": str(row[1]),
-            "source_created_at": str(row[2]) if row[2] is not None else None,
+            "observed_at": observed_at.isoformat(),
+            "source_created_at": source_created_at.isoformat() if source_created_at else None,
             "bids": row[3],
             "asks": row[4],
             "best_bid": str(row[5]) if row[5] is not None else None,
@@ -308,7 +377,7 @@ class ProductionToolRegistry:
 
     def _get_balance(self, _arguments: JsonObject) -> JsonObject:
         rows = self._query(
-            "SELECT a.initial_cash_micros + COALESCE(sum(lp.amount_micros) FILTER "
+            "SELECT COALESCE(sum(lp.amount_micros) FILTER "
             "(WHERE lp.account = 'cash'), 0), a.portfolio_version FROM agents a "
             "LEFT JOIN ledger_entries le ON le.agent_id = a.id "
             "LEFT JOIN ledger_postings lp ON lp.ledger_entry_id = le.id "
@@ -321,10 +390,11 @@ class ProductionToolRegistry:
 
     def _get_open_orders(self, _arguments: JsonObject) -> JsonObject:
         rows = self._query(
-            "SELECT o.id, o.status, o.requested_shares, o.created_at FROM orders o "
-            "JOIN order_intents oi ON oi.id = o.intent_id JOIN agent_cycles ac "
-            "ON ac.id = oi.agent_cycle_id WHERE ac.agent_id = %s "
-            "AND o.status IN ('accepted', 'partial') ORDER BY o.created_at, o.id LIMIT 100",
+            "SELECT oi.id, oi.validation_status, oi.shares, oi.created_at "
+            "FROM order_intents oi JOIN agent_cycles ac ON ac.id = oi.agent_cycle_id "
+            "LEFT JOIN orders o ON o.intent_id = oi.id WHERE ac.agent_id = %s "
+            "AND o.id IS NULL AND oi.validation_status = 'pending_broker_validation' "
+            "ORDER BY oi.created_at, oi.id LIMIT 100",
             (self._context.claim.agent_id,),
         )
         return {"orders": [_named(row, ("id", "status", "shares", "created_at")) for row in rows]}
@@ -362,13 +432,34 @@ class ProductionToolRegistry:
         }
 
     def _get_beliefs(self, arguments: JsonObject) -> JsonObject:
-        rows = self._context.memory.read_beliefs(
-            actor_id=self._context.claim.agent_id,
-            target_agent_id=self._context.claim.agent_id,
-        )
         if not bool(arguments.get("include_inactive", False)):
-            rows = [row for row in rows if row.get("active", True)]
-        return {"beliefs": rows[: _limit(arguments, default=100)]}
+            rows = self._context.memory.read_beliefs(
+                actor_id=self._context.claim.agent_id,
+                target_agent_id=self._context.claim.agent_id,
+            )
+            return {"beliefs": rows[: _limit(arguments, default=100)]}
+        records = self._query(
+            "SELECT b.id, b.active, r.probability, r.content, r.category, "
+            "r.evidence, r.created_at FROM beliefs b JOIN LATERAL "
+            "(SELECT * FROM belief_revisions WHERE belief_id = b.id "
+            "ORDER BY revision DESC LIMIT 1) r ON true WHERE b.agent_id = %s "
+            "ORDER BY r.created_at, b.id LIMIT %s",
+            (self._context.claim.agent_id, _limit(arguments, default=100)),
+        )
+        return {
+            "beliefs": [
+                {
+                    "id": str(row[0]),
+                    "active": bool(row[1]),
+                    "probability": str(row[2]),
+                    "content": str(row[3]),
+                    "category": str(row[4]),
+                    "evidence": row[5],
+                    "created_at": str(row[6]),
+                }
+                for row in records
+            ]
+        }
 
     def _search_beliefs(self, arguments: JsonObject) -> JsonObject:
         rows = cast(list[JsonObject], self._get_beliefs({"limit": 100})["beliefs"])
@@ -383,10 +474,10 @@ class ProductionToolRegistry:
         return {"beliefs": matches[: _limit(arguments, default=100)]}
 
     def _create_belief(self, arguments: JsonObject) -> JsonObject:
-        confidence = Decimal(str(arguments.get("confidence")))
+        confidence = _probability(arguments.get("confidence"), "confidence")
         now = self._context.now()
         belief = BeliefRecord(
-            str(uuid.uuid4()),
+            str(self._mutation_id("belief", arguments)),
             str(self._context.claim.agent_id),
             confidence,
             _required_string(arguments, "belief_content"),
@@ -411,9 +502,22 @@ class ProductionToolRegistry:
                 (belief_id, self._context.claim.agent_id),
             )
             rows = cursor.fetchall()
-        if not rows:
-            raise ToolContextUnavailable("belief is missing, foreign, or already inactive")
-        return {"belief_id": str(belief_id), "deleted": True}
+            if not rows:
+                cursor.execute(
+                    "SELECT active FROM beliefs WHERE id = %s AND agent_id = %s",
+                    (belief_id, self._context.claim.agent_id),
+                )
+                existing = cursor.fetchall()
+                if not existing:
+                    raise ToolContextUnavailable("belief is missing or foreign")
+                if bool(existing[0][0]):
+                    raise ToolContextUnavailable("belief deletion did not persist")
+                return {
+                    "belief_id": str(belief_id),
+                    "deleted": True,
+                    "already_inactive": True,
+                }
+        return {"belief_id": str(belief_id), "deleted": True, "already_inactive": False}
 
     def _create_long_term_plan(self, arguments: JsonObject) -> JsonObject:
         return self._create_plan(PlanType.LONG_TERM, arguments, None)
@@ -426,7 +530,7 @@ class ProductionToolRegistry:
 
     def _create_next_cycle_plan(self, arguments: JsonObject) -> JsonObject:
         due = arguments.get("cycle_date")
-        due_at = datetime.fromisoformat(str(due)).replace(tzinfo=UTC) if due else None
+        due_at = _date_at_midnight_utc(due) if due else None
         return self._create_plan(PlanType.NEXT_CYCLE, arguments, due_at)
 
     def _create_plan(
@@ -434,7 +538,7 @@ class ProductionToolRegistry:
     ) -> JsonObject:
         now = self._context.now()
         plan = PlanRecord(
-            str(uuid.uuid4()),
+            str(self._mutation_id(f"plan:{plan_type.value}", arguments)),
             str(self._context.claim.agent_id),
             plan_type,
             _required_string(arguments, "plan_content"),
@@ -452,20 +556,48 @@ class ProductionToolRegistry:
         if side not in {"BUY", "SELL"}:
             raise ValueError("side must be BUY or SELL")
         amount = _positive_decimal(arguments.get("amount"), "amount")
-        confidence = Decimal(str(arguments.get("conviction", "0.5")))
-        if not Decimal(0) <= confidence <= Decimal(1):
-            raise ValueError("conviction must be between zero and one")
+        confidence = _probability(arguments.get("conviction", "0.5"), "conviction")
         rows = self._query(
-            "SELECT o.id, o.market_id FROM outcomes o WHERE o.venue_token_id = %s "
-            "AND o.tradeable = true",
-            (token,),
+            "SELECT o.id, o.market_id FROM outcomes o JOIN market_snapshots ms "
+            "ON ms.market_id = o.market_id WHERE o.venue_token_id = %s "
+            "AND ms.id = ANY(%s::uuid[]) AND ms.cutoff <= %s AND ms.status = 'open' "
+            "AND COALESCE((ms.payload->>'tradeable')::boolean, false) "
+            "AND EXISTS (SELECT 1 FROM jsonb_array_elements(ms.payload->'outcomes') frozen "
+            "WHERE frozen->>'venue_token_id' = %s "
+            "AND COALESCE((frozen->>'tradeable')::boolean, false))",
+            (
+                token,
+                list(self._context.market_snapshot_ids),
+                self._context.cutoff,
+                token,
+            ),
         )
         if len(rows) != 1:
             raise ToolContextUnavailable("trade token is absent or not tradeable in frozen data")
-        intent_id = uuid.uuid5(
-            uuid.NAMESPACE_URL,
-            f"vtrade:intent:{self._context.claim.cycle_id}:{token}:{side}:{amount}",
+        books = self._query(
+            "SELECT obs.best_ask FROM order_book_snapshots obs JOIN outcomes o "
+            "ON o.id = obs.outcome_id WHERE o.venue_token_id = %s "
+            "AND obs.id = ANY(%s::uuid[]) AND obs.cutoff <= %s "
+            "ORDER BY obs.cutoff DESC, obs.id DESC LIMIT 1",
+            (
+                token,
+                list(self._context.order_book_snapshot_ids),
+                self._context.cutoff,
+            ),
         )
+        if not books:
+            raise ToolContextUnavailable(
+                "trade token has no order book in the current-cycle frozen universe"
+            )
+        # The source traces do not publish ``amount`` semantics. V1 freezes the
+        # Polymarket market-order convention: BUY is USD notional and SELL is shares.
+        # For a quote-less BUY, the positive amount is retained only to let the broker
+        # persist REQUIRED_QUOTE_ABSENT; it can never become a fill.
+        best_ask = Decimal(str(books[0][0])) if books[0][0] is not None else None
+        shares = amount
+        if side == "BUY" and best_ask is not None and best_ask != 0:
+            shares = amount / best_ask
+        intent_id = self._mutation_id("intent", arguments)
         with (
             self._context.connect(self._context.database_url) as connection,
             connection.cursor() as cursor,
@@ -475,7 +607,7 @@ class ProductionToolRegistry:
                 "(id, agent_cycle_id, market_id, outcome_id, side, amount_micros, shares, "
                 "strategy, thesis, estimated_probability, expected_value_micros, "
                 "validation_status, idempotency_key, created_at) VALUES "
-                "(%s, %s, %s, %s, %s, %s, NULL, %s, %s, %s, 0, "
+                "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, "
                 "'pending_broker_validation', %s, %s) "
                 "ON CONFLICT (idempotency_key) DO NOTHING",
                 (
@@ -485,6 +617,7 @@ class ProductionToolRegistry:
                     rows[0][0],
                     side,
                     int(amount * Decimal(1_000_000)),
+                    shares,
                     "observed_place_market_order",
                     "submitted through frozen tool contract",
                     confidence,
@@ -493,6 +626,22 @@ class ProductionToolRegistry:
                 ),
             )
         return {"intent_id": str(intent_id), "status": "pending_broker_validation"}
+
+    def _mutation_id(self, kind: str, arguments: Mapping[str, object]) -> uuid.UUID:
+        """Stable across a restart that replays the same ordered tool transcript."""
+        sequence = self._mutation_sequence
+        self._mutation_sequence += 1
+        payload = json.dumps(
+            arguments,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            default=str,
+        )
+        return uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"vtrade:{kind}:{self._context.claim.cycle_id}:{sequence}:{payload}",
+        )
 
     def _query(self, sql: str, params: Sequence[object]) -> Sequence[Sequence[object]]:
         with (
@@ -522,11 +671,19 @@ class ProductionToolRegistry:
 
 
 _MARKET_SELECT = (
-    "SELECT m.id, m.venue_market_id, m.slug, e.id, m.question, m.resolution_rules, "
-    "m.opens_at, m.closes_at, snapshot.volume_micros, snapshot.liquidity_micros, "
-    "m.status, m.tradeable, m.metadata FROM markets m JOIN events e ON e.id = m.event_id "
+    "SELECT m.id, snapshot.payload->>'venue_market_id', snapshot.payload->>'slug', "
+    "(snapshot.payload->>'event_id')::uuid, snapshot.payload->>'question', "
+    "snapshot.payload->>'resolution_rules', "
+    "NULLIF(snapshot.payload->>'opens_at', '')::timestamptz, "
+    "NULLIF(snapshot.payload->>'closes_at', '')::timestamptz, "
+    "snapshot.volume_micros, snapshot.liquidity_micros, snapshot.status, "
+    "COALESCE((snapshot.payload->>'tradeable')::boolean, false), "
+    "COALESCE(snapshot.payload->'metadata', '{}'::jsonb), "
+    "COALESCE(snapshot.payload->'outcomes', '[]'::jsonb) "
+    "FROM markets m JOIN events e ON e.id = m.event_id "
     "JOIN LATERAL (SELECT * FROM market_snapshots ms WHERE ms.market_id = m.id "
-    "AND ms.cutoff <= %s ORDER BY ms.cutoff DESC, ms.id DESC LIMIT 1) snapshot ON true "
+    "AND ms.cutoff <= %s AND ms.id = ANY(%s::uuid[]) "
+    "ORDER BY ms.cutoff DESC, ms.id DESC LIMIT 1) snapshot ON true "
     "WHERE true"
 )
 
@@ -546,6 +703,7 @@ def _market_row(row: Sequence[object]) -> JsonObject:
         "status": str(row[10]),
         "tradeable": bool(row[11]),
         "metadata": row[12],
+        "outcomes": row[13],
     }
 
 
@@ -578,6 +736,26 @@ def _positive_decimal(value: object, name: str) -> Decimal:
     if not result.is_finite() or result <= 0:
         raise ValueError(f"{name} must be positive")
     return result
+
+
+def _probability(value: object, name: str) -> Decimal:
+    try:
+        result = Decimal(str(value))
+    except InvalidOperation as exc:
+        raise ValueError(f"{name} must be numeric") from exc
+    if not result.is_finite() or not Decimal(0) <= result <= Decimal(1):
+        raise ValueError(f"{name} must be between zero and one")
+    return result
+
+
+def _date_at_midnight_utc(value: object) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError("cycle_date must be an ISO date")
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%d")
+    except ValueError as exc:
+        raise ValueError("cycle_date must be an ISO date") from exc
+    return parsed.replace(tzinfo=UTC)
 
 
 def _money_filter(value: object) -> int:
@@ -647,6 +825,90 @@ def _created_within(value: object, cutoff: datetime, hours: Decimal) -> bool:
     return Decimal(0) <= age_hours <= hours
 
 
+def _bounded_output(value: JsonObject, maximum_tokens: int) -> JsonObject:
+    """Apply the harness' conservative UTF-8 upper bound before returning a tool result.
+
+    The baseline schemas do not expose pagination for tools other than ``get_portfolio``.
+    Lists are therefore shortened deterministically and long descriptive strings are
+    clipped, while identifiers and scalar accounting fields remain intact.
+    """
+    copied = cast(
+        JsonObject,
+        json.loads(json.dumps(value, ensure_ascii=False, default=str)),
+    )
+    if _output_tokens(copied) <= maximum_tokens:
+        return copied
+
+    def clip_strings(item: object) -> None:
+        if isinstance(item, dict):
+            for key, child in tuple(item.items()):
+                if isinstance(child, str) and len(child) > 512:
+                    item[key] = child[:509] + "..."
+                else:
+                    clip_strings(child)
+        elif isinstance(item, list):
+            for child in item:
+                clip_strings(child)
+
+    clip_strings(copied)
+    truncated = True
+    while _output_tokens(copied) > maximum_tokens:
+        lists: list[list[object]] = []
+        strings: list[tuple[dict[str, object], str, str]] = []
+
+        def collect(
+            item: object,
+            target_lists: list[list[object]],
+            target_strings: list[tuple[dict[str, object], str, str]],
+        ) -> None:
+            if isinstance(item, dict):
+                for key, child in item.items():
+                    if isinstance(child, str):
+                        target_strings.append((item, key, child))
+                    else:
+                        collect(child, target_lists, target_strings)
+            elif isinstance(item, list):
+                if item:
+                    target_lists.append(item)
+                for child in item:
+                    collect(child, target_lists, target_strings)
+
+        collect(copied, lists, strings)
+        if lists:
+            target = max(
+                lists,
+                key=lambda rows: max(
+                    (_output_tokens(item) for item in rows if isinstance(item, dict)),
+                    default=len(rows),
+                ),
+            )
+            target.pop()
+            continue
+        shrinkable = [item for item in strings if len(item[2]) > 32]
+        if shrinkable:
+            parent, key, raw = max(shrinkable, key=lambda item: len(item[2]))
+            length = max(32, len(raw) // 2)
+            parent[key] = raw[: length - 3] + "..."
+            continue
+        raise ToolContextUnavailable("tool result cannot fit its configured token ceiling")
+    if truncated and "truncated" not in copied:
+        probe = {**copied, "truncated": True}
+        if _output_tokens(probe) <= maximum_tokens:
+            copied = probe
+    return copied
+
+
+def _output_tokens(value: object) -> int:
+    raw = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    )
+    return max(1, len(raw.encode("utf-8")))
+
+
 def _default_connect(database_url: str) -> AbstractContextManager[_Connection]:
     import psycopg
 
@@ -658,8 +920,13 @@ def production_tool_context(
     claim: CycleClaim,
     exa: ExaResearchProvider,
     *,
+    frozen: Mapping[str, object],
     clock: Callable[[], datetime],
 ) -> ToolContext:
+    market_snapshot_ids = _uuid_list(frozen, "market_snapshot_ids")
+    order_book_snapshot_ids = _uuid_list(frozen, "order_book_snapshot_ids")
+    if not market_snapshot_ids:
+        raise ToolContextUnavailable("market freeze contains no market snapshot membership")
     return ToolContext(
         database_url,
         claim,
@@ -670,4 +937,19 @@ def production_tool_context(
         ),
         _default_connect,
         clock,
+        market_snapshot_ids,
+        order_book_snapshot_ids,
     )
+
+
+def _uuid_list(value: Mapping[str, object], key: str) -> tuple[uuid.UUID, ...]:
+    rows = value.get(key)
+    if not isinstance(rows, list):
+        raise ToolContextUnavailable(f"market freeze lacks {key}")
+    try:
+        result = tuple(uuid.UUID(str(item)) for item in rows)
+    except ValueError as exc:
+        raise ToolContextUnavailable(f"market freeze has malformed {key}") from exc
+    if len(set(result)) != len(result):
+        raise ToolContextUnavailable(f"market freeze has duplicate {key}")
+    return result

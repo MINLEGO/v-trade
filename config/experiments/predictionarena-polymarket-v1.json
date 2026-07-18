@@ -34,6 +34,10 @@
   "research": {
     "enabled_provider": "exa",
     "fallback_provider": null,
+    "tavily": {
+      "enabled": false,
+      "policy": "future_only_no_runtime_calls"
+    },
     "expected_searches_conditional_on_any_search": 8,
     "expected_searches_across_all_cycles": 3.5,
     "expected_searches_classification": "owner_provided_empirical_expectation_not_independently_verified",
@@ -63,10 +67,10 @@
       "maximum_context_tokens": 100000,
       "maximum_prompt_tokens": 88000,
       "maximum_output_tokens": 12000,
-      "estimated_max_cost_micros": 11000,
-      "provider_max_price": {"prompt": "0.09", "completion": "0.18", "request": "0"},
-      "reasoning_effort": null,
-      "reasoning_effort_policy": "provider_default",
+      "estimated_max_cost_micros": 14000,
+      "provider_max_price": {"prompt": "0.12", "completion": "0.24", "request": "0"},
+      "reasoning_effort": "max",
+      "reasoning_effort_policy": "owner_fixed",
       "provider_allowlist": null,
       "provider_selection": "all_compatible_sorted_by_price",
       "allow_provider_fallbacks": true,
@@ -81,10 +85,10 @@
       "maximum_context_tokens": 100000,
       "maximum_prompt_tokens": 88000,
       "maximum_output_tokens": 12000,
-      "estimated_max_cost_micros": 40000,
-      "provider_max_price": {"prompt": "0.348", "completion": "0.696", "request": "0"},
-      "reasoning_effort": null,
-      "reasoning_effort_policy": "provider_default",
+      "estimated_max_cost_micros": 50000,
+      "provider_max_price": {"prompt": "0.44", "completion": "0.88", "request": "0"},
+      "reasoning_effort": "max",
+      "reasoning_effort_policy": "owner_fixed",
       "provider_allowlist": null,
       "provider_selection": "all_compatible_sorted_by_price",
       "allow_provider_fallbacks": true,
@@ -132,7 +136,8 @@
         "exact_slugs": true,
         "deepseek_quantizations": ["fp8"],
         "mimo_quantizations": ["fp8", "unknown"],
-        "reasoning_effort": "provider_default",
+        "reasoning_effort": "max",
+        "reasoning_effort_policy": "owner_fixed",
         "provider_allowlist": "all_compatible",
         "provider_sort": "price",
         "allow_provider_fallbacks": true,
@@ -213,20 +218,27 @@
       "nominal_cost_accounting": "required",
       "unexpected_positive_billed_cost": "halt_alert_and_raise"
     },
+    "tavily_runtime_policy": {
+      "status": "resolved",
+      "required": true,
+      "enabled": false,
+      "policy": "future_only_no_runtime_calls",
+      "credential_presence_does_not_enable_provider": true
+    },
     "provider_request_cost_estimates": {
       "status": "resolved",
       "required": true,
       "resolved_openrouter": {
         "deepseek/deepseek-v4-flash": {
-          "maximum_request_cost_micros": 11000,
-          "maximum_prompt_price_per_million_usd": "0.09",
-          "maximum_completion_price_per_million_usd": "0.18",
+          "maximum_request_cost_micros": 14000,
+          "maximum_prompt_price_per_million_usd": "0.12",
+          "maximum_completion_price_per_million_usd": "0.24",
           "maximum_request_fee_usd": "0"
         },
         "xiaomi/mimo-v2.5-pro": {
-          "maximum_request_cost_micros": 40000,
-          "maximum_prompt_price_per_million_usd": "0.348",
-          "maximum_completion_price_per_million_usd": "0.696",
+          "maximum_request_cost_micros": 50000,
+          "maximum_prompt_price_per_million_usd": "0.44",
+          "maximum_completion_price_per_million_usd": "0.88",
           "maximum_request_fee_usd": "0"
         }
       },

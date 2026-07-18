@@ -1,10 +1,10 @@
 # V-Trade
 
 V-Trade is an auditable, provider-neutral reproduction of PredictionArena's publicly
-documented behavior. The frozen baseline `predictionarena-polymarket-v1` remains
-deliberately `owner_pending`: runtime startup fails closed until the exact
-`get_portfolio` pagination contract is supplied. Worst-case model and research request
-prices are now frozen and enforced before provider calls.
+documented behavior. The frozen baseline is `predictionarena-polymarket-v1`. Owner
+decisions for portfolio pagination, fees, provider routing, retention, and request
+ceilings are frozen in the versioned experiment configuration. Runtime startup still
+fails closed when a required production resource or implementation boundary is unavailable.
 
 ## Local validation
 

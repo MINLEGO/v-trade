@@ -110,7 +110,7 @@ def archived_bid(price: str, *, age: timedelta = timedelta(seconds=1)) -> Archiv
     return ArchivedBid(Decimal(price), NOW - age)
 
 
-def resolution(*, winner: str = "outcome-yes") -> SettlementObservation:
+def resolution(*, winner: str | None = "outcome-yes") -> SettlementObservation:
     return SettlementObservation(
         id="resolution-1",
         market_id="market-1",
@@ -312,6 +312,42 @@ class BrokerScenarioTests(unittest.TestCase):
         )
         self.assertIs(first, second)
         self.assertEqual(first.payout_micros, 10_000_000)
+        self.assertEqual(first.portfolio.positions, ())
+        self.assertEqual(sum(int(p.amount_micros) for p in first.ledger_entry.postings), 0)
+
+    def test_fifty_fifty_settlement_pays_half_per_share_and_is_idempotent(self) -> None:
+        position = PositionState(
+            "market-1",
+            "outcome-yes",
+            Decimal(10),
+            Decimal("0.4"),
+            MicroDollars(4_000_000),
+        )
+        portfolio = PortfolioState(
+            "agent-1", MicroDollars(100_000_000), positions=(position,)
+        )
+        engine = SettlementEngine()
+        split = resolution(winner=None)
+
+        first = engine.settle(
+            resolution=split,
+            position=position,
+            portfolio=portfolio,
+            as_of=NOW,
+            settled_at=NOW,
+        )
+        second = engine.settle(
+            resolution=split,
+            position=position,
+            portfolio=portfolio,
+            as_of=NOW,
+            settled_at=NOW,
+        )
+
+        self.assertIs(first, second)
+        self.assertEqual(first.payout_micros, 5_000_000)
+        self.assertEqual(first.realized_pnl_micros, 1_000_000)
+        self.assertEqual(first.portfolio.cash_micros, 105_000_000)
         self.assertEqual(first.portfolio.positions, ())
         self.assertEqual(sum(int(p.amount_micros) for p in first.ledger_entry.postings), 0)
 

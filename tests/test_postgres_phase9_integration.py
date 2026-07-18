@@ -20,7 +20,7 @@ from vtrade.domain.types import (
     RawArtifact,
     Resolution,
 )
-from vtrade.market_data import PostgresMarketDataRepository
+from vtrade.market_data import FrozenFeePolicyUnavailable, PostgresMarketDataRepository
 from vtrade.polymarket import FeeRateSnapshot
 
 RUN_POSTGRES = os.environ.get("VTRADE_RUN_POSTGRES_INTEGRATION") == "1"
@@ -120,10 +120,20 @@ class PhaseNinePostgresIntegrationTests(unittest.TestCase):
             self.assertEqual(len(persisted.fee_rate_snapshot_ids), 1)
             self.assertEqual(
                 repository.frozen_fee_policy(
-                    token, cutoff=now, maximum_age=timedelta(minutes=5)
+                    token,
+                    cutoff=now,
+                    fee_rate_snapshot_ids=persisted.fee_rate_snapshot_ids,
                 ).rate,
                 Decimal("0.003"),
             )
+            with self.assertRaisesRegex(
+                FrozenFeePolicyUnavailable, "no frozen fee rate exists"
+            ):
+                repository.frozen_fee_policy(
+                    token,
+                    cutoff=now,
+                    fee_rate_snapshot_ids=(uuid.uuid4(),),
+                )
         finally:
             connection.rollback()
             with connection.cursor() as cursor:

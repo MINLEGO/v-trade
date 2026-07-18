@@ -19,6 +19,7 @@ from vtrade.harness import (
     PlanType,
     PrivateAgentMemory,
     PromptBuilder,
+    ToolHandlerError,
     ToolSpec,
     deterministic_critical_learning,
 )
@@ -35,6 +36,8 @@ def config() -> dict:
         "provider_selection": "all_compatible_sorted_by_price",
         "allow_provider_fallbacks": True,
         "cross_model_fallback": False,
+        "reasoning_effort": "max",
+        "reasoning_effort_policy": "owner_fixed",
         "estimated_max_cost_micros": 1,
         "maximum_context_tokens": 100_000,
         "maximum_prompt_tokens": 10_000,
@@ -129,6 +132,91 @@ class HarnessTests(unittest.TestCase):
         result = harness.run([{"role": "user", "content": "go"}], model_config=config())
         self.assertEqual(called, 0)
         self.assertFalse(result.tool_calls[0].success)
+
+    def test_expected_handler_error_is_recorded_but_system_error_propagates(self) -> None:
+        schema = {
+            "type": "function",
+            "function": {
+                "name": "get_market_details",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+        call = {
+            "id": "details-1",
+            "function": {"name": "get_market_details", "arguments": "{}"},
+        }
+
+        def expected(_arguments):
+            raise ToolHandlerError("market is absent from the frozen snapshot")
+
+        expected_harness = BoundedToolHarness(
+            RecordedModelGateway(
+                (
+                    response({"role": "assistant", "tool_calls": [call]}),
+                    response({"role": "assistant", "content": "done"}),
+                ),
+                self.store,
+            ),
+            (ToolSpec(schema, expected, "market"),),
+            limits(),
+            monotonic=lambda: 0,
+        )
+        recorded = expected_harness.run([], model_config=config())
+        self.assertFalse(recorded.tool_calls[0].success)
+        self.assertEqual(recorded.tool_calls[0].output["error"], "ToolHandlerError")
+
+        def system_failure(_arguments):
+            raise RuntimeError("database connection was lost")
+
+        fatal_harness = BoundedToolHarness(
+            RecordedModelGateway(
+                (response({"role": "assistant", "tool_calls": [call]}),), self.store
+            ),
+            (ToolSpec(schema, system_failure, "market"),),
+            limits(),
+            monotonic=lambda: 0,
+        )
+        with self.assertRaisesRegex(RuntimeError, "database connection"):
+            fatal_harness.run([], model_config=config())
+
+    def test_duplicate_tool_call_ids_never_reach_any_handler(self) -> None:
+        called = 0
+
+        def handler(_arguments):
+            nonlocal called
+            called += 1
+            return {"ok": True}
+
+        schema = {
+            "type": "function",
+            "function": {
+                "name": "get_balance",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+        duplicate = {
+            "id": "same-provider-id",
+            "function": {"name": "get_balance", "arguments": "{}"},
+        }
+        harness = BoundedToolHarness(
+            RecordedModelGateway(
+                (
+                    response({"role": "assistant", "tool_calls": [duplicate, duplicate]}),
+                    response({"role": "assistant", "content": "done"}),
+                ),
+                self.store,
+            ),
+            (ToolSpec(schema, handler, "account"),),
+            limits(),
+            monotonic=lambda: 0,
+        )
+        result = harness.run([], model_config=config())
+        self.assertEqual(called, 0)
+        self.assertEqual(len(result.tool_calls), 2)
+        self.assertTrue(all(not record.success for record in result.tool_calls))
+        self.assertTrue(
+            all("duplicate" in str(record.output) for record in result.tool_calls)
+        )
 
     def test_web_search_batch_above_strict_fifty_is_rejected_before_execution(self) -> None:
         called = 0

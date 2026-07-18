@@ -44,7 +44,7 @@ upgrades observed behavior into a claim about unpublished internals.
 | Versioned discovery policy | inferred | Thresholds unpublished |
 | Bounded multi-turn tool loop | documented | Ordered tool-call traces demonstrate a loop |
 | Track cycle and tool statuses separately | inferred | Failed cycles contain successful calls |
-| About 13 Exa searches/cycle planning assumption | inferred | Capacity assumption, not trace-established behavior |
+| 8 searches conditional on any search; 3.5 across all cycles | owner-provided empirical expectation | Planning figures supplied by the owner; not independently trace-verified |
 | $40 monthly billed external-API circuit breaker, excluding free-plan Exa | vtrade_deviation | Frozen owner budget; positive billed Exa cost halts Exa |
 | 18,000 monthly Exa requests and 18,000 monthly Exa credits | vtrade_deviation | Frozen owner caps, atomically reserved in PostgreSQL |
 | Deterministic critical learning without another LLM | inferred | Unpublished mechanism and cost control |

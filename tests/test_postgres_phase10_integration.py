@@ -9,7 +9,7 @@ from decimal import Decimal
 from typing import Any
 
 from vtrade.harness_repository import PostgresBudgetGuard
-from vtrade.providers import BudgetExceeded
+from vtrade.providers import EXA_MAX_CREDITS_PER_SEARCH, BudgetExceeded
 
 RUN_POSTGRES = os.environ.get("VTRADE_RUN_POSTGRES_INTEGRATION") == "1"
 
@@ -38,7 +38,7 @@ class PhaseTenPostgresIntegrationTests(unittest.TestCase):
                 cursor.execute(
                     "INSERT INTO monthly_exa_quotas "
                     "(month_start, request_count, credit_count, updated_at) "
-                    "VALUES (%s, 17999, 17999, %s)",
+                    "VALUES (%s, 17999, 17989, %s)",
                     (first_month, current[0]),
                 )
 
@@ -51,20 +51,33 @@ class PhaseTenPostgresIntegrationTests(unittest.TestCase):
                 clock=lambda: current[0],
             )
             final_slot = guard.reserve(
-                "exa", 20_000, request_count=1, credit_count=Decimal(1)
+                "exa",
+                20_000,
+                request_count=1,
+                credit_count=EXA_MAX_CREDITS_PER_SEARCH,
             )
             reservation_ids.append(uuid.UUID(final_slot.id))
             with self.assertRaisesRegex(BudgetExceeded, "cap reached"):
-                guard.reserve("exa", 20_000, request_count=1, credit_count=Decimal(1))
+                guard.reserve(
+                    "exa",
+                    20_000,
+                    request_count=1,
+                    credit_count=EXA_MAX_CREDITS_PER_SEARCH,
+                )
             guard.reconcile(
                 final_slot,
                 billed_cost_micros=0,
                 nominal_cost_micros=20_000,
                 request_count=1,
-                credit_count=Decimal(1),
+                credit_count=EXA_MAX_CREDITS_PER_SEARCH,
             )
             with self.assertRaisesRegex(BudgetExceeded, "cap reached"):
-                guard.reserve("exa", 20_000, request_count=1, credit_count=Decimal(1))
+                guard.reserve(
+                    "exa",
+                    20_000,
+                    request_count=1,
+                    credit_count=EXA_MAX_CREDITS_PER_SEARCH,
+                )
 
             with connection.cursor() as cursor:
                 cursor.execute(
@@ -74,7 +87,7 @@ class PhaseTenPostgresIntegrationTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     cursor.fetchone(),
-                    (18_000, Decimal("18000.000000"), 20_000, False),
+                    (18_000, Decimal("17999.000000"), 20_000, False),
                 )
                 cursor.execute(
                     "SELECT count(*) FROM provider_budget_reservations "
@@ -90,7 +103,10 @@ class PhaseTenPostgresIntegrationTests(unittest.TestCase):
 
             current[0] = current[0].replace(month=2)
             charged = guard.reserve(
-                "exa", 20_000, request_count=1, credit_count=Decimal(1)
+                "exa",
+                20_000,
+                request_count=1,
+                credit_count=EXA_MAX_CREDITS_PER_SEARCH,
             )
             reservation_ids.append(uuid.UUID(charged.id))
             with self.assertRaisesRegex(BudgetExceeded, "Exa usage recorded"):

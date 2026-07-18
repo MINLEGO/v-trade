@@ -144,7 +144,7 @@ class MarketDelta:
 @dataclass(frozen=True, slots=True)
 class Resolution:
     market_id: str
-    winning_outcome_id: str
+    winning_outcome_id: str | None
     result: str
     source_created_at: datetime
     observed_at: datetime
