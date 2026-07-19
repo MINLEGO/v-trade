@@ -247,7 +247,7 @@ def _bounded_items(
 
 def _token_upper_bound(value: object) -> int:
     raw = json.dumps(value, separators=(",", ":"), ensure_ascii=False, sort_keys=True)
-    return max(1, len(raw.encode("utf-8")))
+    return max(1, (len(raw.encode("utf-8")) + 3) // 4)
 
 
 def _cursor_hash(token: str) -> str:

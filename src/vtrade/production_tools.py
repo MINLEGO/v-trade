@@ -906,7 +906,7 @@ def _output_tokens(value: object) -> int:
         ensure_ascii=False,
         default=str,
     )
-    return max(1, len(raw.encode("utf-8")))
+    return max(1, (len(raw.encode("utf-8")) + 3) // 4)
 
 
 def _default_connect(database_url: str) -> AbstractContextManager[_Connection]:
