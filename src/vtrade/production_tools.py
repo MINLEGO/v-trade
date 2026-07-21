@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
@@ -286,7 +287,7 @@ class ProductionToolRegistry:
                     "newest_market_created_at": None,
                 },
             )
-            cast(list[JsonObject], event["markets"]).append(_market_row(row))
+            cast(list[JsonObject], event["markets"]).append(_discovery_card(row))
             event["volume_24hr_micros"] = int(event["volume_24hr_micros"]) + _metadata_money(
                 row[12], "volume_24hr"
             )
@@ -319,7 +320,7 @@ class ProductionToolRegistry:
     def _market_output(self, rows: Sequence[Sequence[object]]) -> JsonObject:
         return {
             "as_of": self._context.cutoff.isoformat(),
-            "markets": [_market_row(row) for row in rows],
+            "markets": [_discovery_card(row) for row in rows],
         }
 
     def _web_search(self, arguments: JsonObject) -> ToolExecution:
@@ -689,6 +690,19 @@ _MARKET_SELECT = (
 
 
 def _market_row(row: Sequence[object]) -> JsonObject:
+    raw_outcomes = row[13]
+    if isinstance(raw_outcomes, list):
+        outcomes: list[object] = []
+        for o in raw_outcomes:
+            if isinstance(o, dict):
+                entry: JsonObject = dict(o)
+                if "venue_token_id" in entry and "token_id" not in entry:
+                    entry["token_id"] = str(entry["venue_token_id"]) #venue_token_id is mapped to token_id for ergonomics (consistency with get_orderbook)
+                outcomes.append(entry)
+            else:
+                outcomes.append(o)
+    else:
+        outcomes = []
     return {
         "id": str(row[0]),
         "venue_market_id": str(row[1]),
@@ -703,7 +717,53 @@ def _market_row(row: Sequence[object]) -> JsonObject:
         "status": str(row[10]),
         "tradeable": bool(row[11]),
         "metadata": row[12],
-        "outcomes": row[13],
+        "outcomes": outcomes,
+    }
+
+
+_DISCOVERY_CARD_LOG = logging.getLogger("vtrade.discovery_card")
+
+
+def _discovery_card(row: Sequence[object]) -> JsonObject:
+    meta = _metadata(row[12])
+    tag_names: list[str] = []
+    raw_tags = meta.get("tags")
+    tag_list = raw_tags if isinstance(raw_tags, list) else []
+    for t in tag_list:
+        if isinstance(t, dict):
+            label = t.get("label") or t.get("name")
+            if label:
+                tag_names.append(str(label))
+            else:
+                _DISCOVERY_CARD_LOG.warning(
+                    "skipping tag with no label/name: %s", t
+                )
+        elif isinstance(t, str):
+            tag_names.append(t)
+    raw_outcomes = row[13]
+    outcomes: list[JsonObject] = []
+    if isinstance(raw_outcomes, list):
+        for o in raw_outcomes:
+            if isinstance(o, dict):
+                outcomes.append({
+                    "name": o.get("name", ""),
+                    "indicative_price": str(o.get("price", "")),
+                    "token_id": str(o.get("venue_token_id", o.get("token_id", ""))),
+                })
+    return {
+        "id": str(row[0]),
+        "slug": str(row[2]),
+        "event_id": str(row[3]),
+        "question": str(row[4]),
+        "closes_at": str(row[7]) if row[7] else None,
+        "volume_micros": int(str(row[8])),
+        "liquidity_micros": int(str(row[9])),
+        "status": str(row[10]),
+        "tradeable": bool(row[11]),
+        "competitive": float(str(_metadata_decimal(row[12], "competitive"))),
+        "volume_24hr_micros": _metadata_money(row[12], "volume_24hr"),
+        "tag_names": tag_names,
+        "outcomes": outcomes,
     }
 
 

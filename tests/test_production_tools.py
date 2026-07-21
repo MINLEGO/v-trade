@@ -169,7 +169,7 @@ class ProductionToolRegistryTests(unittest.TestCase):
         tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
         output = tools["get_all_active_markets"].handler({"limit": 1})
         self.assertEqual(output["markets"][0]["question"], "Snapshot question")
-        self.assertEqual(output["markets"][0]["outcomes"][0]["venue_token_id"], "token")
+        self.assertEqual(output["markets"][0]["outcomes"][0]["token_id"], "token")
         query, params = cursor.queries[0]
         self.assertIn("snapshot.payload->>'question'", query)
         self.assertIn("ms.id = ANY(%s::uuid[])", query)
