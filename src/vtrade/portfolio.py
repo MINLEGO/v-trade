@@ -135,6 +135,7 @@ class PostgresPortfolioHandler:
             "SELECT %s, p.id, jsonb_build_object(" 
             "'position_id', p.id::text, 'market_id', m.id::text, "
             "'market_question', m.question, 'outcome_id', o.id::text, "
+            "'venue_token_id', o.venue_token_id, "
             "'outcome', o.name, 'shares', p.shares::text, "
             "'average_cost', p.average_cost::text, "
             "'cost_basis_micros', p.cost_basis_micros, "

@@ -137,6 +137,8 @@ class ProductionToolRegistryTests(unittest.TestCase):
         tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
         output = tools["get_orderbook"].handler({"token_id": "token"})
         self.assertEqual(output["best_bid"], "0.49")
+        self.assertEqual(output["lookup"], {"token_id": "token"})
+        self.assertEqual(output["depth"], 5)
         query, params = cursor.queries[0]
         self.assertIn("obs.cutoff <= %s", query)
         self.assertEqual(params[0], "token")
@@ -168,12 +170,42 @@ class ProductionToolRegistryTests(unittest.TestCase):
         cursor = _Cursor()
         tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
         output = tools["get_all_active_markets"].handler({"limit": 1})
-        self.assertEqual(output["markets"][0]["question"], "Snapshot question")
-        self.assertEqual(output["markets"][0]["outcomes"][0]["token_id"], "token")
+        card = output["markets"][0]
+        self.assertEqual(card["question"], "Snapshot question")
+        self.assertEqual(card["market_ref"], "venue-market")
+        self.assertEqual(card["outcomes"][0], {"name": "Yes", "indicative_price": ""})
+        self.assertNotIn("slug", card)
+        self.assertNotIn("token_id", card["outcomes"][0])
         query, params = cursor.queries[0]
         self.assertIn("snapshot.payload->>'question'", query)
         self.assertIn("ms.id = ANY(%s::uuid[])", query)
         self.assertEqual(len(params[1]), 1)
+
+    def test_market_details_resolves_candidate_market_ref_and_returns_canonical_slug(self) -> None:
+        cursor = _Cursor()
+        tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
+        output = tools["get_market_details"].handler({"market_ref": "venue-market"})
+        self.assertEqual(output["market"]["market_ref"], "venue-market")
+        self.assertEqual(output["market"]["canonical_slug"], "snapshot-slug")
+        query, params = cursor.queries[0]
+        self.assertIn("COALESCE(snapshot.payload->>'venue_market_id', m.id::text) = %s", query)
+        self.assertEqual(params[2], "venue-market")
+
+    def test_market_details_requires_one_explicit_lookup_reference(self) -> None:
+        cursor = _Cursor()
+        tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            tools["get_market_details"].handler({})
+
+    def test_orderbook_accepts_typed_outcome_reference(self) -> None:
+        cursor = _Cursor()
+        tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
+        outcome_id = str(uuid.uuid4())
+        output = tools["get_orderbook"].handler({"outcome_id": outcome_id})
+        self.assertEqual(output["lookup"]["outcome_id"], outcome_id)
+        query, params = cursor.queries[0]
+        self.assertIn("o.id = %s::uuid", query)
+        self.assertEqual(params[0], outcome_id)
 
     def test_include_inactive_beliefs_really_returns_inactive_rows(self) -> None:
         cursor = _Cursor()

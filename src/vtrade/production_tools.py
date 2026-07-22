@@ -191,15 +191,23 @@ class ProductionToolRegistry:
         if name in {"discover_events", "list_top_events", "get_newest_events"}:
             return self._discover_event_groups(name, arguments)
         if name == "get_market_details":
-            slug = _required_string(arguments, "slug")
+            lookup_key, lookup_value = _market_lookup(arguments)
+            if lookup_key == "slug":
+                predicate = "snapshot.payload->>'slug' = %s"
+            elif lookup_key == "market_ref":
+                predicate = "COALESCE(snapshot.payload->>'venue_market_id', m.id::text) = %s"
+            else:
+                predicate = "m.id::text = %s"
             rows = self._query(
-                _MARKET_SELECT + " AND snapshot.payload->>'slug' = %s "
+                _MARKET_SELECT + " AND " + predicate + " "
                 "ORDER BY snapshot.cutoff DESC LIMIT 1",
-                (self._context.cutoff, list(self._context.market_snapshot_ids), slug),
+                (self._context.cutoff, list(self._context.market_snapshot_ids), lookup_value),
             )
             if not rows:
-                raise ToolContextUnavailable("market slug is absent from frozen snapshots")
-            return {"as_of": self._context.cutoff.isoformat(), "market": _market_row(rows[0])}
+                raise ToolContextUnavailable("market is absent from frozen snapshots")
+            market = _market_row(rows[0])
+            market["canonical_slug"] = market["slug"]
+            return {"as_of": self._context.cutoff.isoformat(), "market": market}
         if name == "get_event_markets":
             event_id = _required_string(arguments, "event_id")
             rows = self._query(
@@ -335,15 +343,20 @@ class ProductionToolRegistry:
         return ToolExecution(response.output, (response.telemetry,))
 
     def _get_orderbook(self, arguments: JsonObject) -> JsonObject:
-        token = _required_string(arguments, "token_id")
+        lookup_key, lookup_value = _orderbook_lookup(arguments)
+        predicate = (
+            "o.id = %s::uuid"
+            if lookup_key == "outcome_id"
+            else "o.venue_token_id = %s"
+        )
         rows = self._query(
             "SELECT obs.id, obs.cutoff, obs.source_created_at, obs.bids, obs.asks, "
             "obs.best_bid, obs.best_ask, obs.raw_sha256 FROM order_book_snapshots obs "
-            "JOIN outcomes o ON o.id = obs.outcome_id WHERE o.venue_token_id = %s "
+            "JOIN outcomes o ON o.id = obs.outcome_id WHERE " + predicate + " "
             "AND obs.id = ANY(%s::uuid[]) AND obs.cutoff <= %s "
             "ORDER BY obs.cutoff DESC, obs.id DESC LIMIT 1",
             (
-                token,
+                lookup_value,
                 list(self._context.order_book_snapshot_ids),
                 self._context.cutoff,
             ),
@@ -369,11 +382,13 @@ class ProductionToolRegistry:
             "snapshot_id": str(row[0]),
             "observed_at": observed_at.isoformat(),
             "source_created_at": source_created_at.isoformat() if source_created_at else None,
-            "bids": row[3],
-            "asks": row[4],
+            "lookup": {lookup_key: lookup_value},
+            "bids": _book_levels(row[3]),
+            "asks": _book_levels(row[4]),
             "best_bid": str(row[5]) if row[5] is not None else None,
             "best_ask": str(row[6]) if row[6] is not None else None,
             "raw_sha256": str(row[7]),
+            "depth": 5,
         }
 
     def _get_balance(self, _arguments: JsonObject) -> JsonObject:
@@ -697,7 +712,8 @@ def _market_row(row: Sequence[object]) -> JsonObject:
             if isinstance(o, dict):
                 entry: JsonObject = dict(o)
                 if "venue_token_id" in entry and "token_id" not in entry:
-                    entry["token_id"] = str(entry["venue_token_id"]) #venue_token_id is mapped to token_id for ergonomics (consistency with get_orderbook)
+                    # Keep the legacy alias in full details only.
+                    entry["token_id"] = str(entry["venue_token_id"])
                 outcomes.append(entry)
             else:
                 outcomes.append(o)
@@ -706,6 +722,7 @@ def _market_row(row: Sequence[object]) -> JsonObject:
     return {
         "id": str(row[0]),
         "venue_market_id": str(row[1]),
+        "market_ref": _market_ref(row),
         "slug": str(row[2]),
         "event_id": str(row[3]),
         "question": str(row[4]),
@@ -748,23 +765,58 @@ def _discovery_card(row: Sequence[object]) -> JsonObject:
                 outcomes.append({
                     "name": o.get("name", ""),
                     "indicative_price": str(o.get("price", "")),
-                    "token_id": str(o.get("venue_token_id", o.get("token_id", ""))),
                 })
     return {
-        "id": str(row[0]),
-        "slug": str(row[2]),
-        "event_id": str(row[3]),
+        "market_ref": _market_ref(row),
         "question": str(row[4]),
         "closes_at": str(row[7]) if row[7] else None,
-        "volume_micros": int(str(row[8])),
+        "volume_24h_micros": _metadata_money(row[12], "volume_24hr"),
         "liquidity_micros": int(str(row[9])),
         "status": str(row[10]),
         "tradeable": bool(row[11]),
         "competitive": float(str(_metadata_decimal(row[12], "competitive"))),
-        "volume_24hr_micros": _metadata_money(row[12], "volume_24hr"),
         "tag_names": tag_names,
         "outcomes": outcomes,
     }
+
+
+def _market_lookup(arguments: Mapping[str, object]) -> tuple[str, str]:
+    supplied = [
+        (key, arguments.get(key))
+        for key in ("market_ref", "market_id", "slug")
+        if isinstance(arguments.get(key), str) and str(arguments[key]).strip()
+    ]
+    if len(supplied) != 1:
+        raise ValueError("exactly one of market_ref, market_id, or slug is required")
+    key, value = supplied[0]
+    return key, str(value).strip()
+
+
+def _market_ref(row: Sequence[object]) -> str:
+    venue_market_id = row[1]
+    if venue_market_id is not None and str(venue_market_id).strip():
+        return str(venue_market_id)
+    return str(row[0])
+
+
+def _orderbook_lookup(arguments: Mapping[str, object]) -> tuple[str, str]:
+    supplied = [
+        (key, arguments.get(key))
+        for key in ("venue_token_id", "outcome_id", "token_id")
+        if isinstance(arguments.get(key), str) and str(arguments[key]).strip()
+    ]
+    if len(supplied) != 1:
+        raise ValueError(
+            "exactly one of venue_token_id, outcome_id, or token_id is required"
+        )
+    key, value = supplied[0]
+    return key, str(value).strip()
+
+
+def _book_levels(value: object, maximum: int = 5) -> list[object]:
+    if not isinstance(value, list):
+        return []
+    return value[:maximum]
 
 
 def _named(row: Sequence[object], names: Sequence[str]) -> JsonObject:

@@ -120,13 +120,17 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "market_ref": {
+            "type": "string"
+          },
+          "market_id": {
+            "type": "string"
+          },
           "slug": {
             "type": "string"
           }
         },
-        "required": [
-          "slug"
-        ]
+        "required": []
       },
       "output_schema": {
         "type": "object",
@@ -162,13 +166,17 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "venue_token_id": {
+            "type": "string"
+          },
+          "outcome_id": {
+            "type": "string"
+          },
           "token_id": {
             "type": "string"
           }
         },
-        "required": [
-          "token_id"
-        ]
+        "required": []
       },
       "output_schema": {
         "type": "object",
