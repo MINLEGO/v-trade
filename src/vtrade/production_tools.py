@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import logging
 import uuid
@@ -79,6 +81,25 @@ class ToolContext:
         return value.astimezone(UTC)
 
 
+_PAGINATED_DISCOVERY_TOOLS = frozenset(
+    {
+        "discover_hot_markets",
+        "discover_by_time_remaining",
+        "discover_events",
+        "list_top_events",
+        "browse_markets_by_volume",
+        "discover_by_price_volatility",
+        "get_event_markets",
+        "get_newest_events",
+        "get_all_active_markets",
+        "discover_by_volume_trend",
+        "discover_by_competitive_score",
+        "discover_by_date_range",
+        "search_tags",
+    }
+)
+
+
 class ProductionToolRegistry:
     """Exact 29-name registry backed only by frozen DB state and real providers."""
 
@@ -132,6 +153,8 @@ class ProductionToolRegistry:
         handler: Callable[[JsonObject], JsonObject | ToolExecution],
     ) -> Callable[[JsonObject], JsonObject | ToolExecution]:
         if name == "get_portfolio":
+            return handler
+        if name in _PAGINATED_DISCOVERY_TOOLS:
             return handler
 
         def bounded(arguments: JsonObject) -> JsonObject | ToolExecution:
@@ -213,7 +236,7 @@ class ProductionToolRegistry:
             rows = self._query(
                 _MARKET_SELECT
                 + " AND (snapshot.payload->>'event_id' = %s OR e.venue_event_id = %s) "
-                "ORDER BY snapshot.volume_micros DESC LIMIT 100",
+                "ORDER BY snapshot.volume_micros DESC",
                 (
                     self._context.cutoff,
                     list(self._context.market_snapshot_ids),
@@ -221,13 +244,16 @@ class ProductionToolRegistry:
                     event_id,
                 ),
             )
-            return self._market_output(rows)
+            return self._market_output(rows, name=name, arguments=arguments)
         if name == "search_tags":
             query = _required_string(arguments, "query").casefold()
-            rows = self._market_rows(100)
-            return self._market_output([row for row in rows if query in str(row[12]).casefold()])
-        limit = _limit(arguments, default=20)
-        rows = list(self._market_rows(100))
+            rows = self._market_rows()
+            return self._market_output(
+                [row for row in rows if query in str(row[12]).casefold()],
+                name=name,
+                arguments=arguments,
+            )
+        rows = list(self._market_rows())
         keyword = str(arguments.get("keyword") or "").casefold()
         minimum_liquidity = _money_filter(arguments.get("min_liquidity", 0))
         minimum_volume = _money_filter(arguments.get("min_volume_24hr", 0))
@@ -274,12 +300,11 @@ class ProductionToolRegistry:
             rows.sort(
                 key=lambda row: (int(str(row[8])), int(str(row[9])), str(row[0])), reverse=True
             )
-        return self._market_output(rows[:limit])
+        return self._market_output(rows, name=name, arguments=arguments)
 
     def _discover_event_groups(self, name: str, arguments: JsonObject) -> JsonObject:
-        limit = _limit(arguments, default=20)
         keyword = str(arguments.get("keyword") or "").casefold()
-        markets = list(self._market_rows(100))
+        markets = list(self._market_rows())
         grouped: dict[str, JsonObject] = {}
         for row in markets:
             event_id = str(row[3])
@@ -315,21 +340,50 @@ class ProductionToolRegistry:
             values.sort(key=lambda event: int(event["volume_24hr_micros"]), reverse=True)
         else:
             values.sort(key=lambda event: int(event["total_volume_micros"]), reverse=True)
-        return {"as_of": self._context.cutoff.isoformat(), "events": values[:limit]}
-
-    def _market_rows(self, limit: int) -> Sequence[Sequence[object]]:
-        return self._query(
-            _MARKET_SELECT + " AND snapshot.status = 'open' "
-            "AND COALESCE((snapshot.payload->>'tradeable')::boolean, false) "
-            "ORDER BY snapshot.volume_micros DESC, m.id LIMIT %s",
-            (self._context.cutoff, list(self._context.market_snapshot_ids), limit),
+        limit, offset = _page_parameters(name, arguments, self._context.cutoff)
+        return _paged_output(
+            "events",
+            values,
+            name=name,
+            arguments=arguments,
+            cutoff=self._context.cutoff,
+            limit=limit,
+            offset=offset,
+            maximum_tokens=self._context.maximum_default_result_tokens,
+            as_of=self._context.cutoff.isoformat(),
         )
 
-    def _market_output(self, rows: Sequence[Sequence[object]]) -> JsonObject:
-        return {
-            "as_of": self._context.cutoff.isoformat(),
-            "markets": [_discovery_card(row) for row in rows],
-        }
+    def _market_rows(self, limit: int | None = None) -> Sequence[Sequence[object]]:
+        query = (
+            _MARKET_SELECT + " AND snapshot.status = 'open' "
+            "AND COALESCE((snapshot.payload->>'tradeable')::boolean, false) "
+            "ORDER BY snapshot.volume_micros DESC, m.id"
+        )
+        params: list[object] = [self._context.cutoff, list(self._context.market_snapshot_ids)]
+        if limit is not None:
+            query += " LIMIT %s"
+            params.append(limit)
+        return self._query(query, tuple(params))
+
+    def _market_output(
+        self,
+        rows: Sequence[Sequence[object]],
+        *,
+        name: str,
+        arguments: JsonObject,
+    ) -> JsonObject:
+        limit, offset = _page_parameters(name, arguments, self._context.cutoff)
+        return _paged_output(
+            "markets",
+            [_discovery_card(row) for row in rows],
+            name=name,
+            arguments=arguments,
+            cutoff=self._context.cutoff,
+            limit=limit,
+            offset=offset,
+            maximum_tokens=self._context.maximum_default_result_tokens,
+            as_of=self._context.cutoff.isoformat(),
+        )
 
     def _web_search(self, arguments: JsonObject) -> ToolExecution:
         response = self._context.exa.search(
@@ -799,6 +853,161 @@ def _market_ref(row: Sequence[object]) -> str:
     return str(row[0])
 
 
+def _page_parameters(
+    tool_name: str,
+    arguments: Mapping[str, object],
+    cutoff: datetime,
+) -> tuple[int, int]:
+    limit = _limit(arguments, default=20)
+    raw_cursor = arguments.get("cursor")
+    if raw_cursor is None:
+        return limit, 0
+    if not isinstance(raw_cursor, str) or not raw_cursor:
+        raise ValueError("cursor must be a non-empty opaque string")
+    try:
+        padded = raw_cursor + "=" * (-len(raw_cursor) % 4)
+        decoded = base64.urlsafe_b64decode(padded.encode("ascii"))
+        payload = json.loads(decoded.decode("utf-8"))
+    except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("cursor is malformed") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("cursor is malformed")
+    if payload.get("version") != 1 or payload.get("tool") != tool_name:
+        raise ValueError("cursor does not belong to this discovery tool")
+    if payload.get("fingerprint") != _discovery_fingerprint(tool_name, arguments, cutoff):
+        raise ValueError("cursor does not match the discovery arguments or cutoff")
+    offset = payload.get("offset")
+    if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+        raise ValueError("cursor offset is malformed")
+    return limit, offset
+
+
+def _discovery_fingerprint(
+    tool_name: str,
+    arguments: Mapping[str, object],
+    cutoff: datetime,
+) -> str:
+    relevant_arguments = {
+        key: value
+        for key, value in arguments.items()
+        if key not in {"cursor", "limit"}
+    }
+    encoded = json.dumps(
+        {
+            "tool": tool_name,
+            "cutoff": cutoff.isoformat(),
+            "arguments": relevant_arguments,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _discovery_cursor(
+    tool_name: str,
+    arguments: Mapping[str, object],
+    cutoff: datetime,
+    offset: int,
+) -> str:
+    payload = {
+        "version": 1,
+        "tool": tool_name,
+        "fingerprint": _discovery_fingerprint(tool_name, arguments, cutoff),
+        "offset": offset,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return base64.urlsafe_b64encode(encoded.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def _paged_output(
+    item_key: str,
+    items: Sequence[object],
+    *,
+    name: str,
+    arguments: JsonObject,
+    cutoff: datetime,
+    limit: int,
+    offset: int,
+    maximum_tokens: int,
+    as_of: str,
+) -> JsonObject:
+    if offset > len(items):
+        raise ValueError("cursor offset is outside the frozen discovery result")
+    selected = [
+        cast(object, json.loads(json.dumps(item, ensure_ascii=False, default=str)))
+        for item in items[offset : offset + limit]
+    ]
+    payload_truncated = False
+    while True:
+        next_offset = offset + len(selected)
+        has_more = next_offset < len(items)
+        output: JsonObject = {
+            "as_of": as_of,
+            item_key: selected,
+            "next_cursor": (
+                _discovery_cursor(name, arguments, cutoff, next_offset) if has_more else None
+            ),
+            "has_more": has_more,
+            "payload_truncated": payload_truncated,
+        }
+        if _output_tokens(output) <= maximum_tokens:
+            return output
+        if len(selected) > 1:
+            selected.pop()
+            payload_truncated = True
+            continue
+        if not selected:
+            raise ToolContextUnavailable("one discovery page cannot fit its result ceiling")
+        _clip_strings(selected[0])
+        payload_truncated = True
+        output[item_key] = selected
+        if _output_tokens(output) <= maximum_tokens:
+            return output
+        if not _trim_nested_lists(selected[0], maximum_tokens, output, item_key):
+            raise ToolContextUnavailable("one discovery candidate cannot fit its result ceiling")
+
+
+def _clip_strings(item: object, maximum_length: int = 512) -> None:
+    if isinstance(item, dict):
+        for key, child in tuple(item.items()):
+            if isinstance(child, str) and len(child) > maximum_length:
+                item[key] = child[: maximum_length - 3] + "..."
+            else:
+                _clip_strings(child, maximum_length)
+    elif isinstance(item, list):
+        for child in item:
+            _clip_strings(child, maximum_length)
+
+
+def _trim_nested_lists(
+    item: object,
+    maximum_tokens: int,
+    output: JsonObject,
+    item_key: str,
+) -> bool:
+    lists: list[list[object]] = []
+
+    def collect(value: object) -> None:
+        if isinstance(value, dict):
+            for child in value.values():
+                collect(child)
+        elif isinstance(value, list):
+            if value:
+                lists.append(value)
+            for child in value:
+                collect(child)
+
+    while _output_tokens(output) > maximum_tokens:
+        lists.clear()
+        collect(item)
+        if not lists:
+            return False
+        max(lists, key=_output_tokens).pop()
+    return True
+
+
 def _orderbook_lookup(arguments: Mapping[str, object]) -> tuple[str, str]:
     supplied = [
         (key, arguments.get(key))
@@ -940,9 +1149,9 @@ def _created_within(value: object, cutoff: datetime, hours: Decimal) -> bool:
 def _bounded_output(value: JsonObject, maximum_tokens: int) -> JsonObject:
     """Apply the harness' conservative UTF-8 upper bound before returning a tool result.
 
-    The baseline schemas do not expose pagination for tools other than ``get_portfolio``.
-    Lists are therefore shortened deterministically and long descriptive strings are
-    clipped, while identifiers and scalar accounting fields remain intact.
+    Non-paginated tool results are shortened deterministically and long descriptive
+    strings are clipped, while identifiers and scalar accounting fields remain intact.
+    Discovery handlers assemble pages before this safety-net is applied.
     """
     copied = cast(
         JsonObject,
@@ -963,7 +1172,6 @@ def _bounded_output(value: JsonObject, maximum_tokens: int) -> JsonObject:
                 clip_strings(child)
 
     clip_strings(copied)
-    truncated = True
     while _output_tokens(copied) > maximum_tokens:
         lists: list[list[object]] = []
         strings: list[tuple[dict[str, object], str, str]] = []
@@ -1003,10 +1211,7 @@ def _bounded_output(value: JsonObject, maximum_tokens: int) -> JsonObject:
             parent[key] = raw[: length - 3] + "..."
             continue
         raise ToolContextUnavailable("tool result cannot fit its configured token ceiling")
-    if truncated and "truncated" not in copied:
-        probe = {**copied, "truncated": True}
-        if _output_tokens(probe) <= maximum_tokens:
-            copied = probe
+    copied["payload_truncated"] = True
     return copied
 
 

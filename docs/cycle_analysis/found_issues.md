@@ -93,7 +93,7 @@ when listing markets, we can aggressively strip tags as well as token / ids if t
 
 1. **Fix fee rate**: Verify the Polymarket fee-rate API returns `base_fee` in the expected unit. If the test environment uses an artificially high rate, configure a realistic fee rate (10-30 bps). If the formula is wrong, correct it.
 
-2. **Expand frozen snapshot scope**: Increase the number of market snapshots frozen per cycle (currently 10-11). The `freeze()` method at [`market_data.py:391-484`](src/vtrade/market_data.py:391) uses `maximum_additional_outcomes=20` and `venue_batch_size=20` — these could be increased.
+2. **Expand frozen snapshot scope**: Increase the number of market snapshots frozen per cycle (currently 10-11). The `freeze()` method at [`market_data.py:391-484`](src/vtrade/market_data.py:391) now separates active historical discovery outcomes from resolution history and limits new candidates at the market level (`maximum_additional_markets=20`); the market and venue batch bounds can still be increased deliberately.
 
 3. **Add pagination to market queries**: Implement cursor-based pagination in `_market_rows()` and expose a `cursor`/`next_cursor` parameter in discovery tools.
 

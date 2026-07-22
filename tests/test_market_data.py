@@ -29,7 +29,13 @@ NOW = datetime(2026, 7, 16, 10, 5, tzinfo=UTC)
 ARTIFACT = RawArtifact("a" * 64, 10, "supabase://private/aa/a.json.gz")
 
 
-def _market(index: int, volume: int) -> Market:
+def _market(
+    index: int,
+    volume: int,
+    *,
+    status: MarketStatus = MarketStatus.OPEN,
+    tradeable: bool = True,
+) -> Market:
     event = f"polymarket:event:e-{index}"
     market_id = f"polymarket:market:m-{index}"
     outcomes = tuple(
@@ -44,7 +50,7 @@ def _market(index: int, volume: int) -> Market:
             MicroDollars(1_000_000),
             offset,
             Decimal("0.5"),
-            True,
+            tradeable,
         )
         for offset, side in enumerate(("YES", "NO"))
     )
@@ -56,14 +62,14 @@ def _market(index: int, volume: int) -> Market:
         "rules",
         NOW - timedelta(days=1),
         NOW + timedelta(days=1),
-        MarketStatus.OPEN,
+        status,
         None,
         MicroDollars(volume),
         MicroDollars(volume),
         {"condition_id": f"condition-{index}"},
         f"market-{index}",
         None,
-        True,
+        tradeable,
         outcomes,
         NOW,
         NOW,
@@ -101,10 +107,16 @@ class _Repository:
         *,
         held_tokens: tuple[str, ...] = (),
         held_markets: tuple[str, ...] = (),
+        historical_discovery_tokens: tuple[str, ...] = (),
+        historical_tokens: tuple[str, ...] = (),
+        historical_markets: tuple[str, ...] = (),
     ) -> None:
         self.persisted = False
         self.held_tokens = held_tokens
         self.held_markets = held_markets
+        self.historical_discovery_tokens = historical_discovery_tokens
+        self.historical_tokens = historical_tokens
+        self.historical_markets = historical_markets
         self.persisted_market_ids: dict[str, uuid.UUID] = {}
 
     def held_universe(self, _agent_id):
@@ -112,7 +124,11 @@ class _Repository:
 
     def historical_universe(self, _agent_id, *, maximum_outcomes=20):
         del maximum_outcomes
-        return (), ()
+        return self.historical_tokens, self.historical_markets
+
+    def historical_discovery_universe(self, _agent_id, *, maximum_outcomes=20):
+        del maximum_outcomes
+        return self.historical_discovery_tokens
 
     def persist_freeze(self, pages, books, resolutions, fee_rates=()):
         self.persisted = bool(pages) and not books and not resolutions and not fee_rates
@@ -165,7 +181,7 @@ class _Connection:
 
 class MarketFreezeTests(unittest.TestCase):
     def test_freeze_prefetches_bounded_deterministic_shortlist_before_cutoff(self) -> None:
-        markets = tuple(_market(index, index + 1) for index in range(12))
+        markets = tuple(_market(index, index + 1) for index in range(25))
         events = tuple(
             Event(
                 f"polymarket:event:e-{index}",
@@ -182,7 +198,7 @@ class MarketFreezeTests(unittest.TestCase):
                 NOW,
                 NOW,
             )
-            for index in range(12)
+            for index in range(25)
         )
         page = MarketDelta("markets", None, None, NOW, events, markets, ARTIFACT)
         venue = _Venue(page)
@@ -191,14 +207,14 @@ class MarketFreezeTests(unittest.TestCase):
             uuid.uuid4(), uuid.uuid4(), NOW, None, "worker", NOW + timedelta(minutes=10)
         )
         result = PolymarketFreezeService(venue, repository, clock=lambda: NOW).freeze(claim)
-        self.assertEqual(len(venue.requested_tokens), 20)
-        self.assertEqual(venue.requested_tokens[:2], ("t-11-YES", "t-11-NO"))
+        self.assertEqual([len(batch) for batch in venue.book_batches], [20, 20])
+        self.assertEqual(venue.book_batches[0][:2], ("t-24-YES", "t-24-NO"))
         self.assertTrue(repository.persisted)
         self.assertEqual(result.freshest_observed_at, NOW)
         selected_ids = set(result.payload["market_snapshot_ids"])
-        self.assertEqual(len(selected_ids), 10)
+        self.assertEqual(len(selected_ids), 20)
         self.assertNotIn(str(repository.persisted_market_ids[markets[0].id]), selected_ids)
-        self.assertNotIn(str(repository.persisted_market_ids[markets[1].id]), selected_ids)
+        self.assertNotIn(str(repository.persisted_market_ids[markets[4].id]), selected_ids)
 
     def test_all_held_outcomes_are_frozen_in_batches_beyond_shortlist_limit(self) -> None:
         page = MarketDelta("markets", None, None, NOW, (), (), ARTIFACT)
@@ -217,6 +233,28 @@ class MarketFreezeTests(unittest.TestCase):
         self.assertEqual([len(batch) for batch in venue.fee_batches], [20, 20, 5])
         self.assertEqual(len(venue.resolution_batches[0]), 45)
         self.assertEqual(result.payload["order_book_token_ids"], list(held_tokens))
+
+    def test_closed_historical_markets_remain_for_resolution_but_not_discovery(self) -> None:
+        closed = _market(99, 100, status=MarketStatus.CLOSED, tradeable=False)
+        active = _market(1, 10)
+        page = MarketDelta("markets", None, None, NOW, (), (closed, active), ARTIFACT)
+        venue = _Venue(page)
+        repository = _Repository(
+            historical_discovery_tokens=(),
+            historical_tokens=(closed.outcomes[0].venue_token_id,),
+            historical_markets=(closed.venue_id,),
+        )
+        claim = CycleClaim(
+            uuid.uuid4(), uuid.uuid4(), NOW, None, "worker", NOW + timedelta(minutes=10)
+        )
+
+        result = PolymarketFreezeService(venue, repository, clock=lambda: NOW).freeze(claim)
+
+        self.assertEqual(venue.requested_tokens, ("t-1-YES", "t-1-NO"))
+        self.assertEqual(venue.resolution_batches, [(closed.venue_id,)])
+        selected_ids = set(result.payload["market_snapshot_ids"])
+        self.assertIn(repository.persisted_market_ids[active.id].__str__(), selected_ids)
+        self.assertNotIn(repository.persisted_market_ids[closed.id].__str__(), selected_ids)
 
     def test_bounded_market_universe_accepts_a_remaining_source_cursor(self) -> None:
         market = _market(1, 10)

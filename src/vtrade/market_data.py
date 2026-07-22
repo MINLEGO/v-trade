@@ -10,7 +10,14 @@ from decimal import Decimal
 from typing import Protocol, cast
 
 from vtrade.broker import FeePolicy
-from vtrade.domain.types import Event, Market, MarketDelta, OrderBookSnapshot, Resolution
+from vtrade.domain.types import (
+    Event,
+    Market,
+    MarketDelta,
+    MarketStatus,
+    OrderBookSnapshot,
+    Resolution,
+)
 from vtrade.polymarket import FeeRateSnapshot, PolymarketVenue
 from vtrade.runtime import (
     ArtifactRegistration,
@@ -75,6 +82,33 @@ class PostgresMarketDataRepository:
             tuple(str(row[0]) for row in rows),
             tuple(dict.fromkeys(str(row[1]) for row in rows)),
         )
+
+    def historical_discovery_universe(
+        self, agent_id: uuid.UUID, *, maximum_outcomes: int = 20
+    ) -> tuple[str, ...]:
+        """Return only historical outcomes still eligible for discovery.
+
+        ``historical_universe`` intentionally remains unfiltered because its market
+        IDs are also used to request resolution observations. Closed historical
+        markets must not consume the active discovery allowance or order-book/fee
+        requests.
+        """
+        if maximum_outcomes <= 0:
+            raise ValueError("maximum_outcomes must be positive")
+        with self._connect(self._database_url) as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT DISTINCT o.venue_token_id FROM outcomes o "
+                "JOIN markets m ON m.id = o.market_id LEFT JOIN positions p "
+                "ON p.outcome_id = o.id AND p.agent_id = %s LEFT JOIN order_intents oi "
+                "ON oi.outcome_id = o.id AND oi.agent_cycle_id IN "
+                "(SELECT id FROM agent_cycles WHERE agent_id = %s) "
+                "WHERE (p.shares > 0 OR oi.id IS NOT NULL) "
+                "AND m.status = 'open' AND m.tradeable AND o.tradeable "
+                "ORDER BY o.venue_token_id LIMIT %s",
+                (agent_id, agent_id, maximum_outcomes),
+            )
+            rows = cursor.fetchall()
+        return tuple(str(row[0]) for row in rows)
 
     def held_universe(self, agent_id: uuid.UUID) -> tuple[tuple[str, ...], tuple[str, ...]]:
         """Return every currently held outcome; valuation may never truncate this set."""
@@ -377,15 +411,21 @@ class PolymarketFreezeService:
         repository: PostgresMarketDataRepository,
         *,
         clock: Callable[[], datetime],
-        maximum_additional_outcomes: int = 20,
+        maximum_historical_outcomes: int = 20,
+        maximum_additional_markets: int = 20,
         venue_batch_size: int = 20,
     ) -> None:
-        if maximum_additional_outcomes <= 0 or not 1 <= venue_batch_size <= 20:
+        if (
+            maximum_historical_outcomes <= 0
+            or maximum_additional_markets <= 0
+            or not 1 <= venue_batch_size <= 20
+        ):
             raise ValueError("freeze shortlist and venue batch bounds are invalid")
         self._venue = venue
         self._repository = repository
         self._clock = clock
-        self._maximum_additional_outcomes = maximum_additional_outcomes
+        self._maximum_historical_outcomes = maximum_historical_outcomes
+        self._maximum_additional_markets = maximum_additional_markets
         self._venue_batch_size = venue_batch_size
 
     def freeze(self, claim: CycleClaim) -> MarketFreezeResult:
@@ -395,18 +435,25 @@ class PolymarketFreezeService:
         if not pages:
             raise RuntimeError("bounded Polymarket market synchronization returned no pages")
         held_tokens, held_markets = self._repository.held_universe(claim.agent_id)
-        historical_tokens, historical_markets = self._repository.historical_universe(
+        historical_discovery_tokens = self._repository.historical_discovery_universe(
             claim.agent_id,
-            maximum_outcomes=self._maximum_additional_outcomes,
+            maximum_outcomes=self._maximum_historical_outcomes,
+        )
+        _historical_resolution_tokens, historical_markets = self._repository.historical_universe(
+            claim.agent_id,
+            maximum_outcomes=self._maximum_historical_outcomes,
         )
         tokens = list(dict.fromkeys(held_tokens))
-        additional = 0
-        for token in historical_tokens:
-            if token not in tokens and additional < self._maximum_additional_outcomes:
+        for token in historical_discovery_tokens:
+            if token not in tokens:
                 tokens.append(token)
-                additional += 1
         candidates = sorted(
-            (market for page in pages for market in page.markets if market.tradeable),
+            (
+                market
+                for page in pages
+                for market in page.markets
+                if market.status is MarketStatus.OPEN and market.tradeable
+            ),
             key=lambda market: (
                 int(market.volume_micros),
                 int(market.liquidity_micros),
@@ -414,14 +461,19 @@ class PolymarketFreezeService:
             ),
             reverse=True,
         )
+        selected_additional_markets = 0
         for market in candidates:
-            for outcome in market.outcomes:
-                if (
-                    outcome.venue_token_id not in tokens
-                    and additional < self._maximum_additional_outcomes
-                ):
-                    tokens.append(outcome.venue_token_id)
-                    additional += 1
+            new_tokens = [
+                outcome.venue_token_id
+                for outcome in market.outcomes
+                if outcome.tradeable and outcome.venue_token_id not in tokens
+            ]
+            if not new_tokens:
+                continue
+            if selected_additional_markets >= self._maximum_additional_markets:
+                break
+            tokens.extend(new_tokens)
+            selected_additional_markets += 1
         books = tuple(
             item
             for batch in _batches(tokens, self._venue_batch_size)

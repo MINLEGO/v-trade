@@ -11,6 +11,11 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Opaque cursor returned by the preceding discovery page."
+          },
           "hours_back": {
             "type": "integer"
           },
@@ -39,6 +44,11 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Opaque cursor returned by the preceding discovery page."
+          },
           "hours_min": {
             "type": "number"
           },
@@ -67,6 +77,11 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Opaque cursor returned by the preceding discovery page."
+          },
           "keyword": {
             "type": "string"
           },
@@ -95,6 +110,11 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Opaque cursor returned by the preceding discovery page."
+          },
           "limit": {
             "type": "integer"
           },
@@ -191,6 +211,11 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Opaque cursor returned by the preceding discovery page."
+          },
           "limit": {
             "type": "integer"
           },
@@ -216,6 +241,11 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Opaque cursor returned by the preceding discovery page."
+          },
           "limit": {
             "type": "integer"
           },
@@ -243,6 +273,14 @@
         "properties": {
           "event_id": {
             "type": "string"
+          },
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Opaque cursor returned by the preceding discovery page."
+          },
+          "limit": {
+            "type": "integer"
           }
         },
         "required": [
@@ -262,6 +300,11 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Opaque cursor returned by the preceding discovery page."
+          },
           "limit": {
             "type": "integer"
           },
@@ -284,6 +327,11 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Opaque cursor returned by the preceding discovery page."
+          },
           "limit": {
             "type": "integer"
           },
@@ -309,6 +357,11 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Opaque cursor returned by the preceding discovery page."
+          },
           "limit": {
             "type": "integer"
           },
@@ -334,6 +387,11 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Opaque cursor returned by the preceding discovery page."
+          },
           "limit": {
             "type": "integer"
           },
@@ -359,6 +417,11 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Opaque cursor returned by the preceding discovery page."
+          },
           "start_date": {
             "type": "string",
             "format": "date"
@@ -389,8 +452,16 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Opaque cursor returned by the preceding discovery page."
+          },
           "query": {
             "type": "string"
+          },
+          "limit": {
+            "type": "integer"
           }
         },
         "required": [

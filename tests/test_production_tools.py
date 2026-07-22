@@ -21,10 +21,16 @@ NOW = datetime(2026, 7, 16, 10, 5, tzinfo=UTC)
 
 
 class _Cursor:
-    def __init__(self, *, book_observed_at: datetime = NOW) -> None:
+    def __init__(
+        self,
+        *,
+        book_observed_at: datetime = NOW,
+        market_rows: list[tuple[object, ...]] | None = None,
+    ) -> None:
         self.rows: list[tuple[object, ...]] = []
         self.queries: list[tuple[str, tuple[object, ...]]] = []
         self.book_observed_at = book_observed_at
+        self.market_rows = market_rows
 
     def __enter__(self):
         return self
@@ -52,7 +58,7 @@ class _Cursor:
         elif query.startswith("SELECT obs.best_ask"):
             self.rows = [(Decimal("0.51"),)]
         elif query.startswith("SELECT m.id"):
-            self.rows = [
+            self.rows = self.market_rows or [
                 (
                     uuid.uuid4(),
                     "venue-market",
@@ -95,7 +101,12 @@ class _Connection:
         return self.cursor_instance
 
 
-def _context(cursor: _Cursor, *, cutoff=NOW) -> ToolContext:
+def _context(
+    cursor: _Cursor,
+    *,
+    cutoff=NOW,
+    maximum_default_result_tokens: int = 4_000,
+) -> ToolContext:
     claim = CycleClaim(
         uuid.uuid4(),
         uuid.uuid4(),
@@ -117,6 +128,7 @@ def _context(cursor: _Cursor, *, cutoff=NOW) -> ToolContext:
         lambda: NOW,
         (market_snapshot_id,),
         (book_snapshot_id,),
+        maximum_default_result_tokens=maximum_default_result_tokens,
     )
 
 
@@ -196,6 +208,95 @@ class ProductionToolRegistryTests(unittest.TestCase):
         tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
         with self.assertRaisesRegex(ValueError, "exactly one"):
             tools["get_market_details"].handler({})
+
+    def test_discovery_paginates_after_filtering_the_frozen_universe(self) -> None:
+        rows = [
+            (
+                uuid.uuid4(),
+                f"venue-market-{index}",
+                f"snapshot-slug-{index}",
+                uuid.uuid4(),
+                f"Snapshot question {index}",
+                "Snapshot rules",
+                NOW - timedelta(days=1),
+                NOW + timedelta(days=1),
+                1_000_000 - index,
+                2_000_000,
+                "open",
+                True,
+                {"tags": [{"label": "Politics"}]},
+                [{"venue_token_id": f"token-{index}", "name": "Yes"}],
+            )
+            for index in range(3)
+        ]
+        cursor = _Cursor(market_rows=rows)
+        tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
+        first = tools["get_all_active_markets"].handler({"limit": 2})
+        self.assertEqual(len(first["markets"]), 2)
+        self.assertTrue(first["has_more"])
+        self.assertFalse(first["payload_truncated"])
+        self.assertIsInstance(first["next_cursor"], str)
+
+        second = tools["get_all_active_markets"].handler(
+            {"limit": 2, "cursor": first["next_cursor"]}
+        )
+        self.assertEqual([item["market_ref"] for item in second["markets"]], ["venue-market-2"])
+        self.assertFalse(second["has_more"])
+        self.assertIsNone(second["next_cursor"])
+
+    def test_discovery_cursor_is_bound_to_its_arguments_and_cutoff(self) -> None:
+        row = (
+            uuid.uuid4(),
+            "venue-market",
+            "snapshot-slug",
+            uuid.uuid4(),
+            "Snapshot question",
+            "Snapshot rules",
+            NOW - timedelta(days=1),
+            NOW + timedelta(days=1),
+            1_000_000,
+            2_000_000,
+            "open",
+            True,
+            {"tags": [{"label": "Politics"}]},
+            [{"venue_token_id": "token", "name": "Yes"}],
+        )
+        cursor = _Cursor(market_rows=[row, row])
+        tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
+        first = tools["get_all_active_markets"].handler({"limit": 1})
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            tools["get_all_active_markets"].handler(
+                {"limit": 1, "cursor": first["next_cursor"], "min_liquidity": 1}
+            )
+
+    def test_discovery_reports_payload_truncation_separately_from_more_rows(self) -> None:
+        row = (
+            uuid.uuid4(),
+            "venue-market",
+            "snapshot-slug",
+            uuid.uuid4(),
+            "Snapshot question",
+            "Snapshot rules",
+            NOW - timedelta(days=1),
+            NOW + timedelta(days=1),
+            1_000_000,
+            2_000_000,
+            "open",
+            True,
+            {"tags": [{"label": "Politics"}]},
+            [{"venue_token_id": "token", "name": "Yes"}],
+        )
+        cursor = _Cursor(market_rows=[row, row, row])
+        tools = {
+            tool.name: tool
+            for tool in ProductionToolRegistry(
+                _context(cursor, maximum_default_result_tokens=200)
+            ).tool_specs()
+        }
+        output = tools["get_all_active_markets"].handler({"limit": 3})
+        self.assertTrue(output["payload_truncated"])
+        self.assertTrue(output["has_more"])
+        self.assertIsInstance(output["next_cursor"], str)
 
     def test_orderbook_accepts_typed_outcome_reference(self) -> None:
         cursor = _Cursor()
