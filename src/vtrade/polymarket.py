@@ -4,6 +4,7 @@ import json
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
@@ -229,10 +230,13 @@ class PolymarketVenue:
         sleep: Callable[[float], None] = time.sleep,
         maximum_response_bytes: int = 25_000_000,
         maximum_order_books_per_call: int = 20,
+        maximum_parallel_clob_requests: int = 8,
         maximum_source_clock_skew_seconds: float = 5.0,
     ) -> None:
         if maximum_source_clock_skew_seconds < 0:
             raise ValueError("maximum source clock skew cannot be negative")
+        if maximum_parallel_clob_requests < 1:
+            raise ValueError("maximum parallel CLOB requests must be positive")
         self._store = artifact_store
         self._client = client or httpx.Client(timeout=httpx.Timeout(15.0, connect=5.0))
         self._retry = retry_policy or RetryPolicy()
@@ -241,6 +245,7 @@ class PolymarketVenue:
         self._sleep = sleep
         self._maximum_response_bytes = maximum_response_bytes
         self._maximum_order_books_per_call = maximum_order_books_per_call
+        self._maximum_parallel_clob_requests = maximum_parallel_clob_requests
         self._maximum_source_clock_skew_seconds = maximum_source_clock_skew_seconds
         self._resolution_history: list[Resolution] = []
 
@@ -280,6 +285,19 @@ class PolymarketVenue:
                 )
                 self._sleep(delay)
         raise PolymarketTransportError("bounded Polymarket GET retries exhausted") from last_error
+
+    def _parallel_get(
+        self, requests: Sequence[tuple[str, list[tuple[str, str]]]]
+    ) -> tuple[_ArchivedResponse, ...]:
+        """Fetch bounded CLOB requests concurrently while preserving input order."""
+        if not requests:
+            return ()
+        with ThreadPoolExecutor(
+            max_workers=min(self._maximum_parallel_clob_requests, len(requests)),
+            thread_name_prefix="vtrade-polymarket",
+        ) as executor:
+            futures = tuple(executor.submit(self._get, url, params) for url, params in requests)
+            return tuple(future.result() for future in futures)
 
     def sync_events(self, cursor: str | None = None, *, limit: int = 100) -> MarketDelta:
         if not 1 <= limit <= 500:
@@ -389,11 +407,13 @@ class PolymarketVenue:
         unique = tuple(dict.fromkeys(outcome_ids))
         if not unique or len(unique) > self._maximum_order_books_per_call:
             raise ValueError("order-book request count is empty or above the configured bound")
+        if any(not token_id for token_id in unique):
+            raise ValueError("outcome token IDs cannot be empty")
+        archived_responses = self._parallel_get(
+            tuple((f"{CLOB_BASE_URL}/book", [("token_id", token_id)]) for token_id in unique)
+        )
         snapshots: list[OrderBookSnapshot] = []
-        for token_id in unique:
-            if not token_id:
-                raise ValueError("outcome token IDs cannot be empty")
-            archived = self._get(f"{CLOB_BASE_URL}/book", [("token_id", token_id)])
+        for token_id, archived in zip(unique, archived_responses, strict=True):
             payload = self._root_object(archived.payload)
             returned_token = _required_str(payload, "asset_id")
             if returned_token != token_id:
@@ -428,13 +448,19 @@ class PolymarketVenue:
         unique = tuple(dict.fromkeys(outcome_ids))
         if not unique or len(unique) > self._maximum_order_books_per_call:
             raise ValueError("fee-rate request count is empty or above the configured bound")
-        rates: list[FeeRateSnapshot] = []
-        for token_id in unique:
-            if not token_id:
-                raise ValueError("fee-rate token IDs cannot be empty")
-            archived = self._get(
-                f"{CLOB_BASE_URL}/fee-rate/{quote(token_id, safe='')}", []
+        if any(not token_id for token_id in unique):
+            raise ValueError("fee-rate token IDs cannot be empty")
+        archived_responses = self._parallel_get(
+            tuple(
+                (
+                    f"{CLOB_BASE_URL}/fee-rate/{quote(token_id, safe='')}",
+                    [],
+                )
+                for token_id in unique
             )
+        )
+        rates: list[FeeRateSnapshot] = []
+        for token_id, archived in zip(unique, archived_responses, strict=True):
             payload = self._root_object(archived.payload)
             base_fee = payload.get("base_fee")
             if not isinstance(base_fee, int) or isinstance(base_fee, bool):

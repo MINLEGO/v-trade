@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import tempfile
+import threading
+import time
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -90,6 +92,42 @@ class PolymarketContractReplayTests(unittest.TestCase):
         self.assertEqual(rate.observed_at, self.replay.captured_at)
         self.assertIsNone(rate.source_created_at)
         self.assertTrue(rate.artifact.uri.endswith(".json.gz"))
+
+    def test_order_books_are_fetched_concurrently_with_a_bounded_worker_count(self) -> None:
+        payload = json.loads((FIXTURES / "clob-book.json").read_text(encoding="utf-8"))
+        active = 0
+        maximum_active = 0
+        lock = threading.Lock()
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal active, maximum_active
+            token_id = request.url.params["token_id"]
+            with lock:
+                active += 1
+                maximum_active = max(maximum_active, active)
+            try:
+                time.sleep(0.02)
+                response_payload = {**payload, "asset_id": token_id}
+                return httpx.Response(200, json=response_payload, request=request)
+            finally:
+                with lock:
+                    active -= 1
+
+        token_ids = tuple(f"token-{index}" for index in range(6))
+        venue = PolymarketVenue(
+            ContentAddressedArtifactStore(Path(self.directory.name) / "parallel-books"),
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+            rate_limiter=RequestRateLimiter({}),
+            clock=lambda: self.replay.captured_at,
+            maximum_parallel_clob_requests=3,
+            sleep=lambda _: None,
+        )
+
+        books = venue.get_order_book(token_ids)
+
+        self.assertEqual(tuple(book.token_id for book in books), token_ids)
+        self.assertGreaterEqual(maximum_active, 2)
+        self.assertLessEqual(maximum_active, 3)
 
     def test_resolution_requires_resolved_singular_status_and_exact_final_prices(self) -> None:
         payload = json.loads(
