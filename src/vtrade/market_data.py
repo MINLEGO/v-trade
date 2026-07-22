@@ -412,7 +412,9 @@ class PolymarketFreezeService:
         *,
         clock: Callable[[], datetime],
         maximum_historical_outcomes: int = 20,
-        maximum_additional_markets: int = 20,
+        #May be causing too much latency, if so, decrease to 50 or below, if not, increase to 100+.
+        #This value is critical for the agent to choose the best markets to trade on. A low number is more restrictive.
+        maximum_additional_markets: int = 80, 
         venue_batch_size: int = 20,
     ) -> None:
         if (
