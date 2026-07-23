@@ -333,19 +333,30 @@ class PlanType(StrEnum):
     NEXT_CYCLE = "next_cycle"
 
 
+BELIEF_CATEGORIES = (
+    "event_analysis",
+    "trading_strategy",
+    "market_sentiment",
+    "market_structure",
+    "risk_assessment",
+)
+
+
 @dataclass(frozen=True, slots=True)
 class BeliefRecord:
     id: str
     agent_id: str
-    probability: Decimal
+    confidence: Decimal
     content: str
     category: str
     evidence: tuple[str, ...]
     created_at: datetime
 
     def __post_init__(self) -> None:
-        if not Decimal(0) <= self.probability <= Decimal(1):
-            raise ValueError("belief probability must be between zero and one")
+        if not Decimal(0) <= self.confidence <= Decimal(1):
+            raise ValueError("belief confidence must be between zero and one")
+        if self.category not in BELIEF_CATEGORIES:
+            raise ValueError(f"belief category must be one of {BELIEF_CATEGORIES}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -379,7 +390,9 @@ class PrivateAgentMemory:
     def _add_plan(self, agent_id: str, plan: PlanRecord) -> None:
         if plan.agent_id != agent_id:
             raise PermissionError("agent cannot write another agent's plan")
-        self._plans.setdefault(agent_id, []).append(plan)
+        current = self._plans.setdefault(agent_id, [])
+        current[:] = [item for item in current if item.plan_type != plan.plan_type]
+        current.append(plan)
 
     def _plans_for(self, agent_id: str) -> tuple[PlanRecord, ...]:
         return tuple(self._plans.get(agent_id, ()))
@@ -431,7 +444,7 @@ class PromptBuilder:
             "cycle_context": cycle_context,
             "beliefs": [
                 {
-                    "probability": str(item.probability),
+                    "confidence": str(item.confidence),
                     "content": item.content,
                     "category": item.category,
                     "evidence": list(item.evidence),

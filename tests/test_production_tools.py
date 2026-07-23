@@ -313,6 +313,8 @@ class ProductionToolRegistryTests(unittest.TestCase):
         tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
         output = tools["get_general_beliefs"].handler({"include_inactive": True})
         self.assertFalse(output["beliefs"][0]["active"])
+        self.assertIn("confidence", output["beliefs"][0])
+        self.assertNotIn("probability", output["beliefs"][0])
 
     def test_tools_refuse_unfinalized_cutoff(self) -> None:
         with self.assertRaisesRegex(ToolContextUnavailable, "finalized"):

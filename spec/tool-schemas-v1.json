@@ -632,7 +632,14 @@
             "type": "string"
           },
           "category": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "event_analysis",
+              "trading_strategy",
+              "market_sentiment",
+              "market_structure",
+              "risk_assessment"
+            ]
           },
           "limit": {
             "type": "integer"
@@ -657,10 +664,19 @@
             "type": "string"
           },
           "category": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "event_analysis",
+              "trading_strategy",
+              "market_sentiment",
+              "market_structure",
+              "risk_assessment"
+            ]
           },
           "confidence": {
-            "type": "number"
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
           }
         },
         "required": [

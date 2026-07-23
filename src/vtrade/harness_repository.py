@@ -508,7 +508,7 @@ class PostgresHarnessRepository:
             raise PermissionError("agent cannot write another agent's belief")
         fingerprint = _memory_fingerprint(
             {
-                "probability": str(belief.probability),
+                "confidence": str(belief.confidence),
                 "content": belief.content,
                 "category": belief.category,
                 "evidence": belief.evidence,
@@ -537,13 +537,13 @@ class PostgresHarnessRepository:
             )
             cursor.execute(
                 "INSERT INTO belief_revisions "
-                "(belief_id, revision, probability, content, category, confidence, evidence, "
-                "created_by_cycle_id, created_at) VALUES (%s, 1, %s, %s, %s, NULL, %s, %s, %s)",
+                "(belief_id, revision, content, category, confidence, evidence, "
+                "created_by_cycle_id, created_at) VALUES (%s, 1, %s, %s, %s, %s, %s, %s)",
                 (
                     uuid.UUID(belief.id),
-                    belief.probability,
                     belief.content,
                     belief.category,
+                    belief.confidence,
                     json.dumps(belief.evidence),
                     cycle_id,
                     _aware(belief.created_at),
@@ -572,6 +572,11 @@ class PostgresHarnessRepository:
                     raise ValueError("plan idempotency key reused with different content")
                 return
             cursor.execute(
+                "UPDATE plans SET status = 'superseded' "
+                "WHERE agent_id = %s AND plan_type = %s AND status = 'active'",
+                (uuid.UUID(plan.agent_id), plan.plan_type.value),
+            )
+            cursor.execute(
                 "INSERT INTO plans "
                 "(id, agent_id, plan_type, status, due_at, idempotency_key, "
                 "memory_fingerprint) VALUES (%s, %s, %s, 'active', %s, %s, %s)",
@@ -598,7 +603,7 @@ class PostgresHarnessRepository:
             raise PermissionError("agent cannot read another agent's beliefs")
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
             cursor.execute(
-                "SELECT b.id, r.probability, r.content, r.category, r.evidence, r.created_at "
+                "SELECT b.id, r.confidence, r.content, r.category, r.evidence, r.created_at "
                 "FROM beliefs b JOIN LATERAL (SELECT * FROM belief_revisions "
                 "WHERE belief_id = b.id ORDER BY revision DESC LIMIT 1) r ON true "
                 "WHERE b.agent_id = %s AND b.active = true ORDER BY r.created_at, b.id",
@@ -609,7 +614,7 @@ class PostgresHarnessRepository:
                 rows.append(
                     {
                         "id": str(row[0]),
-                        "probability": str(row[1]),
+                        "confidence": str(row[1]),
                         "content": str(row[2]),
                         "category": str(row[3]),
                         "evidence": row[4],
@@ -628,7 +633,8 @@ class PostgresHarnessRepository:
                 "SELECT p.id, p.plan_type, p.status, p.due_at, r.content, r.created_at "
                 "FROM plans p JOIN LATERAL (SELECT * FROM plan_revisions "
                 "WHERE plan_id = p.id ORDER BY revision DESC LIMIT 1) r ON true "
-                "WHERE p.agent_id = %s ORDER BY r.created_at, p.id",
+                "WHERE p.agent_id = %s AND p.status = 'active' "
+                "ORDER BY r.created_at, p.id",
                 (actor_id,),
             )
             rows: list[dict[str, object]] = []

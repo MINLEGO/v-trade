@@ -33,6 +33,23 @@ class SpecificationTests(unittest.TestCase):
         for stage in stages:
             self.assertIn(stage, body)
 
+    def test_belief_schema_uses_confidence_and_fixed_categories(self) -> None:
+        document = json.loads(Path("spec/tool-schemas-v1.json").read_text(encoding="utf-8"))
+        tools = {tool["name"]: tool for tool in document["tools"]}
+        expected = [
+            "event_analysis",
+            "trading_strategy",
+            "market_sentiment",
+            "market_structure",
+            "risk_assessment",
+        ]
+        belief = tools["create_general_belief"]["input_schema"]
+        self.assertIn("confidence", belief["properties"])
+        self.assertNotIn("probability", belief["properties"])
+        self.assertEqual(belief["properties"]["confidence"]["minimum"], 0)
+        self.assertEqual(belief["properties"]["confidence"]["maximum"], 1)
+        self.assertEqual(belief["properties"]["category"]["enum"], expected)
+
     def test_fixture_manifest_records_owner_approved_raw_capture(self) -> None:
         manifest = json.loads(Path("spec/fixtures/manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(len(manifest), 1)

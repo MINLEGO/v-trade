@@ -1535,7 +1535,7 @@ def _belief(row: Mapping[str, object], agent_id: uuid.UUID) -> BeliefRecord:
     return BeliefRecord(
         str(row["id"]),
         str(agent_id),
-        Decimal(str(row["probability"])),
+        Decimal(str(row["confidence"])),
         str(row["content"]),
         str(row["category"]),
         tuple(str(value) for value in evidence) if isinstance(evidence, list) else (),

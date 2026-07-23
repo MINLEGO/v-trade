@@ -66,9 +66,9 @@ class PhaseFourPostgresIntegrationTests(unittest.TestCase):
             belief = BeliefRecord(
                 id=str(ids["belief"]),
                 agent_id=str(ids["agent"]),
-                probability=Decimal("0.65"),
+                confidence=Decimal("0.65"),
                 content="Integration belief",
-                category="forecast",
+                category="event_analysis",
                 evidence=("integration-source",),
                 created_at=now,
             )

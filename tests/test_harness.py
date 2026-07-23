@@ -267,7 +267,7 @@ class HarnessTests(unittest.TestCase):
             "bob",
             Decimal("0.5"),
             "private",
-            "test",
+            "event_analysis",
             (),
             NOW,
         )
@@ -278,7 +278,7 @@ class HarnessTests(unittest.TestCase):
 
     def test_prompt_builder_rejects_cross_agent_memory(self) -> None:
         belief = BeliefRecord(
-            str(uuid.uuid4()), "bob", Decimal("0.5"), "x", "test", (), NOW
+            str(uuid.uuid4()), "bob", Decimal("0.5"), "x", "event_analysis", (), NOW
         )
         with self.assertRaises(PermissionError):
             PromptBuilder("system").build(
@@ -307,6 +307,15 @@ class HarnessTests(unittest.TestCase):
         alice.add_plan(plan)
         self.assertEqual(alice.plans(), (plan,))
         self.assertEqual(memory.for_agent("bob").plans(), ())
+
+    def test_bound_memory_replaces_plan_of_same_type(self) -> None:
+        memory = PrivateAgentMemory()
+        alice = memory.for_agent("alice")
+        first = PlanRecord(str(uuid.uuid4()), "alice", PlanType.NEXT_CYCLE, "first", None, NOW)
+        second = PlanRecord(str(uuid.uuid4()), "alice", PlanType.NEXT_CYCLE, "second", None, NOW)
+        alice.add_plan(first)
+        alice.add_plan(second)
+        self.assertEqual(alice.plans(), (second,))
 
     def test_assembled_input_and_reserved_output_are_checked_before_gateway_call(self) -> None:
         gateway = RecordedModelGateway(

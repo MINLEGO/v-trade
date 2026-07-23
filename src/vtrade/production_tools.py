@@ -15,6 +15,7 @@ from typing import Protocol, cast
 
 from vtrade.domain.ports import JsonObject
 from vtrade.harness import (
+    BELIEF_CATEGORIES,
     BeliefRecord,
     PlanRecord,
     PlanType,
@@ -509,7 +510,7 @@ class ProductionToolRegistry:
             )
             return {"beliefs": rows[: _limit(arguments, default=100)]}
         records = self._query(
-            "SELECT b.id, b.active, r.probability, r.content, r.category, "
+            "SELECT b.id, b.active, r.confidence, r.content, r.category, "
             "r.evidence, r.created_at FROM beliefs b JOIN LATERAL "
             "(SELECT * FROM belief_revisions WHERE belief_id = b.id "
             "ORDER BY revision DESC LIMIT 1) r ON true WHERE b.agent_id = %s "
@@ -521,7 +522,7 @@ class ProductionToolRegistry:
                 {
                     "id": str(row[0]),
                     "active": bool(row[1]),
-                    "probability": str(row[2]),
+                    "confidence": str(row[2]),
                     "content": str(row[3]),
                     "category": str(row[4]),
                     "evidence": row[5],
@@ -544,14 +545,15 @@ class ProductionToolRegistry:
         return {"beliefs": matches[: _limit(arguments, default=100)]}
 
     def _create_belief(self, arguments: JsonObject) -> JsonObject:
-        confidence = _probability(arguments.get("confidence"), "confidence")
+        confidence = _unit_interval(arguments.get("confidence"), "confidence")
+        category = _belief_category(arguments.get("category"))
         now = self._context.now()
         belief = BeliefRecord(
             str(self._mutation_id("belief", arguments)),
             str(self._context.claim.agent_id),
             confidence,
             _required_string(arguments, "belief_content"),
-            _required_string(arguments, "category"),
+            category,
             (),
             now,
         )
@@ -626,7 +628,7 @@ class ProductionToolRegistry:
         if side not in {"BUY", "SELL"}:
             raise ValueError("side must be BUY or SELL")
         amount = _positive_decimal(arguments.get("amount"), "amount")
-        confidence = _probability(arguments.get("conviction", "0.5"), "conviction")
+        confidence = _unit_interval(arguments.get("conviction", "0.5"), "conviction")
         rows = self._query(
             "SELECT o.id, o.market_id FROM outcomes o JOIN market_snapshots ms "
             "ON ms.market_id = o.market_id WHERE o.venue_token_id = %s "
@@ -1059,7 +1061,7 @@ def _positive_decimal(value: object, name: str) -> Decimal:
     return result
 
 
-def _probability(value: object, name: str) -> Decimal:
+def _unit_interval(value: object, name: str) -> Decimal:
     try:
         result = Decimal(str(value))
     except InvalidOperation as exc:
@@ -1067,6 +1069,13 @@ def _probability(value: object, name: str) -> Decimal:
     if not result.is_finite() or not Decimal(0) <= result <= Decimal(1):
         raise ValueError(f"{name} must be between zero and one")
     return result
+
+
+def _belief_category(value: object) -> str:
+    category = _required_string({"category": value}, "category")
+    if category not in BELIEF_CATEGORIES:
+        raise ValueError(f"category must be one of {BELIEF_CATEGORIES}")
+    return category
 
 
 def _date_at_midnight_utc(value: object) -> datetime:

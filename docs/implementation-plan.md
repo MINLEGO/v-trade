@@ -113,7 +113,7 @@ Keep venue-specific identifiers but normalize the concepts the harness consumes:
 - `Outcome`: YES/NO or named outcome, venue token ID, best bid/ask, tick size, and minimum order size.
 - `OrderIntent`: agent, market, outcome, buy/sell, amount or shares, strategy, thesis, estimated probability, expected value, and timestamp.
 - `Order`, `Fill`, `Position`, `Settlement`, and `LedgerEntry`: deterministic execution/accounting records.
-- `Belief`: structured probability/thesis with evidence, category, confidence, agent ownership, and revision history.
+- `Belief`: structured confidence/thesis with evidence, constrained category, agent ownership, and revision history.
 - `Plan`: an agent-owned `long_term` or date-bound `next_cycle` plan, with status, due time, and revision history.
 - `CycleSnapshot`: the immutable set of market/account/history data visible to an agent.
 

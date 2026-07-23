@@ -216,9 +216,9 @@ class PostgresHarnessRepositoryTests(unittest.TestCase):
         belief = BeliefRecord(
             id=str(uuid.uuid4()),
             agent_id=str(AGENT_ID),
-            probability=Decimal("0.7"),
+            confidence=Decimal("0.7"),
             content="Market likely resolves yes",
-            category="forecast",
+            category="event_analysis",
             evidence=("source-1",),
             created_at=NOW,
         )
@@ -240,6 +240,12 @@ class PostgresHarnessRepositoryTests(unittest.TestCase):
             if query.startswith(("INSERT INTO beliefs", "INSERT INTO plans"))
         ]
         self.assertEqual(len(inserts), 2)
+        self.assertTrue(
+            any(
+                query.startswith("UPDATE plans SET status = 'superseded'")
+                for query, _params in self.connection.cursor_instance.queries
+            )
+        )
         with self.assertRaises(ValueError):
             self.repository.append_belief(
                 replace(belief, content="Different content"),
