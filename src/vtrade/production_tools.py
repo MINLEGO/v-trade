@@ -143,7 +143,7 @@ class ProductionToolRegistry:
                 self._schemas[name],
                 self._bounded_handler(name, handlers[name]),
                 self._category(name),
-                mutates_financial_state=name == "place_market_order",
+                mutates_financial_state=name == "submit_market_order_intent",
             )
             for name in self._schemas
         )
@@ -208,7 +208,7 @@ class ProductionToolRegistry:
             "create_long_term_plan": self._create_long_term_plan,
             "get_next_cycle_plan": self._get_next_cycle_plan,
             "create_next_cycle_plan": self._create_next_cycle_plan,
-            "place_market_order": self._place_market_order,
+            "submit_market_order_intent": self._submit_market_order_intent,
         }
 
     def _discover(self, name: str, arguments: JsonObject) -> JsonObject:
@@ -622,7 +622,7 @@ class ProductionToolRegistry:
         )
         return {"plan_id": plan.id, "created_at": now.isoformat()}
 
-    def _place_market_order(self, arguments: JsonObject) -> JsonObject:
+    def _submit_market_order_intent(self, arguments: JsonObject) -> JsonObject:
         token = _required_string(arguments, "token_id")
         side = _required_string(arguments, "side")
         if side not in {"BUY", "SELL"}:
@@ -690,7 +690,7 @@ class ProductionToolRegistry:
                     side,
                     int(amount * Decimal(1_000_000)),
                     shares,
-                    "observed_place_market_order",
+                    "observed_submit_market_order_intent",
                     "submitted through frozen tool contract",
                     confidence,
                     f"intent:{intent_id}",
@@ -727,7 +727,7 @@ class ProductionToolRegistry:
     def _category(name: str) -> str:
         if name == "web_search":
             return "research"
-        if name == "place_market_order":
+        if name == "submit_market_order_intent":
             return "financial"
         if "belief" in name or "plan" in name:
             return "memory"

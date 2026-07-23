@@ -161,7 +161,7 @@ class ProductionToolRegistryTests(unittest.TestCase):
     def test_place_order_persists_only_pending_intent(self) -> None:
         cursor = _Cursor()
         tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
-        output = tools["place_market_order"].handler(
+        output = tools["submit_market_order_intent"].handler(
             {"token_id": "token", "side": "BUY", "amount": 10, "conviction": 0.7}
         )
         self.assertEqual(output["status"], "pending_broker_validation")

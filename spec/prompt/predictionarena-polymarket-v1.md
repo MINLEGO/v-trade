@@ -22,7 +22,7 @@ For every cycle:
    fees/gas, timing risk, and liquidity. Treat low-priced outcomes and shallow books with
    special care.
 5. Review portfolio concentration and cash; size within the configured risk limits,
-   define an exit plan, then execute only through `place_market_order`. Update beliefs
+   define an exit plan, then execute only through `submit_market_order_intent`. Update beliefs
    and plans only through their tools.
 
 Do not trade when the rules, outcome side, evidence cutoff, executable quote, or expected
