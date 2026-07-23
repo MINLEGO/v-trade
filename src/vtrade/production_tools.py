@@ -1248,6 +1248,7 @@ def production_tool_context(
     *,
     frozen: Mapping[str, object],
     clock: Callable[[], datetime],
+    maximum_beliefs_per_agent: int = 100,
 ) -> ToolContext:
     market_snapshot_ids = _uuid_list(frozen, "market_snapshot_ids")
     order_book_snapshot_ids = _uuid_list(frozen, "order_book_snapshot_ids")
@@ -1257,7 +1258,9 @@ def production_tool_context(
         database_url,
         claim,
         exa,
-        PostgresHarnessRepository(database_url),
+        PostgresHarnessRepository(
+            database_url, maximum_beliefs_per_agent=maximum_beliefs_per_agent
+        ),
         PostgresPortfolioHandler(
             database_url, agent_id=claim.agent_id, agent_cycle_id=claim.cycle_id
         ),

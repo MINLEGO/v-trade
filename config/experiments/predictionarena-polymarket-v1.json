@@ -16,7 +16,7 @@
     },
     "tool_schemas": {
       "path": "spec/tool-schemas-v1.json",
-      "sha256": "d3ad65f8f508b7e8498d5424a23124faf754f96715986f61cdab73f52ae723ca",
+      "sha256": "7083f1dd8db9a25d78de9dc86400d8a60ce6cd53ecb8c7b089c0d31e48bba656",
       "classification": "inferred"
     }
   },
@@ -126,7 +126,8 @@
     "monthly_external_api_budget_micros": 40000000,
     "monthly_external_api_budget_excluded_providers": ["exa"],
     "budget_alert_micros": [20000000, 32000000, 40000000],
-    "maximum_market_cost_basis_fraction": "0.15"
+    "maximum_market_cost_basis_fraction": "0.15",
+    "maximum_beliefs_per_agent": 100
   },
   "owner_decisions": {
     "paper_fill_rule": {

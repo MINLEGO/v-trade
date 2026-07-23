@@ -41,6 +41,7 @@ from vtrade.worker import (
     ProductionCompositionUnavailable,
     ProductionHarnessPort,
     ProductionWorker,
+    _positive_integer,
     _harness_artifact_registrations,
     _liquidity_time_in_force,
     _paper_policy,
@@ -78,6 +79,11 @@ def _write_config(directory: str, *, pending: bool) -> Path:
 
 
 class WorkerFailClosedTests(unittest.TestCase):
+    def test_positive_integer_configuration_rejects_non_positive_values(self) -> None:
+        self.assertEqual(_positive_integer({"beliefs": 100}, "beliefs"), 100)
+        with self.assertRaisesRegex(ProductionCompositionUnavailable, "must be positive"):
+            _positive_integer({"beliefs": 0}, "beliefs")
+
     def test_execution_policy_parsers_accept_supported_values_and_reject_unknown_values(
         self,
     ) -> None:

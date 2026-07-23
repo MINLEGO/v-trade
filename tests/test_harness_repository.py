@@ -24,6 +24,7 @@ class RecordingCursor:
         self.harness_runs: dict[str, tuple[object, ...]] = {}
         self.beliefs: dict[str, tuple[object, ...]] = {}
         self.plans: dict[str, tuple[object, ...]] = {}
+        self.active_belief_count = 0
         self.selected: tuple[object, ...] | None = None
 
     def __enter__(self) -> RecordingCursor:
@@ -42,8 +43,13 @@ class RecordingCursor:
             self.harness_runs[str(values[9])] = (values[0], values[8])
         elif query.startswith("SELECT id, memory_fingerprint FROM beliefs"):
             self.selected = self.beliefs.get(str(values[0]))
+        elif query.startswith("SELECT id FROM agents"):
+            self.selected = (values[0],)
+        elif query.startswith("SELECT count(*) FROM beliefs"):
+            self.selected = (self.active_belief_count,)
         elif query.startswith("INSERT INTO beliefs"):
             self.beliefs[str(values[2])] = (values[0], values[3])
+            self.active_belief_count += 1
         elif query.startswith("SELECT id, memory_fingerprint FROM plans"):
             self.selected = self.plans.get(str(values[0]))
         elif query.startswith("INSERT INTO plans"):
@@ -259,6 +265,30 @@ class PostgresHarnessRepositoryTests(unittest.TestCase):
             self.repository.read_beliefs(actor_id=AGENT_ID, target_agent_id=other)
         with self.assertRaises(PermissionError):
             self.repository.read_plans(actor_id=AGENT_ID, target_agent_id=other)
+
+    def test_active_belief_quota_is_enforced(self) -> None:
+        repository = PostgresHarnessRepository(
+            "postgresql://unused",
+            connect=lambda _url: self.connection,
+            maximum_beliefs_per_agent=1,
+        )
+        first = BeliefRecord(
+            id=str(uuid.uuid4()),
+            agent_id=str(AGENT_ID),
+            confidence=Decimal("0.7"),
+            content="First belief",
+            category="event_analysis",
+            evidence=(),
+            created_at=NOW,
+        )
+        second = replace(first, id=str(uuid.uuid4()), content="Second belief")
+        repository.append_belief(first, actor_id=AGENT_ID, cycle_id=CYCLE_ID)
+        with self.assertRaisesRegex(ValueError, "maximum active beliefs"):
+            repository.append_belief(second, actor_id=AGENT_ID, cycle_id=CYCLE_ID)
+
+    def test_belief_quota_must_be_positive(self) -> None:
+        with self.assertRaisesRegex(ValueError, "maximum_beliefs_per_agent"):
+            PostgresHarnessRepository("postgresql://unused", maximum_beliefs_per_agent=0)
 
     def test_phase_four_migration_contains_budget_replay_and_retention_tables(self) -> None:
         migration = Path("migrations/0004_model_research_harness.sql").read_text(encoding="utf-8")

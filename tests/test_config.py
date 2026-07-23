@@ -107,6 +107,7 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertEqual(config.raw["limits"]["maximum_source_clock_skew_seconds"], 5)
         self.assertEqual(config.raw["limits"]["maximum_archived_bid_age_seconds"], 300)
+        self.assertEqual(config.raw["limits"]["maximum_beliefs_per_agent"], 100)
         self.assertFalse(
             config.raw["owner_decisions"]["tavily_runtime_policy"]["enabled"]
         )

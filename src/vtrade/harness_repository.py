@@ -395,11 +395,24 @@ class PostgresBudgetGuard:
 
 
 class PostgresHarnessRepository:
-    def __init__(self, database_url: str, *, connect: _Connect | None = None) -> None:
+    def __init__(
+        self,
+        database_url: str,
+        *,
+        connect: _Connect | None = None,
+        maximum_beliefs_per_agent: int = 100,
+    ) -> None:
         if not database_url:
             raise ValueError("database_url is required")
+        if (
+            not isinstance(maximum_beliefs_per_agent, int)
+            or isinstance(maximum_beliefs_per_agent, bool)
+            or maximum_beliefs_per_agent <= 0
+        ):
+            raise ValueError("maximum_beliefs_per_agent must be a positive integer")
         self._database_url = database_url
         self._connect = connect or _default_connect
+        self._maximum_beliefs_per_agent = maximum_beliefs_per_agent
 
     def persist_run(
         self,
@@ -525,6 +538,26 @@ class PostgresHarnessRepository:
                 if str(existing[1]) != fingerprint:
                     raise ValueError("belief idempotency key reused with different content")
                 return
+            # Serialize writers for this agent so the count and insert form one
+            # reliable quota check under concurrent model cycles.
+            cursor.execute(
+                "SELECT id FROM agents WHERE id = %s FOR UPDATE",
+                (uuid.UUID(belief.agent_id),),
+            )
+            if cursor.fetchone() is None:
+                raise ValueError("belief agent does not exist")
+            cursor.execute(
+                "SELECT count(*) FROM beliefs WHERE agent_id = %s AND active = true",
+                (uuid.UUID(belief.agent_id),),
+            )
+            count = cursor.fetchone()
+            if count is None:
+                raise ValueError("belief count could not be checked")
+            if int(count[0]) >= self._maximum_beliefs_per_agent:
+                raise ValueError(
+                    "maximum active beliefs per agent reached "
+                    f"({self._maximum_beliefs_per_agent})"
+                )
             cursor.execute(
                 "INSERT INTO beliefs (id, agent_id, idempotency_key, memory_fingerprint) "
                 "VALUES (%s, %s, %s, %s)",

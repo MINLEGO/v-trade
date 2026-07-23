@@ -201,6 +201,7 @@ Limits must be configuration, recorded per run:
   billed-dollar limit for providers other than free-plan Exa;
 - maximum discovery calls and markets returned;
 - maximum trade intents and notional spend per cycle;
+- maximum active beliefs per agent/model, configurable per experiment;
 - a hard $40 billed external API budget per calendar month, excluding Exa while it is
   on the free plan, with alerts at $20, $32, and $40 and an emergency stop before a
   request can knowingly exceed the remainder. Exa still records nominal value; any

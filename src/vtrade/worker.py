@@ -321,6 +321,7 @@ class ProductionHarnessPort:
         monotonic: Callable[[], float],
         schema_path: str | Path,
         connect: _Connect | None = None,
+        maximum_beliefs_per_agent: int = 100,
     ) -> None:
         self._database_url = database_url
         self._store = artifact_store
@@ -331,6 +332,13 @@ class ProductionHarnessPort:
         self._monotonic = monotonic
         self._schema_path = schema_path
         self._connect = connect or _default_connect
+        if (
+            not isinstance(maximum_beliefs_per_agent, int)
+            or isinstance(maximum_beliefs_per_agent, bool)
+            or maximum_beliefs_per_agent <= 0
+        ):
+            raise ValueError("maximum_beliefs_per_agent must be a positive integer")
+        self._maximum_beliefs_per_agent = maximum_beliefs_per_agent
         self._repository = PostgresHarnessRepository(database_url, connect=connect)
 
     def run(
@@ -346,6 +354,7 @@ class ProductionHarnessPort:
             self._exa,
             frozen=frozen,
             clock=self._clock,
+            maximum_beliefs_per_agent=self._maximum_beliefs_per_agent,
         )
         registry = ProductionToolRegistry(context, schema_path=self._schema_path)
         result = BoundedToolHarness(
@@ -1334,6 +1343,9 @@ def build_production_worker(
         values["VTRADE_SUPABASE_SERVICE_ROLE_KEY"],
     )
     limits = _harness_limits(config.raw)
+    maximum_beliefs_per_agent = _positive_integer(
+        config.raw["limits"], "maximum_beliefs_per_agent"
+    )
     budget = PostgresBudgetGuard(
         database_url,
         limit_micros=_integer(config.raw["limits"], "monthly_external_api_budget_micros"),
@@ -1381,6 +1393,7 @@ def build_production_worker(
             clock=clock,
             monotonic=monotonic,
             schema_path=str(config.raw["artifacts"]["tool_schemas"]["path"]),
+            maximum_beliefs_per_agent=maximum_beliefs_per_agent,
         ),
         broker=ProductionBrokerPort(
             database_url,
@@ -1523,6 +1536,15 @@ def _integer(value: Mapping[str, object], key: str) -> int:
     result = value.get(key)
     if not isinstance(result, int) or isinstance(result, bool):
         raise ProductionCompositionUnavailable(f"configuration field {key} must be integer")
+    return result
+
+
+def _positive_integer(value: Mapping[str, object], key: str) -> int:
+    result = _integer(value, key)
+    if result <= 0:
+        raise ProductionCompositionUnavailable(
+            f"configuration field {key} must be positive"
+        )
     return result
 
 
