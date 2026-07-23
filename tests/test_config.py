@@ -135,6 +135,20 @@ class ConfigTests(unittest.TestCase):
             "walk_displayed_book_fak_partial_fill",
         )
 
+    def test_fee_configuration_is_explicit_and_zeroes_optional_costs(self) -> None:
+        for filename in (
+            "predictionarena-polymarket-v1.json",
+            "predictionarena-polymarket-v1-liquidity-aware.json",
+        ):
+            config = load_experiment_config(Path("config/experiments") / filename)
+            self.assertEqual(
+                config.raw["fees"],
+                {
+                    "gas_policy": "relayer_sponsored",
+                    "builder_taker_fee_bps": 0,
+                },
+            )
+
     def test_owner_token_limits_are_frozen(self) -> None:
         config = load_experiment_config(
             Path("config/experiments/predictionarena-polymarket-v1.json")

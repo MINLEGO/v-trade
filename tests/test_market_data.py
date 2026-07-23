@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
 from vtrade.domain.types import (
     Event,
@@ -90,10 +91,23 @@ class _Venue:
     def get_order_book(self, tokens):
         self.requested_tokens = tuple(tokens)
         self.book_batches.append(tuple(tokens))
-        return ()
+        conditions = {
+            outcome.venue_token_id: str(market.venue_metadata["condition_id"])
+            for market in self.page.markets
+            for outcome in market.outcomes
+        }
+        return tuple(
+            SimpleNamespace(
+                token_id=token,
+                condition_id=conditions.get(token, token),
+                observed_at=NOW,
+                artifact=ARTIFACT,
+            )
+            for token in tokens
+        )
 
-    def get_fee_rates(self, tokens):
-        self.fee_batches.append(tuple(tokens))
+    def get_fee_policies(self, conditions):
+        self.fee_batches.append(tuple(conditions))
         return ()
 
     def sync_resolutions(self, markets):
@@ -131,7 +145,7 @@ class _Repository:
         return self.historical_discovery_tokens
 
     def persist_freeze(self, pages, books, resolutions, fee_rates=()):
-        self.persisted = bool(pages) and not books and not resolutions and not fee_rates
+        self.persisted = bool(pages) and not resolutions and not fee_rates
         market_ids = tuple(
             uuid.uuid5(uuid.NAMESPACE_URL, f"test-market-snapshot:{market.id}")
             for page in pages
@@ -323,16 +337,20 @@ class MarketFreezeTests(unittest.TestCase):
         self.assertEqual(frozen["outcomes"][0]["venue_token_id"], "t-1-YES")
         self.assertEqual(frozen["outcomes"][0]["tick_size"], "0.01")
 
-    def test_fee_policy_uses_only_fresh_frozen_persisted_basis_points(self) -> None:
+    def test_fee_policy_uses_only_fresh_frozen_persisted_parameters(self) -> None:
         snapshot_id = uuid.uuid4()
-        cursor = _Cursor(((30, NOW - timedelta(seconds=10), None),))
+        cursor = _Cursor(
+            ((Decimal("0.03"), Decimal(2), True, NOW - timedelta(seconds=10), None),)
+        )
         repository = PostgresMarketDataRepository(
             "postgresql://unused", connect=lambda _url: _Connection(cursor)
         )
         policy = repository.frozen_fee_policy(
             "token", cutoff=NOW, fee_rate_snapshot_ids=(snapshot_id,)
         )
-        self.assertEqual(policy.rate, Decimal("0.003"))
+        self.assertEqual(policy.rate, Decimal("0.03"))
+        self.assertEqual(policy.exponent, Decimal(2))
+        self.assertTrue(policy.taker_only)
         query, params = cursor.queries[-1]
         self.assertIn("id = ANY", query)
         self.assertEqual(params, ("token", [snapshot_id]))
@@ -345,7 +363,9 @@ class MarketFreezeTests(unittest.TestCase):
             missing.frozen_fee_policy("token", cutoff=NOW, fee_rate_snapshot_ids=(uuid.uuid4(),))
         after_cutoff = PostgresMarketDataRepository(
             "postgresql://unused",
-            connect=lambda _url: _Connection(_Cursor(((30, NOW + timedelta(seconds=1), None),))),
+            connect=lambda _url: _Connection(
+                _Cursor(((Decimal("0.03"), Decimal(2), True, NOW + timedelta(seconds=1), None),))
+            ),
         )
         with self.assertRaisesRegex(FrozenFeePolicyUnavailable, "after cycle cutoff"):
             after_cutoff.frozen_fee_policy(

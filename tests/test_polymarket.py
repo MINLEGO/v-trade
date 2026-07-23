@@ -7,6 +7,7 @@ import threading
 import time
 import unittest
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import httpx
@@ -43,8 +44,12 @@ class PolymarketReplay:
             fixture = "markets-keyset-limit-1.json"
         elif request.url.path == "/book":
             fixture = "clob-book.json"
-        elif request.url.path.startswith("/fee-rate/"):
-            return httpx.Response(200, json={"base_fee": 30}, request=request)
+        elif request.url.path.startswith("/clob-markets/"):
+            return httpx.Response(
+                200,
+                json={"fd": {"r": 0.03, "e": 2, "to": True}},
+                request=request,
+            )
         else:
             return httpx.Response(404, request=request)
         return httpx.Response(200, content=(FIXTURES / fixture).read_bytes(), request=request)
@@ -84,14 +89,16 @@ class PolymarketContractReplayTests(unittest.TestCase):
         self.assertEqual(markets.artifact.sha256, hashlib.sha256(raw).hexdigest())
         self.assertNotIn("$schema", market.venue_metadata)
 
-    def test_official_fee_rate_is_archived_before_normalization(self) -> None:
-        token_id = "123456789"
-        rate = self.venue.get_fee_rates([token_id])[0]
-        self.assertEqual(rate.token_id, token_id)
-        self.assertEqual(rate.base_fee_bps, 30)
-        self.assertEqual(rate.observed_at, self.replay.captured_at)
-        self.assertIsNone(rate.source_created_at)
-        self.assertTrue(rate.artifact.uri.endswith(".json.gz"))
+    def test_official_market_fee_policy_is_archived_before_normalization(self) -> None:
+        condition_id = "condition-123"
+        policy = self.venue.get_fee_policies([condition_id])[0]
+        self.assertEqual(policy.condition_id, condition_id)
+        self.assertEqual(policy.rate, Decimal("0.03"))
+        self.assertEqual(policy.exponent, Decimal(2))
+        self.assertTrue(policy.taker_only)
+        self.assertEqual(policy.observed_at, self.replay.captured_at)
+        self.assertIsNone(policy.source_created_at)
+        self.assertTrue(policy.artifact.uri.endswith(".json.gz"))
 
     def test_order_books_are_fetched_concurrently_with_a_bounded_worker_count(self) -> None:
         payload = json.loads((FIXTURES / "clob-book.json").read_text(encoding="utf-8"))

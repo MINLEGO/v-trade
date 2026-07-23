@@ -58,14 +58,18 @@ as the cycle cutoff over a bounded pre-freeze market universe; the owner accepts
 resulting few minutes of schedule drift. The Tavily credential is supplied, but the
 owner explicitly keeps Tavily disabled and future-only; credential presence must never
 enable it or trigger a live call.
-- Fee source: archive and persist `base_fee` from the official public Polymarket CLOB
-  `GET /fee-rate/{token_id}` endpoint during the cycle freeze; only snapshot IDs from
-  that same cycle may determine paper-broker fees, and no default rate is allowed.
+- Fee source: archive and persist `fd.r`, `fd.e` and `fd.to` from the official public
+  Polymarket CLOB `GET /clob-markets/{condition_id}` endpoint during the cycle freeze;
+  only snapshot IDs from that same cycle may determine paper-broker fees, and no
+  default rate is allowed.
 - Exa monthly capacity: atomically cap both requests and credits at 18,000 per calendar
   month. Free-plan Exa is excluded from the billed-dollar breaker, while nominal cost
   remains auditable; any positive billed amount halts and alerts Exa.
 
 ## Pending
+
+
+
 
 No owner decision remains pending. Tavily remains outside the active baseline by owner
 decision and has no live-call validation requirement for this version.

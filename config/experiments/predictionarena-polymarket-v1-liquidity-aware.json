@@ -64,6 +64,10 @@
     "absent_required_quote": "reject",
     "insufficient_depth": "partial_fill"
   },
+  "fees": {
+    "gas_policy": "relayer_sponsored",
+    "builder_taker_fee_bps": 0
+  },
   "models": [
     {
       "label": "DeepSeek V4 Flash",
@@ -248,9 +252,9 @@
     "polymarket_fee_policy_source": {
       "status": "resolved",
       "required": true,
-      "endpoint": "GET https://clob.polymarket.com/fee-rate/{token_id}",
-      "field": "base_fee",
-      "unit": "basis_points",
+      "endpoint": "GET https://clob.polymarket.com/clob-markets/{condition_id}",
+      "fields": ["fd.r", "fd.e", "fd.to"],
+      "rate_unit": "decimal",
       "policy": "archive_and_persist_before_cycle_cutoff_no_default_rate"
     },
     "exa_monthly_request_credit_cap": {

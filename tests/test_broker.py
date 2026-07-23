@@ -284,6 +284,17 @@ class BrokerScenarioTests(unittest.TestCase):
             1_250_000,
         )
 
+    def test_taker_only_policy_does_not_charge_non_taker_execution(self) -> None:
+        policy = FeePolicy(Decimal("0.05"), taker_only=True)
+        self.assertEqual(
+            policy.calculate_micros(Decimal(100), Decimal("0.5"), is_taker=False),
+            0,
+        )
+        self.assertEqual(
+            policy.calculate_micros(Decimal(100), Decimal("0.5"), is_taker=True),
+            1_250_000,
+        )
+
     def test_settlement_is_idempotent_and_removes_position_once(self) -> None:
         position = PositionState(
             "market-1",

@@ -18,7 +18,7 @@ from vtrade.domain.types import (
     OrderBookSnapshot,
     Resolution,
 )
-from vtrade.polymarket import FeeRateSnapshot, PolymarketVenue
+from vtrade.polymarket import FeePolicySnapshot, PolymarketVenue
 from vtrade.runtime import (
     ArtifactRegistration,
     CycleClaim,
@@ -132,7 +132,7 @@ class PostgresMarketDataRepository:
         pages: Sequence[MarketDelta],
         books: Sequence[OrderBookSnapshot],
         resolutions: Sequence[Resolution],
-        fee_rates: Sequence[FeeRateSnapshot] = (),
+        fee_policies: Sequence[FeePolicySnapshot] = (),
     ) -> FrozenPersistence:
         snapshot_ids: list[uuid.UUID] = []
         book_ids: list[uuid.UUID] = []
@@ -250,31 +250,41 @@ class PostgresMarketDataRepository:
                         resolution.artifact.sha256,
                     ),
                 )
-            for fee_rate in fee_rates:
-                fee_rate_id = _id(
-                    "fee-rate",
-                    fee_rate.token_id,
-                    fee_rate.observed_at.isoformat(),
-                    fee_rate.artifact.sha256,
-                )
-                fee_rate_ids.append(fee_rate_id)
-                cursor.execute(
-                    "INSERT INTO fee_rate_snapshots "
-                    "(id, outcome_id, token_id, base_fee_bps, observed_at, "
-                    "source_created_at, raw_artifact_uri, raw_sha256) VALUES "
-                    "(%s, %s, %s, %s, %s, %s, %s, %s) "
-                    "ON CONFLICT (token_id, observed_at, raw_sha256) DO NOTHING",
-                    (
-                        fee_rate_id,
-                        _id("outcome", f"polymarket:outcome:{fee_rate.token_id}"),
-                        fee_rate.token_id,
-                        fee_rate.base_fee_bps,
-                        fee_rate.observed_at,
-                        fee_rate.source_created_at,
-                        fee_rate.artifact.uri,
-                        fee_rate.artifact.sha256,
-                    ),
-                )
+            books_by_condition: dict[str, tuple[OrderBookSnapshot, ...]] = {}
+            for book in books:
+                books_by_condition.setdefault(book.condition_id, ())
+                books_by_condition[book.condition_id] += (book,)
+            for fee_policy in fee_policies:
+                for book in books_by_condition.get(fee_policy.condition_id, ()):
+                    fee_rate_id = _id(
+                        "fee-policy",
+                        fee_policy.condition_id,
+                        book.token_id,
+                        fee_policy.observed_at.isoformat(),
+                        fee_policy.artifact.sha256,
+                    )
+                    fee_rate_ids.append(fee_rate_id)
+                    cursor.execute(
+                        "INSERT INTO fee_rate_snapshots "
+                        "(id, outcome_id, token_id, condition_id, base_fee_bps, fee_rate, "
+                        "fee_exponent, fee_taker_only, observed_at, source_created_at, "
+                        "raw_artifact_uri, raw_sha256) VALUES "
+                        "(%s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s) "
+                        "ON CONFLICT (token_id, observed_at, raw_sha256) DO NOTHING",
+                        (
+                            fee_rate_id,
+                            _id("outcome", f"polymarket:outcome:{book.token_id}"),
+                            book.token_id,
+                            fee_policy.condition_id,
+                            fee_policy.rate,
+                            fee_policy.exponent,
+                            fee_policy.taker_only,
+                            fee_policy.observed_at,
+                            fee_policy.source_created_at,
+                            fee_policy.artifact.uri,
+                            fee_policy.artifact.sha256,
+                        ),
+                    )
         return FrozenPersistence(
             tuple(snapshot_ids),
             tuple(book_ids),
@@ -296,7 +306,7 @@ class PostgresMarketDataRepository:
             )
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
             cursor.execute(
-                "SELECT base_fee_bps, observed_at, source_created_at "
+                "SELECT fee_rate, fee_exponent, fee_taker_only, observed_at, source_created_at "
                 "FROM fee_rate_snapshots WHERE token_id = %s AND id = ANY(%s::uuid[]) "
                 "ORDER BY observed_at DESC, id DESC LIMIT 1",
                 (token_id, list(fee_rate_snapshot_ids)),
@@ -307,14 +317,23 @@ class PostgresMarketDataRepository:
                 f"no frozen fee rate exists for token {token_id} at cycle cutoff"
             )
         row = rows[0]
-        observed = self._aware(cast(datetime, row[1]))
-        source = self._aware(cast(datetime, row[2])) if row[2] is not None else None
+        observed = self._aware(cast(datetime, row[3]))
+        source = self._aware(cast(datetime, row[4])) if row[4] is not None else None
         if observed > cutoff or (source is not None and source > cutoff):
             raise FrozenFeePolicyUnavailable("fee rate timestamp is after cycle cutoff")
-        bps = int(str(row[0]))
-        if not 0 <= bps <= 10_000:
-            raise FrozenFeePolicyUnavailable("persisted fee rate is outside 0..10000 bps")
-        return FeePolicy(Decimal(bps) / Decimal(10_000))
+        rate = Decimal(str(row[0]))
+        if not rate.is_finite() or not Decimal(0) <= rate <= Decimal(1):
+            raise FrozenFeePolicyUnavailable("persisted fee rate is outside 0..1")
+        exponent = Decimal(str(row[1])) if row[1] is not None else None
+        taker_only = row[2]
+        if not isinstance(taker_only, bool):
+            raise FrozenFeePolicyUnavailable("persisted fee taker_only is not boolean")
+        return FeePolicy(
+            rate=rate,
+            enabled=rate > 0,
+            exponent=exponent,
+            taker_only=taker_only,
+        )
 
     @staticmethod
     def _aware(value: datetime) -> datetime:
@@ -412,8 +431,8 @@ class PolymarketFreezeService:
         *,
         clock: Callable[[], datetime],
         maximum_historical_outcomes: int = 20,
-        #May be causing too much latency, if so, decrease to 50 or below, if not, increase to 100+.
-        #This value is critical for the agent to choose the best markets to trade on. A low number is more restrictive.
+        # May cause latency; decrease below 50 if needed, increase to 100+ otherwise.
+        # This bounds how many markets the agent can choose from.
         maximum_additional_markets: int = 80, 
         venue_batch_size: int = 20,
     ) -> None:
@@ -481,10 +500,13 @@ class PolymarketFreezeService:
             for batch in _batches(tokens, self._venue_batch_size)
             for item in self._venue.get_order_book(batch)
         )
-        fee_rates = tuple(
+        condition_ids = tuple(
+            dict.fromkeys(book.condition_id for book in books if book.condition_id)
+        )
+        fee_policies = tuple(
             item
-            for batch in _batches(tokens, self._venue_batch_size)
-            for item in self._venue.get_fee_rates(batch)
+            for batch in _batches(condition_ids, self._venue_batch_size)
+            for item in self._venue.get_fee_policies(batch)
         )
         resolution_markets = tuple(dict.fromkeys((*held_markets, *historical_markets)))
         resolutions = tuple(
@@ -492,7 +514,7 @@ class PolymarketFreezeService:
             for batch in _batches(resolution_markets, 100)
             for item in self._venue.sync_resolutions(batch)
         )
-        persisted = self._repository.persist_freeze(pages, books, resolutions, fee_rates)
+        persisted = self._repository.persist_freeze(pages, books, resolutions, fee_policies)
         selected_tokens = set(tokens)
         persisted_markets = tuple(market for page in pages for market in page.markets)
         if len(persisted.market_snapshot_ids) != len(persisted_markets):
@@ -512,7 +534,7 @@ class PolymarketFreezeService:
             for item in (
                 *(page.artifact for page in pages),
                 *(book.artifact for book in books),
-                *(fee.artifact for fee in fee_rates),
+                *(fee.artifact for fee in fee_policies),
                 *(resolution.artifact for resolution in resolutions),
             )
         )
@@ -520,7 +542,7 @@ class PolymarketFreezeService:
             (
                 *(page.observed_at for page in pages),
                 *(book.observed_at for book in books),
-                *(fee.observed_at for fee in fee_rates),
+                *(fee.observed_at for fee in fee_policies),
                 *(resolution.observed_at for resolution in resolutions),
             ),
             default=completed,

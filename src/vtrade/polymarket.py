@@ -107,16 +107,26 @@ class _ArchivedResponse:
 
 
 @dataclass(frozen=True, slots=True)
-class FeeRateSnapshot:
-    token_id: str
-    base_fee_bps: int
+class FeePolicySnapshot:
+    condition_id: str
+    rate: Decimal
+    exponent: Decimal | None
+    taker_only: bool
     observed_at: datetime
     source_created_at: datetime | None
     artifact: RawArtifact
 
     def __post_init__(self) -> None:
-        if not self.token_id or not 0 <= self.base_fee_bps <= 10_000:
-            raise ValueError("fee rate requires a token and 0..10000 basis points")
+        if not self.condition_id:
+            raise ValueError("fee policy requires a condition ID")
+        if not self.rate.is_finite() or not Decimal(0) <= self.rate <= Decimal(1):
+            raise ValueError("fee rate must be finite and between zero and one")
+        if self.exponent is not None and (
+            not self.exponent.is_finite() or self.exponent < 0
+        ):
+            raise ValueError("fee exponent must be finite and non-negative")
+        if not isinstance(self.taker_only, bool):
+            raise ValueError("fee taker_only must be boolean")
         _aware_utc(self.observed_at)
         if self.source_created_at is not None:
             _aware_utc(self.source_created_at)
@@ -443,38 +453,52 @@ class PolymarketVenue:
             )
         return tuple(snapshots)
 
-    def get_fee_rates(self, outcome_ids: Sequence[str]) -> tuple[FeeRateSnapshot, ...]:
-        """Archive and normalize the official public CLOB fee rate for each token."""
-        unique = tuple(dict.fromkeys(outcome_ids))
+    def get_fee_policies(self, condition_ids: Sequence[str]) -> tuple[FeePolicySnapshot, ...]:
+        """Archive the per-market fee curve parameters from CLOB market info."""
+        unique = tuple(dict.fromkeys(condition_ids))
         if not unique or len(unique) > self._maximum_order_books_per_call:
-            raise ValueError("fee-rate request count is empty or above the configured bound")
-        if any(not token_id for token_id in unique):
-            raise ValueError("fee-rate token IDs cannot be empty")
+            raise ValueError("fee policy request count is empty or above the configured bound")
+        if any(not condition_id for condition_id in unique):
+            raise ValueError("fee policy condition IDs cannot be empty")
         archived_responses = self._parallel_get(
             tuple(
                 (
-                    f"{CLOB_BASE_URL}/fee-rate/{quote(token_id, safe='')}",
+                    f"{CLOB_BASE_URL}/clob-markets/{quote(condition_id, safe='')}",
                     [],
                 )
-                for token_id in unique
+                for condition_id in unique
             )
         )
-        rates: list[FeeRateSnapshot] = []
-        for token_id, archived in zip(unique, archived_responses, strict=True):
+        policies: list[FeePolicySnapshot] = []
+        for condition_id, archived in zip(unique, archived_responses, strict=True):
             payload = self._root_object(archived.payload)
-            base_fee = payload.get("base_fee")
-            if not isinstance(base_fee, int) or isinstance(base_fee, bool):
-                raise PolymarketPayloadError("fee-rate response requires integer base_fee")
-            rates.append(
-                FeeRateSnapshot(
-                    token_id,
-                    base_fee,
+            fee_details = payload.get("fd")
+            if not isinstance(fee_details, Mapping):
+                raise PolymarketPayloadError("CLOB market info response requires fd")
+            rate = _decimal(fee_details.get("r"), "fd.r", minimum=Decimal(0))
+            if rate > 1:
+                raise PolymarketPayloadError("fd.r must be between zero and one")
+            raw_exponent = fee_details.get("e")
+            exponent = (
+                None
+                if raw_exponent is None
+                else _decimal(raw_exponent, "fd.e", minimum=Decimal(0))
+            )
+            taker_only = fee_details.get("to")
+            if not isinstance(taker_only, bool):
+                raise PolymarketPayloadError("fd.to must be boolean")
+            policies.append(
+                FeePolicySnapshot(
+                    condition_id,
+                    rate,
+                    exponent,
+                    taker_only,
                     archived.observed_at,
                     None,
                     archived.artifact,
                 )
             )
-        return tuple(rates)
+        return tuple(policies)
 
     def sync_resolutions(self, market_ids: Sequence[str]) -> tuple[Resolution, ...]:
         venue_ids = tuple(dict.fromkeys(self._venue_market_id(value) for value in market_ids))

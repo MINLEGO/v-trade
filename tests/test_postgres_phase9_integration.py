@@ -21,7 +21,7 @@ from vtrade.domain.types import (
     Resolution,
 )
 from vtrade.market_data import FrozenFeePolicyUnavailable, PostgresMarketDataRepository
-from vtrade.polymarket import FeeRateSnapshot
+from vtrade.polymarket import FeePolicySnapshot
 
 RUN_POSTGRES = os.environ.get("VTRADE_RUN_POSTGRES_INTEGRATION") == "1"
 
@@ -106,7 +106,7 @@ class PhaseNinePostgresIntegrationTests(unittest.TestCase):
         resolution = Resolution(
             market_id, outcome.id, "YES", now, now, now, artifact
         )
-        fee = FeeRateSnapshot(token, 30, now, None, artifact)
+        fee = FeePolicySnapshot(marker, Decimal("0.03"), Decimal(2), True, now, None, artifact)
         connection = psycopg.connect(database_url)
         try:
             def connect(_url: str) -> AbstractContextManager[Any]:
@@ -124,7 +124,7 @@ class PhaseNinePostgresIntegrationTests(unittest.TestCase):
                     cutoff=now,
                     fee_rate_snapshot_ids=persisted.fee_rate_snapshot_ids,
                 ).rate,
-                Decimal("0.003"),
+                Decimal("0.03"),
             )
             with self.assertRaisesRegex(
                 FrozenFeePolicyUnavailable, "no frozen fee rate exists"

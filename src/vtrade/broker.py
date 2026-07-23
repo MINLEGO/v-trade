@@ -94,12 +94,20 @@ class FeePolicy:
         ):
             raise ValueError("fee exponent must be finite and non-negative")
 
-    def calculate_micros(self, shares: Decimal, price: Decimal) -> MicroDollars:
+    def calculate_micros(
+        self,
+        shares: Decimal,
+        price: Decimal,
+        *,
+        is_taker: bool = True,
+    ) -> MicroDollars:
         if not shares.is_finite() or shares <= 0:
             raise ValueError("fee shares must be finite and positive")
         if not price.is_finite() or not Decimal(0) <= price <= Decimal(1):
             raise ValueError("fee price must be finite and between zero and one")
         if not self.enabled or self.rate == 0:
+            return MicroDollars(0)
+        if self.taker_only and not is_taker:
             return MicroDollars(0)
         fee = (shares * self.rate * price * (Decimal(1) - price)).quantize(
             _FEE_QUANTUM, rounding=ROUND_HALF_UP
@@ -505,7 +513,11 @@ class PredictionArenaPaperBroker:
                     shares=shares,
                     price=level.price,
                     gross_micros=_money_micros(shares * level.price),
-                    fee_micros=fee_policy.calculate_micros(shares, level.price),
+                    fee_micros=fee_policy.calculate_micros(
+                        shares,
+                        level.price,
+                        is_taker=True,
+                    ),
                     filled_at=now,
                 )
             )
