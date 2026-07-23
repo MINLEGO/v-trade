@@ -111,6 +111,30 @@ class ConfigTests(unittest.TestCase):
             config.raw["owner_decisions"]["tavily_runtime_policy"]["enabled"]
         )
 
+    def test_liquidity_aware_execution_configuration(self) -> None:
+        config = load_experiment_config(
+            Path(
+                "config/experiments/"
+                "predictionarena-polymarket-v1-liquidity-aware.json"
+            )
+        )
+        self.assertEqual(config.version, "predictionarena-polymarket-v1-liquidity-aware")
+        execution = config.raw["execution"]
+        self.assertEqual(execution["paper_policy"], "liquidity_aware")
+        self.assertEqual(execution["liquidity_time_in_force"], "FAK")
+        self.assertEqual(execution["buy_fill_price"], "walk_asks")
+        self.assertEqual(execution["sell_fill_price"], "walk_bids")
+        self.assertTrue(execution["counterparty_required"])
+        self.assertEqual(execution["insufficient_depth"], "partial_fill")
+        self.assertEqual(
+            config.raw["classifications"]["execution.paper_fill_rule"],
+            "vtrade_deviation",
+        )
+        self.assertEqual(
+            config.raw["owner_decisions"]["paper_fill_rule"]["policy"],
+            "walk_displayed_book_fak_partial_fill",
+        )
+
     def test_owner_token_limits_are_frozen(self) -> None:
         config = load_experiment_config(
             Path("config/experiments/predictionarena-polymarket-v1.json")

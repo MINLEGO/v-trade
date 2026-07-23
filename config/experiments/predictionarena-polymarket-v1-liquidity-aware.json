@@ -1,0 +1,297 @@
+{
+  "experiment_version": "predictionarena-polymarket-v1-liquidity-aware",
+  "status": "ready",
+  "schedule": {
+    "interval_minutes": 60,
+    "mode": "independent_per_agent",
+    "simultaneous_start_required": false,
+    "missed_cycles": "skip"
+  },
+  "capital": {
+    "initial_balance_micros": 10000000000,
+    "currency": "USD"
+  },
+  "artifacts": {
+    "prompt": {
+      "path": "spec/prompt/predictionarena-polymarket-v1.md",
+      "sha256": "6ac731802e160d02ade16e7076ebfdf28629e086d010c7cf0b3abd979efdae0a",
+      "classification": "inferred"
+    },
+    "tool_schemas": {
+      "path": "spec/tool-schemas-v1.json",
+      "sha256": "d3ad65f8f508b7e8498d5424a23124faf754f96715986f61cdab73f52ae723ca",
+      "classification": "inferred"
+    }
+  },
+  "classifications": {
+    "schedule.interval_minutes": "vtrade_deviation",
+    "schedule.independent_per_agent": "vtrade_deviation",
+    "research.provider": "vtrade_deviation",
+    "models.gateway": "vtrade_deviation",
+    "venue.execution": "vtrade_deviation",
+    "risk.max_market_cost_basis_fraction": "documented",
+    "execution.paper_fill_rule": "vtrade_deviation",
+    "prompt.role_separation": "inferred",
+    "discovery.policy": "inferred"
+  },
+  "research": {
+    "enabled_provider": "exa",
+    "fallback_provider": null,
+    "tavily": {
+      "enabled": false,
+      "policy": "future_only_no_runtime_calls"
+    },
+    "expected_searches_conditional_on_any_search": 8,
+    "expected_searches_across_all_cycles": 3.5,
+    "expected_searches_classification": "owner_provided_empirical_expectation_not_independently_verified",
+    "maximum_results_per_search": 10,
+    "maximum_exa_cost_per_search_micros": 20000,
+    "maximum_tavily_basic_cost_per_search_micros": 8000,
+    "maximum_searches_per_agent_cycle": 50,
+    "monthly_request_cap": 18000,
+    "monthly_credit_cap": 18000,
+    "excluded_from_dollar_circuit_breaker": true,
+    "cost_dollars_semantics": "provider_estimated_nominal_not_actual_billing",
+    "unexpected_positive_billed_cost": "halt_alert_and_raise",
+    "ceiling_enforcement": "strict"
+  },
+  "execution": {
+    "paper_policy": "liquidity_aware",
+    "liquidity_time_in_force": "FAK",
+    "buy_fill_price": "walk_asks",
+    "sell_fill_price": "walk_bids",
+    "counterparty_required": true,
+    "absent_required_quote": "reject",
+    "insufficient_depth": "partial_fill"
+  },
+  "models": [
+    {
+      "label": "DeepSeek V4 Flash",
+      "slug": "deepseek/deepseek-v4-flash",
+      "maximum_quantization_bits": 8,
+      "allowed_quantizations": [
+        "fp8"
+      ],
+      "maximum_context_tokens": 100000,
+      "maximum_prompt_tokens": 88000,
+      "maximum_output_tokens": 12000,
+      "estimated_max_cost_micros": 14000,
+      "provider_max_price": {
+        "prompt": "0.12",
+        "completion": "0.24",
+        "request": "0"
+      },
+      "reasoning_effort": "max",
+      "reasoning_effort_policy": "owner_fixed",
+      "provider_allowlist": null,
+      "provider_selection": "all_compatible_sorted_by_price",
+      "allow_provider_fallbacks": true,
+      "cross_model_fallback": false,
+      "status": "ready"
+    },
+    {
+      "label": "MiMo V2.5 Pro",
+      "slug": "xiaomi/mimo-v2.5-pro",
+      "maximum_quantization_bits": 8,
+      "allowed_quantizations": [
+        "fp8",
+        "unknown"
+      ],
+      "maximum_context_tokens": 100000,
+      "maximum_prompt_tokens": 88000,
+      "maximum_output_tokens": 12000,
+      "estimated_max_cost_micros": 50000,
+      "provider_max_price": {
+        "prompt": "0.44",
+        "completion": "0.88",
+        "request": "0"
+      },
+      "reasoning_effort": "max",
+      "reasoning_effort_policy": "owner_fixed",
+      "provider_allowlist": null,
+      "provider_selection": "all_compatible_sorted_by_price",
+      "allow_provider_fallbacks": true,
+      "cross_model_fallback": false,
+      "status": "ready"
+    }
+  ],
+  "retention": {
+    "prompts_transcripts_reasoning_months": 6,
+    "visibility": "operator_only",
+    "redaction_policy": {
+      "always_redact": [
+        "secrets",
+        "tokens",
+        "authorization_headers"
+      ]
+    }
+  },
+  "limits": {
+    "maximum_model_turns": 32,
+    "maximum_total_tool_calls": 100,
+    "maximum_web_searches_per_cycle": 50,
+    "maximum_results_per_web_search": 10,
+    "maximum_model_context_tokens": 100000,
+    "reserved_model_output_tokens": 12000,
+    "maximum_assembled_input_tokens": 88000,
+    "maximum_tool_call_argument_tokens": 4000,
+    "default_maximum_tool_result_tokens": 4000,
+    "get_portfolio_maximum_tool_result_tokens": 24000,
+    "get_portfolio_pagination_required_beyond_limit": true,
+    "maximum_cycle_wall_clock_seconds": 3300,
+    "maximum_source_clock_skew_seconds": 5,
+    "maximum_archived_bid_age_seconds": 300,
+    "monthly_external_api_budget_micros": 40000000,
+    "monthly_external_api_budget_excluded_providers": [
+      "exa"
+    ],
+    "budget_alert_micros": [
+      20000000,
+      32000000,
+      40000000
+    ],
+    "maximum_market_cost_basis_fraction": "0.15"
+  },
+  "owner_decisions": {
+    "paper_fill_rule": {
+      "status": "resolved",
+      "required": true,
+      "policy": "walk_displayed_book_fak_partial_fill"
+    },
+    "model_routing": {
+      "status": "resolved",
+      "required": true,
+      "resolved": {
+        "exact_slugs": true,
+        "deepseek_quantizations": [
+          "fp8"
+        ],
+        "mimo_quantizations": [
+          "fp8",
+          "unknown"
+        ],
+        "reasoning_effort": "max",
+        "reasoning_effort_policy": "owner_fixed",
+        "provider_allowlist": "all_compatible",
+        "provider_sort": "price",
+        "allow_provider_fallbacks": true,
+        "cross_model_fallback": false
+      }
+    },
+    "prompt_transcript_visibility": {
+      "status": "resolved",
+      "required": true,
+      "retention_months": 6,
+      "visibility": "operator_only",
+      "redact": [
+        "secrets",
+        "tokens",
+        "authorization_headers"
+      ]
+    },
+    "experiment_comparison": {
+      "status": "resolved",
+      "required": false,
+      "policy": "independent_agent_start_and_schedule",
+      "simultaneous_start_required": false,
+      "membership_change_effect": "none_on_existing_agents",
+      "new_agent_start": "own_start_date"
+    },
+    "exa_web_search_burst_ceiling": {
+      "status": "resolved",
+      "required": true,
+      "maximum_per_agent_cycle": 50,
+      "enforcement": "strict"
+    },
+    "no_bid_valuation": {
+      "status": "resolved",
+      "required": true,
+      "policy": "last_known_bid",
+      "maximum_age_seconds": 300,
+      "on_missing_or_stale": "block_snapshot_and_scoring"
+    },
+    "model_token_limits": {
+      "status": "resolved",
+      "required": true,
+      "total_context_tokens": 100000,
+      "reserved_output_tokens": 12000,
+      "maximum_assembled_input_tokens": 88000,
+      "maximum_tool_call_argument_tokens": 4000,
+      "default_maximum_tool_result_tokens": 4000,
+      "get_portfolio_maximum_tool_result_tokens": 24000,
+      "get_portfolio_pagination_required_beyond_limit": true
+    },
+    "get_portfolio_pagination_contract": {
+      "status": "resolved",
+      "required": true,
+      "policy": "opaque_server_side_cursor_over_immutable_agent_cycle_snapshot",
+      "request": {
+        "cursor": "optional_string",
+        "limit": "optional_integer_1_to_200_default_100"
+      },
+      "response": [
+        "items",
+        "next_cursor",
+        "has_more"
+      ],
+      "stable_total_order": "position_id_ascending",
+      "maximum_result_tokens": 24000,
+      "foreign_or_invalid_cursor": "reject"
+    },
+    "market_cutoff_ingestion_policy": {
+      "status": "resolved",
+      "required": true,
+      "policy": "actual_completed_freeze_time_cutoff",
+      "universe": "bounded_prefreeze_market_universe",
+      "accepted_drift": "few_minutes"
+    },
+    "polymarket_fee_policy_source": {
+      "status": "resolved",
+      "required": true,
+      "endpoint": "GET https://clob.polymarket.com/fee-rate/{token_id}",
+      "field": "base_fee",
+      "unit": "basis_points",
+      "policy": "archive_and_persist_before_cycle_cutoff_no_default_rate"
+    },
+    "exa_monthly_request_credit_cap": {
+      "status": "resolved",
+      "required": true,
+      "request_cap": 18000,
+      "credit_cap": 18000,
+      "enforcement": "strict_atomic_postgresql",
+      "dollar_circuit_breaker": "excluded_while_free",
+      "nominal_cost_accounting": "required",
+      "cost_dollars_semantics": "provider_estimated_nominal_not_actual_billing",
+      "unexpected_positive_billed_cost": "halt_alert_and_raise"
+    },
+    "tavily_runtime_policy": {
+      "status": "resolved",
+      "required": true,
+      "enabled": false,
+      "policy": "future_only_no_runtime_calls",
+      "credential_presence_does_not_enable_provider": true
+    },
+    "provider_request_cost_estimates": {
+      "status": "resolved",
+      "required": true,
+      "resolved_openrouter": {
+        "deepseek/deepseek-v4-flash": {
+          "maximum_request_cost_micros": 14000,
+          "maximum_prompt_price_per_million_usd": "0.12",
+          "maximum_completion_price_per_million_usd": "0.24",
+          "maximum_request_fee_usd": "0"
+        },
+        "xiaomi/mimo-v2.5-pro": {
+          "maximum_request_cost_micros": 50000,
+          "maximum_prompt_price_per_million_usd": "0.44",
+          "maximum_completion_price_per_million_usd": "0.88",
+          "maximum_request_fee_usd": "0"
+        }
+      },
+      "resolved_research": {
+        "exa_maximum_cost_per_search_micros": 20000,
+        "tavily_basic_maximum_cost_per_search_micros": 8000
+      }
+    }
+  }
+}

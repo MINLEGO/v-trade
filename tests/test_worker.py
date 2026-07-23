@@ -11,8 +11,17 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
-from vtrade.broker import ExecutionStatus, FeePolicy
+from vtrade.broker import (
+    ExecutionStatus,
+    FeePolicy,
+    LiquidityTimeInForce,
+    PaperOrder,
+    PaperPolicy,
+    PortfolioState,
+    PredictionArenaPaperBroker,
+)
 from vtrade.config import ConfigurationError
+from vtrade.domain.types import MarketStatus, MicroDollars, Side
 from vtrade.providers import ProviderTelemetry
 from vtrade.runtime import (
     ArtifactRegistration,
@@ -33,6 +42,8 @@ from vtrade.worker import (
     ProductionHarnessPort,
     ProductionWorker,
     _harness_artifact_registrations,
+    _liquidity_time_in_force,
+    _paper_policy,
     _PostgresTradingState,
     run_worker,
 )
@@ -67,6 +78,51 @@ def _write_config(directory: str, *, pending: bool) -> Path:
 
 
 class WorkerFailClosedTests(unittest.TestCase):
+    def test_execution_policy_parsers_accept_supported_values_and_reject_unknown_values(
+        self,
+    ) -> None:
+        self.assertEqual(
+            _paper_policy({"execution": {"paper_policy": "liquidity_aware"}}),
+            PaperPolicy.LIQUIDITY_AWARE,
+        )
+        self.assertEqual(
+            _paper_policy({"execution": {"paper_policy": "predictionarena_unconditional"}}),
+            PaperPolicy.PREDICTIONARENA_UNCONDITIONAL,
+        )
+        with self.assertRaisesRegex(
+            ProductionCompositionUnavailable, "unsupported paper policy"
+        ):
+            _paper_policy({"execution": {"paper_policy": "unknown"}})
+
+        self.assertEqual(
+            _liquidity_time_in_force({"execution": {"liquidity_time_in_force": "FAK"}}),
+            LiquidityTimeInForce.FAK,
+        )
+        self.assertEqual(
+            _liquidity_time_in_force({"execution": {"liquidity_time_in_force": "FOK"}}),
+            LiquidityTimeInForce.FOK,
+        )
+        self.assertEqual(
+            _liquidity_time_in_force({"execution": {}}), LiquidityTimeInForce.FAK
+        )
+        with self.assertRaisesRegex(
+            ProductionCompositionUnavailable, "unsupported liquidity time in force"
+        ):
+            _liquidity_time_in_force({"execution": {"liquidity_time_in_force": "IOC"}})
+
+    def test_production_broker_port_uses_configured_policy_and_tif(self) -> None:
+        port = ProductionBrokerPort(
+            "postgresql://unused",
+            cast(Any, object()),
+            clock=lambda: datetime(2026, 7, 18, 10, tzinfo=UTC),
+            maximum_market_fraction=Decimal("0.15"),
+            maximum_bid_age=timedelta(minutes=5),
+            paper_policy=PaperPolicy.LIQUIDITY_AWARE,
+            liquidity_time_in_force=LiquidityTimeInForce.FOK,
+        )
+        self.assertEqual(port._broker.policy, PaperPolicy.LIQUIDITY_AWARE)
+        self.assertEqual(port._liquidity_time_in_force, LiquidityTimeInForce.FOK)
+
     def test_owner_decisions_fail_before_composition_blocker(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = _write_config(directory, pending=True)
@@ -311,7 +367,15 @@ class WorkerFailClosedTests(unittest.TestCase):
             market_id=market_id,
             outcome_id=outcome_id,
             outcome=SimpleNamespace(venue_token_id="token"),
-            order=object(),
+            order=PaperOrder(
+                str(intent_id),
+                str(agent_id),
+                str(market_id),
+                str(outcome_id),
+                Side.BUY,
+                Decimal("1"),
+                cutoff,
+            ),
             market=object(),
             book=object(),
             book_snapshot_id=book_id,
@@ -343,7 +407,10 @@ class WorkerFailClosedTests(unittest.TestCase):
                 return FeePolicy(Decimal(0))
 
         class Broker:
+            seen_order = None
+
             def place(self, *_args, **_kwargs):
+                self.seen_order = _args[0]
                 return SimpleNamespace(
                     status=ExecutionStatus.FILLED,
                     rejection_code=None,
@@ -360,6 +427,7 @@ class WorkerFailClosedTests(unittest.TestCase):
         port._broker = Broker()
         port._repository = Repository()
         port._clock = lambda: cutoff
+        port._liquidity_time_in_force = LiquidityTimeInForce.FAK
         frozen = {
             "market_snapshot_ids": [str(market_snapshot_id)],
             "order_book_snapshot_ids": [str(book_id)],
@@ -373,6 +441,125 @@ class WorkerFailClosedTests(unittest.TestCase):
         self.assertEqual(result.accepted_trades, 1)
         self.assertEqual(state.seen_books, (book_id,))
         self.assertEqual(market_repository.seen_fees, (fee_id,))
+        self.assertEqual(port._broker.seen_order.liquidity_time_in_force, LiquidityTimeInForce.FAK)
+
+    def test_production_broker_port_returns_liquidity_aware_partial_fill(self) -> None:
+        cycle_id, agent_id = uuid.uuid4(), uuid.uuid4()
+        cutoff = datetime(2026, 7, 18, 10, tzinfo=UTC)
+        intent_id, market_id, outcome_id, book_id, fee_id = (
+            uuid.uuid4(),
+            uuid.uuid4(),
+            uuid.uuid4(),
+            uuid.uuid4(),
+            uuid.uuid4(),
+        )
+        claim = CycleClaim(
+            cycle_id,
+            agent_id,
+            cutoff,
+            cutoff,
+            "worker",
+            cutoff + timedelta(minutes=10),
+        )
+        order = PaperOrder(
+            str(intent_id),
+            str(agent_id),
+            str(market_id),
+            str(outcome_id),
+            Side.BUY,
+            Decimal("5"),
+            cutoff,
+        )
+        item = SimpleNamespace(
+            intent_id=intent_id,
+            market_id=market_id,
+            outcome_id=outcome_id,
+            order=order,
+            market=SimpleNamespace(
+                id=str(market_id),
+                status=MarketStatus.OPEN,
+                opens_at=cutoff - timedelta(days=1),
+                closes_at=cutoff + timedelta(days=1),
+                tradeable=True,
+                observed_at=cutoff - timedelta(seconds=2),
+            ),
+            outcome=SimpleNamespace(
+                id=str(outcome_id),
+                market_id=str(market_id),
+                venue_token_id="token",
+                tradeable=True,
+            ),
+            book=SimpleNamespace(
+                token_id="token",
+                observed_at=cutoff - timedelta(seconds=1),
+                source_created_at=cutoff - timedelta(seconds=1),
+                best_bid=Decimal("0.39"),
+                best_ask=Decimal("0.40"),
+                bids=(SimpleNamespace(price=Decimal("0.39"), size=Decimal("10")),),
+                asks=(
+                    SimpleNamespace(price=Decimal("0.40"), size=Decimal("1")),
+                    SimpleNamespace(price=Decimal("0.41"), size=Decimal("2")),
+                ),
+                tick_size=Decimal("0.01"),
+                minimum_order_size=Decimal("1"),
+            ),
+            book_snapshot_id=book_id,
+        )
+
+        class State:
+            def persisted_harness_intents(self, _claim, _harness):
+                return {intent_id}
+
+            def pending_intents(self, _claim, _frozen):
+                return (item,)
+
+            def portfolio(self, _agent_id):
+                return PortfolioState(str(agent_id), MicroDollars(10_000_000_000))
+
+            def executable_bids(self, _portfolio, *, cutoff, order_book_snapshot_ids):
+                return {}
+
+        class MarketRepository:
+            def frozen_fee_policy(self, _token, *, cutoff, fee_rate_snapshot_ids):
+                return FeePolicy(Decimal("0"))
+
+        class Repository:
+            result = None
+
+            def persist_execution(self, result, **_kwargs):
+                self.result = result
+                return SimpleNamespace(record_id=uuid.uuid4())
+
+        repository = Repository()
+        port = cast(Any, ProductionBrokerPort.__new__(ProductionBrokerPort))
+        port._state = State()
+        port._market_repository = MarketRepository()
+        port._repository = repository
+        port._broker = PredictionArenaPaperBroker(policy=PaperPolicy.LIQUIDITY_AWARE)
+        port._liquidity_time_in_force = LiquidityTimeInForce.FAK
+        port._clock = lambda: cutoff
+
+        result = port.execute(
+            claim,
+            {
+                "order_book_snapshot_ids": [str(book_id)],
+                "fee_rate_snapshot_ids": [str(fee_id)],
+            },
+            {"harness_run_id": str(uuid.uuid4()), "intent_ids": [str(intent_id)]},
+        )
+
+        self.assertEqual(result.accepted_trades, 1)
+        self.assertEqual(repository.result.status, ExecutionStatus.PARTIAL)
+        self.assertEqual(repository.result.policy, PaperPolicy.LIQUIDITY_AWARE)
+        self.assertEqual(
+            repository.result.order.liquidity_time_in_force,
+            LiquidityTimeInForce.FAK,
+        )
+        self.assertEqual(
+            [(fill.shares, fill.price) for fill in repository.result.fills],
+            [(Decimal("1"), Decimal("0.40")), (Decimal("2"), Decimal("0.41"))],
+        )
+        self.assertEqual(repository.result.portfolio.position(str(outcome_id)).shares, Decimal("3"))
 
     def test_offline_cycle_graph_replays_completed_checkpoints_without_side_effects(self) -> None:
         now = datetime(2026, 7, 18, 10, tzinfo=UTC)

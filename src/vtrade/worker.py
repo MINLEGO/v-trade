@@ -8,7 +8,7 @@ import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -18,6 +18,7 @@ from vtrade.artifacts import SupabaseArtifactStore
 from vtrade.broker import (
     ArchivedBid,
     ExecutionStatus,
+    LiquidityTimeInForce,
     PaperOrder,
     PaperPolicy,
     PortfolioState,
@@ -947,6 +948,8 @@ class ProductionBrokerPort:
         clock: Callable[[], datetime],
         maximum_market_fraction: Decimal,
         maximum_bid_age: timedelta,
+        paper_policy: PaperPolicy,
+        liquidity_time_in_force: LiquidityTimeInForce,
         connect: _Connect | None = None,
     ) -> None:
         self._database_url = database_url
@@ -954,8 +957,9 @@ class ProductionBrokerPort:
         self._clock = clock
         self._state = _PostgresTradingState(database_url, connect=connect)
         self._repository = PostgresBrokerRepository(database_url, connect=connect)
+        self._liquidity_time_in_force = liquidity_time_in_force
         self._broker = PredictionArenaPaperBroker(
-            policy=PaperPolicy.PREDICTIONARENA_UNCONDITIONAL,
+            policy=paper_policy,
             maximum_market_cost_basis_fraction=maximum_market_fraction,
             maximum_book_age=maximum_bid_age,
             maximum_valuation_bid_age=maximum_bid_age,
@@ -988,8 +992,12 @@ class ProductionBrokerPort:
                 cutoff=_cutoff(claim),
                 fee_rate_snapshot_ids=fee_ids,
             )
-            result = self._broker.place(
+            order = replace(
                 item.order,
+                liquidity_time_in_force=self._liquidity_time_in_force,
+            )
+            result = self._broker.place(
+                order,
                 market=item.market,
                 outcome=item.outcome,
                 snapshot=item.book,
@@ -1382,6 +1390,8 @@ def build_production_worker(
                 str(config.raw["limits"]["maximum_market_cost_basis_fraction"])
             ),
             maximum_bid_age=maximum_bid_age,
+            paper_policy=_paper_policy(config.raw),
+            liquidity_time_in_force=_liquidity_time_in_force(config.raw),
         ),
         settlement_valuation=settlement_valuation,
         clock=clock,
@@ -1460,6 +1470,36 @@ def _harness_limits(raw: Mapping[str, Any]) -> HarnessLimits:
         _integer(limits, "default_maximum_tool_result_tokens"),
         _integer(limits, "get_portfolio_maximum_tool_result_tokens"),
     )
+
+
+def _paper_policy(raw: Mapping[str, Any]) -> PaperPolicy:
+    execution = raw.get("execution")
+    if not isinstance(execution, Mapping):
+        raise ProductionCompositionUnavailable(
+            "experiment execution configuration is missing"
+        )
+    value = execution.get("paper_policy")
+    try:
+        return PaperPolicy(str(value))
+    except ValueError as exc:
+        raise ProductionCompositionUnavailable(
+            f"unsupported paper policy: {value}"
+        ) from exc
+
+
+def _liquidity_time_in_force(raw: Mapping[str, Any]) -> LiquidityTimeInForce:
+    execution = raw.get("execution")
+    if not isinstance(execution, Mapping):
+        raise ProductionCompositionUnavailable(
+            "experiment execution configuration is missing"
+        )
+    value = execution.get("liquidity_time_in_force", "FAK")
+    try:
+        return LiquidityTimeInForce(str(value))
+    except ValueError as exc:
+        raise ProductionCompositionUnavailable(
+            f"unsupported liquidity time in force: {value}"
+        ) from exc
 
 
 def _verify_frozen_artifact(raw: Mapping[str, object], name: str) -> None:

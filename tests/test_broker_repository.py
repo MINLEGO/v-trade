@@ -11,6 +11,7 @@ from vtrade.broker import (
     ExecutionResult,
     ExecutionStatus,
     FeePolicy,
+    LiquidityTimeInForce,
     PaperFill,
     PaperOrder,
     PaperPolicy,
@@ -182,6 +183,64 @@ def accepted_result() -> ExecutionResult:
     )
 
 
+def partial_liquidity_aware_result() -> ExecutionResult:
+    base = accepted_result()
+    order = replace(
+        base.order,
+        shares=Decimal(5),
+        liquidity_time_in_force=LiquidityTimeInForce.FAK,
+    )
+    first = replace(
+        base.fills[0],
+        id="external-fill-1-partial",
+        shares=Decimal(1),
+        price=Decimal("0.4"),
+        gross_micros=MicroDollars(400_000),
+    )
+    second = replace(
+        base.fills[0],
+        id="external-fill-2-partial",
+        fill_index=1,
+        shares=Decimal(2),
+        price=Decimal("0.41"),
+        gross_micros=MicroDollars(820_000),
+    )
+    position = replace(
+        base.portfolio.positions[0],
+        shares=Decimal(3),
+        average_cost=Decimal("0.4066666666666666666666666667"),
+        cost_basis_micros=MicroDollars(1_220_000),
+    )
+    after = replace(
+        base.portfolio,
+        cash_micros=MicroDollars(9_998_780_000),
+        positions=(position,),
+    )
+    ledger = replace(
+        base.ledger_entries[0],
+        postings=(
+            Posting(LedgerAccount.CASH, MicroDollars(-1_220_000)),
+            Posting(
+                LedgerAccount.POSITION_COST,
+                MicroDollars(1_220_000),
+                market_id=position.market_id,
+                outcome_id=position.outcome_id,
+                shares_delta=Decimal(3),
+            ),
+        ),
+    )
+    return replace(
+        base,
+        order=order,
+        policy=PaperPolicy.LIQUIDITY_AWARE,
+        status=ExecutionStatus.PARTIAL,
+        fills=(first, second),
+        portfolio=after,
+        ledger_entries=(ledger,),
+        fee_policy=FeePolicy(Decimal("0")),
+    )
+
+
 class PostgresBrokerRepositoryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.connection = RecordingConnection()
@@ -252,6 +311,33 @@ class PostgresBrokerRepositoryTests(unittest.TestCase):
         persisted = self.repository.persist_execution(accepted_result(), **self.ids)
         self.assertTrue(persisted.created)
         self.assertEqual(self.connection.cursor_instance.portfolio_version, 8)
+
+    def test_partial_liquidity_aware_execution_persists_policy_tif_and_all_fills(self) -> None:
+        self.connection.cursor_instance.portfolio_version = 7
+        result = partial_liquidity_aware_result()
+        persisted = self.repository.persist_execution(result, **self.ids)
+
+        order_insert = next(
+            params
+            for query, params in self.connection.cursor_instance.queries
+            if query.startswith("INSERT INTO orders")
+        )
+        fill_inserts = [
+            params
+            for query, params in self.connection.cursor_instance.queries
+            if query.startswith("INSERT INTO fills")
+        ]
+        self.assertTrue(persisted.created)
+        self.assertEqual(order_insert[2], PaperPolicy.LIQUIDITY_AWARE.value)
+        self.assertEqual(order_insert[3], ExecutionStatus.PARTIAL.value)
+        self.assertEqual(order_insert[4], Decimal(5))
+        self.assertEqual(order_insert[10], LiquidityTimeInForce.FAK.value)
+        self.assertEqual(len(fill_inserts), 2)
+        self.assertEqual(sum((params[3] for params in fill_inserts), Decimal(0)), Decimal(3))
+        self.assertEqual(
+            result.portfolio.position("polymarket:outcome:yes").shares,
+            Decimal(3),
+        )
 
     def test_execution_relation_mismatch_fails_before_order_insert(self) -> None:
         relation = self.connection.cursor_instance.execution_relation
