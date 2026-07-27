@@ -122,7 +122,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.version, "predictionarena-polymarket-v1-liquidity-aware")
         execution = config.raw["execution"]
         self.assertEqual(execution["paper_policy"], "liquidity_aware")
-        self.assertEqual(execution["liquidity_time_in_force"], "FAK")
+        self.assertEqual(execution["liquidity_time_in_force"], "IOC")
         self.assertEqual(execution["buy_fill_price"], "walk_asks")
         self.assertEqual(execution["sell_fill_price"], "walk_bids")
         self.assertTrue(execution["counterparty_required"])

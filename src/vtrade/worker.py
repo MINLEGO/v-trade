@@ -6,9 +6,9 @@ import os
 import socket
 import time
 import uuid
-from collections.abc import Callable, Mapping, Sequence
-from contextlib import AbstractContextManager
-from dataclasses import asdict, dataclass, replace
+from collections.abc import Callable, Generator, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -58,6 +58,7 @@ from vtrade.harness import (
 )
 from vtrade.harness_repository import PostgresBudgetGuard, PostgresHarnessRepository
 from vtrade.market_data import PolymarketFreezeService, PostgresMarketDataRepository
+from vtrade.order_execution import MarketOrderExecutor
 from vtrade.polymarket import PolymarketVenue
 from vtrade.postgres_runtime import PostgresRuntimeRepository
 from vtrade.production_tools import ProductionToolRegistry, production_tool_context
@@ -322,6 +323,7 @@ class ProductionHarnessPort:
         schema_path: str | Path,
         connect: _Connect | None = None,
         maximum_beliefs_per_agent: int = 100,
+        immediate_order_executor: MarketOrderExecutor | None = None,
     ) -> None:
         self._database_url = database_url
         self._store = artifact_store
@@ -340,6 +342,7 @@ class ProductionHarnessPort:
             raise ValueError("maximum_beliefs_per_agent must be a positive integer")
         self._maximum_beliefs_per_agent = maximum_beliefs_per_agent
         self._repository = PostgresHarnessRepository(database_url, connect=connect)
+        self._immediate_order_executor = immediate_order_executor
 
     def run(
         self, claim: CycleClaim, frozen: JsonObject, prompt: JsonObject
@@ -348,6 +351,7 @@ class ProductionHarnessPort:
         if claim.recovery:
             return self._recover_completed_run(claim)
         messages, model_config = self._load_context(claim.cycle_id)
+        immediate_executor = self._immediate_order_executor
         context = production_tool_context(
             self._database_url,
             claim,
@@ -355,6 +359,12 @@ class ProductionHarnessPort:
             frozen=frozen,
             clock=self._clock,
             maximum_beliefs_per_agent=self._maximum_beliefs_per_agent,
+            immediate_order_executor=(
+                (lambda submission: immediate_executor.submit_and_execute(
+                    claim, frozen, submission
+                ))
+                if immediate_executor is not None else None
+            ),
         )
         registry = ProductionToolRegistry(context, schema_path=self._schema_path)
         result = BoundedToolHarness(
@@ -667,6 +677,40 @@ class _PostgresTradingState:
         self._database_url = database_url
         self._connect = connect or _default_connect
 
+    @contextmanager
+    def locked_cursor(self, agent_id: uuid.UUID) -> Generator[_Cursor, None, None]:
+        """Yield the single transaction used by an immediate order execution."""
+        with self._connect(self._database_url) as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (str(agent_id),)
+            )
+            yield cursor
+
+    @staticmethod
+    def insert_intent(cursor: _Cursor, claim: CycleClaim, submission: Any) -> None:
+        cursor.execute(
+            "INSERT INTO order_intents "
+            "(id, agent_cycle_id, market_id, outcome_id, side, amount_micros, shares, "
+            "strategy, thesis, estimated_probability, expected_value_micros, "
+            "validation_status, idempotency_key, created_at) VALUES "
+            "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, "
+            "'submitted_for_immediate_execution', %s, %s)",
+            (
+                submission.intent_id,
+                claim.cycle_id,
+                submission.market_id,
+                submission.outcome_id,
+                submission.side,
+                submission.amount_micros,
+                submission.shares,
+                "observed_submit_market_order_intent",
+                "submitted through frozen tool contract",
+                submission.confidence,
+                f"intent:{submission.intent_id}",
+                submission.created_at,
+            ),
+        )
+
     def persisted_harness_intents(
         self, claim: CycleClaim, harness: Mapping[str, object]
     ) -> set[uuid.UUID]:
@@ -699,7 +743,11 @@ class _PostgresTradingState:
         return persisted_ids
 
     def pending_intents(
-        self, claim: CycleClaim, frozen: Mapping[str, object]
+        self,
+        claim: CycleClaim,
+        frozen: Mapping[str, object],
+        *,
+        cursor: _Cursor | None = None,
     ) -> tuple[_TradingContext, ...]:
         book_ids = _uuids(frozen, "order_book_snapshot_ids")
         market_snapshot_ids = _uuids(frozen, "market_snapshot_ids")
@@ -707,8 +755,13 @@ class _PostgresTradingState:
             raise ProductionCompositionUnavailable(
                 "broker requires current-cycle market and order-book memberships"
             )
-        with self._connect(self._database_url) as connection, connection.cursor() as cursor:
-            cursor.execute(
+        if cursor is None:
+            with (
+                self._connect(self._database_url) as connection,
+                connection.cursor() as local_cursor,
+            ):
+                return self.pending_intents(claim, frozen, cursor=local_cursor)
+        cursor.execute(
                 "SELECT oi.id, oi.market_id, oi.outcome_id, oi.side, oi.shares, "
                 "oi.created_at, ms.payload, ms.volume_micros, ms.liquidity_micros, "
                 "ms.status, obs.id, obs.cutoff, obs.source_created_at, obs.bids, obs.asks, "
@@ -734,8 +787,8 @@ class _PostgresTradingState:
                     _cutoff(claim),
                     _cutoff(claim),
                 ),
-            )
-            rows = cursor.fetchall()
+        )
+        rows = cursor.fetchall()
         return tuple(self._trading_context(row, claim.agent_id) for row in rows)
 
     @staticmethod
@@ -843,26 +896,31 @@ class _PostgresTradingState:
             uuid.UUID(str(row[10])),
         )
 
-    def portfolio(self, agent_id: uuid.UUID) -> PortfolioState:
-        with self._connect(self._database_url) as connection, connection.cursor() as cursor:
-            cursor.execute(
+    def portfolio(self, agent_id: uuid.UUID, *, cursor: _Cursor | None = None) -> PortfolioState:
+        if cursor is None:
+            with (
+                self._connect(self._database_url) as connection,
+                connection.cursor() as local_cursor,
+            ):
+                return self.portfolio(agent_id, cursor=local_cursor)
+        cursor.execute(
                 "SELECT COALESCE(sum(lp.amount_micros) FILTER "
                 "(WHERE lp.account = 'cash'), 0), a.portfolio_version FROM agents a "
                 "LEFT JOIN ledger_entries le ON le.agent_id = a.id "
                 "LEFT JOIN ledger_postings lp ON lp.ledger_entry_id = le.id "
                 "WHERE a.id = %s GROUP BY a.id",
                 (agent_id,),
-            )
-            account = cursor.fetchone()
-            cursor.execute(
+        )
+        account = cursor.fetchone()
+        cursor.execute(
                 "SELECT m.id, p.outcome_id, p.shares, p.average_cost, "
                 "p.cost_basis_micros, p.realized_pnl_micros FROM positions p "
                 "JOIN outcomes o ON o.id = p.outcome_id "
                 "JOIN markets m ON m.id = o.market_id "
                 "WHERE p.agent_id = %s AND p.shares > 0 ORDER BY p.outcome_id",
                 (agent_id,),
-            )
-            positions = cursor.fetchall()
+        )
+        positions = cursor.fetchall()
         if account is None:
             raise ProductionCompositionUnavailable("agent portfolio is missing")
         return PortfolioState(
@@ -889,19 +947,30 @@ class _PostgresTradingState:
         *,
         cutoff: datetime,
         order_book_snapshot_ids: Sequence[uuid.UUID],
+        cursor: _Cursor | None = None,
     ) -> dict[str, ArchivedBid | None]:
         if not portfolio.positions:
             return {}
         outcomes = [uuid.UUID(row.outcome_id) for row in portfolio.positions]
-        with self._connect(self._database_url) as connection, connection.cursor() as cursor:
-            cursor.execute(
+        if cursor is None:
+            with (
+                self._connect(self._database_url) as connection,
+                connection.cursor() as local_cursor,
+            ):
+                return self.executable_bids(
+                    portfolio,
+                    cutoff=cutoff,
+                    order_book_snapshot_ids=order_book_snapshot_ids,
+                    cursor=local_cursor,
+                )
+        cursor.execute(
                 "SELECT DISTINCT ON (obs.outcome_id) obs.outcome_id, obs.best_bid, obs.cutoff "
                 "FROM order_book_snapshots obs WHERE obs.outcome_id = ANY(%s::uuid[]) "
                 "AND obs.id = ANY(%s::uuid[]) AND obs.cutoff <= %s "
                 "ORDER BY obs.outcome_id, obs.cutoff DESC, obs.id DESC",
                 (outcomes, list(order_book_snapshot_ids), cutoff),
-            )
-            rows = cursor.fetchall()
+        )
+        rows = cursor.fetchall()
         found = {
             str(row[0]): (
                 ArchivedBid(Decimal(str(row[1])), cast(datetime, row[2]))
@@ -980,50 +1049,27 @@ class ProductionBrokerPort:
         allowed_intents = self._state.persisted_harness_intents(claim, harness)
         if not allowed_intents:
             return BrokerExecutionResult({"order_ids": [], "rejections": []}, (), 0)
-        fee_ids = _uuids(frozen, "fee_rate_snapshot_ids")
-        book_ids = _uuids(frozen, "order_book_snapshot_ids")
-        if not fee_ids:
-            raise ProductionCompositionUnavailable("cycle has no frozen fee-rate membership")
         created: list[str] = []
         rejected: list[JsonObject] = []
         accepted = 0
+        executor = MarketOrderExecutor(
+            self._state,
+            self._market_repository,
+            self._repository,
+            broker=self._broker,
+            clock=self._clock,
+        )
         for item in self._state.pending_intents(claim, frozen):
             if item.intent_id not in allowed_intents:
                 raise ProductionCompositionUnavailable("broker encountered a foreign cycle intent")
-            portfolio = self._state.portfolio(claim.agent_id)
-            bids = self._state.executable_bids(
-                portfolio,
-                cutoff=_cutoff(claim),
-                order_book_snapshot_ids=book_ids,
+            result = executor.execute(
+                claim,
+                frozen,
+                item.intent_id,
+                time_in_force=self._liquidity_time_in_force,
             )
-            fee = self._market_repository.frozen_fee_policy(
-                item.outcome.venue_token_id,
-                cutoff=_cutoff(claim),
-                fee_rate_snapshot_ids=fee_ids,
-            )
-            order = replace(
-                item.order,
-                liquidity_time_in_force=self._liquidity_time_in_force,
-            )
-            result = self._broker.place(
-                order,
-                market=item.market,
-                outcome=item.outcome,
-                snapshot=item.book,
-                portfolio=portfolio,
-                executable_bids=bids,
-                fee_policy=fee,
-                now=_aware(self._clock()),
-            )
-            persisted = self._repository.persist_execution(
-                result,
-                agent_id=claim.agent_id,
-                intent_id=item.intent_id,
-                market_id=item.market_id,
-                outcome_id=item.outcome_id,
-                snapshot_id=item.book_snapshot_id,
-            )
-            created.append(str(persisted.record_id))
+            order = getattr(result, "order", item.order)
+            created.append(str(uuid.uuid5(uuid.NAMESPACE_URL, f"vtrade:order:{order.id}")))
             if result.status is ExecutionStatus.REJECTED:
                 rejected.append(
                     {
@@ -1375,6 +1421,20 @@ def build_production_worker(
         clock=clock,
         maximum_bid_age=maximum_bid_age,
     )
+    immediate_order_executor = MarketOrderExecutor(
+        _PostgresTradingState(database_url),
+        market_repository,
+        PostgresBrokerRepository(database_url),
+        broker=PredictionArenaPaperBroker(
+            policy=_paper_policy(config.raw),
+            maximum_market_cost_basis_fraction=Decimal(
+                str(config.raw["limits"]["maximum_market_cost_basis_fraction"])
+            ),
+            maximum_book_age=maximum_bid_age,
+            maximum_valuation_bid_age=maximum_bid_age,
+        ),
+        clock=clock,
+    )
     orchestrator = CycleOrchestrator(
         repository=repository,
         market_freezer=PolymarketFreezeService(
@@ -1394,6 +1454,7 @@ def build_production_worker(
             monotonic=monotonic,
             schema_path=str(config.raw["artifacts"]["tool_schemas"]["path"]),
             maximum_beliefs_per_agent=maximum_beliefs_per_agent,
+            immediate_order_executor=immediate_order_executor,
         ),
         broker=ProductionBrokerPort(
             database_url,
@@ -1506,7 +1567,7 @@ def _liquidity_time_in_force(raw: Mapping[str, Any]) -> LiquidityTimeInForce:
         raise ProductionCompositionUnavailable(
             "experiment execution configuration is missing"
         )
-    value = execution.get("liquidity_time_in_force", "FAK")
+    value = execution.get("liquidity_time_in_force", "IOC")
     try:
         return LiquidityTimeInForce(str(value))
     except ValueError as exc:

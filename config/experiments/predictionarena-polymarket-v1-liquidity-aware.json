@@ -57,7 +57,7 @@
   },
   "execution": {
     "paper_policy": "liquidity_aware",
-    "liquidity_time_in_force": "FAK",
+    "liquidity_time_in_force": "IOC",
     "buy_fill_price": "walk_asks",
     "sell_fill_price": "walk_bids",
     "counterparty_required": true,

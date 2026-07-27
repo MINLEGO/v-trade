@@ -13,6 +13,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Protocol, cast
 
+from vtrade.broker import ExecutionStatus, LiquidityTimeInForce, OrderAmountType
 from vtrade.domain.ports import JsonObject
 from vtrade.harness import (
     BELIEF_CATEGORIES,
@@ -24,6 +25,7 @@ from vtrade.harness import (
     ToolSpec,
 )
 from vtrade.harness_repository import PostgresHarnessRepository
+from vtrade.order_execution import ExecutionReceipt, MarketOrderSubmission
 from vtrade.portfolio import PostgresPortfolioHandler
 from vtrade.providers import ExaResearchProvider
 from vtrade.runtime import CycleClaim
@@ -59,6 +61,10 @@ class ToolContext:
     order_book_snapshot_ids: tuple[uuid.UUID, ...] = ()
     maximum_default_result_tokens: int = 4_000
     maximum_book_age: timedelta = timedelta(minutes=5)
+    immediate_order_executor: Callable[
+        [MarketOrderSubmission],
+        ExecutionReceipt,
+    ] | None = None
 
     def __post_init__(self) -> None:
         if not self.database_url or self.claim.data_cutoff is None:
@@ -629,6 +635,11 @@ class ProductionToolRegistry:
             raise ValueError("side must be BUY or SELL")
         amount = _positive_decimal(arguments.get("amount"), "amount")
         confidence = _unit_interval(arguments.get("conviction", "0.5"), "conviction")
+        amount_type = _order_amount_type(arguments.get("amount_type"), side)
+        time_in_force = _liquidity_time_in_force(arguments.get("time_in_force", "IOC"))
+        limit_price = _optional_unit_interval(arguments.get("limit_price"), "limit_price")
+        if amount_type is OrderAmountType.CASH and side != "BUY":
+            raise ValueError("amount_type CASH is supported only for BUY orders")
         rows = self._query(
             "SELECT o.id, o.market_id FROM outcomes o JOIN market_snapshots ms "
             "ON ms.market_id = o.market_id WHERE o.venue_token_id = %s "
@@ -661,20 +672,20 @@ class ProductionToolRegistry:
             raise ToolContextUnavailable(
                 "trade token has no order book in the current-cycle frozen universe"
             )
-        # The source traces do not publish ``amount`` semantics. V1 freezes the
-        # Polymarket market-order convention: BUY is USD notional and SELL is shares.
-        # For a quote-less BUY, the positive amount is retained only to let the broker
-        # persist REQUIRED_QUOTE_ABSENT; it can never become a fill.
+        # Cash buys use the best ask only to express a share ceiling for audit. The
+        # broker walks the book and enforces the cash budget (including fees).
         best_ask = Decimal(str(books[0][0])) if books[0][0] is not None else None
         shares = amount
-        if side == "BUY" and best_ask is not None and best_ask != 0:
+        if amount_type is OrderAmountType.CASH and best_ask is not None and best_ask != 0:
             shares = amount / best_ask
         intent_id = self._mutation_id("intent", arguments)
-        with (
-            self._context.connect(self._context.database_url) as connection,
-            connection.cursor() as cursor,
-        ):
-            cursor.execute(
+        executor = self._context.immediate_order_executor
+        if executor is None:
+            with (
+                self._context.connect(self._context.database_url) as connection,
+                connection.cursor() as cursor,
+            ):
+                cursor.execute(
                 "INSERT INTO order_intents "
                 "(id, agent_cycle_id, market_id, outcome_id, side, amount_micros, shares, "
                 "strategy, thesis, estimated_probability, expected_value_micros, "
@@ -696,8 +707,36 @@ class ProductionToolRegistry:
                     f"intent:{intent_id}",
                     self._context.now(),
                 ),
+                )
+            # Production always injects this dependency; retaining the legacy
+            # result keeps isolated registry composition non-mutating.
+            return {"intent_id": str(intent_id), "status": "pending_broker_validation"}
+        result = executor(
+            MarketOrderSubmission(
+                intent_id=intent_id,
+                market_id=uuid.UUID(str(rows[0][1])),
+                outcome_id=uuid.UUID(str(rows[0][0])),
+                side=side,
+                amount_micros=int(amount * Decimal(1_000_000)),
+                shares=shares,
+                confidence=confidence,
+                created_at=self._context.now(),
+                amount_type=amount_type,
+                cash_budget_micros=(
+                    int(amount * Decimal(1_000_000))
+                    if amount_type is OrderAmountType.CASH
+                    else None
+                ),
+                limit_price=limit_price,
+                time_in_force=time_in_force,
             )
-        return {"intent_id": str(intent_id), "status": "pending_broker_validation"}
+        )
+        return _execution_output(
+            result,
+            intent_id=intent_id,
+            requested_amount=amount,
+            amount_type=amount_type,
+        )
 
     def _mutation_id(self, kind: str, arguments: Mapping[str, object]) -> uuid.UUID:
         """Stable across a restart that replays the same ordered tool transcript."""
@@ -1071,6 +1110,90 @@ def _unit_interval(value: object, name: str) -> Decimal:
     return result
 
 
+def _optional_unit_interval(value: object, name: str) -> Decimal | None:
+    return None if value is None else _unit_interval(value, name)
+
+
+def _order_amount_type(value: object, side: str) -> OrderAmountType:
+    if value is None:
+        return OrderAmountType.CASH if side == "BUY" else OrderAmountType.SHARES
+    try:
+        return OrderAmountType(str(value))
+    except ValueError as exc:
+        raise ValueError("amount_type must be CASH or SHARES") from exc
+
+
+def _liquidity_time_in_force(value: object) -> LiquidityTimeInForce:
+    normalized = str(value)
+    try:
+        return LiquidityTimeInForce(normalized)
+    except ValueError as exc:
+        raise ValueError("time_in_force must be IOC or FOK") from exc
+
+
+def _execution_output(
+    receipt: ExecutionReceipt,
+    *,
+    intent_id: uuid.UUID,
+    requested_amount: Decimal,
+    amount_type: OrderAmountType,
+) -> JsonObject:
+    result = receipt.result
+    filled = sum((fill.shares for fill in result.fills), start=Decimal(0))
+    gross = sum(int(fill.gross_micros) for fill in result.fills)
+    fees = sum(int(fill.fee_micros) for fill in result.fills)
+    position = result.portfolio.position(result.order.outcome_id)
+    after: JsonObject = {
+        "version": result.portfolio.version,
+        "cash_micros": int(result.portfolio.cash_micros),
+        "affected_position": (
+            {"outcome_id": result.order.outcome_id, "shares": str(position.shares),
+             "average_cost": str(position.average_cost),
+             "cost_basis_micros": int(position.cost_basis_micros)}
+            if position is not None else None
+        ),
+    }
+    output: JsonObject = {
+        "status": result.status.value,
+        "intent_id": str(intent_id),
+        "order_id": str(receipt.order_id),
+        "side": result.order.side.value,
+        "requested": {"amount": str(requested_amount), "amount_type": amount_type.value,
+                      "requested_shares": str(result.order.shares)},
+        "portfolio_after": after,
+        "snapshot": {
+            "snapshot_id": str(receipt.snapshot_id),
+            "observed_at": result.snapshot.observed_at.isoformat(),
+        },
+    }
+    if result.status is ExecutionStatus.REJECTED:
+        output["rejection_code"] = result.rejection_code.value if result.rejection_code else None
+        code = result.rejection_code.value if result.rejection_code else ""
+        output["message"] = _rejection_message(code)
+        return output
+    output["execution"] = {
+        "filled_shares": str(filled), "cancelled_shares": str(result.order.shares - filled),
+        "average_price": str(Decimal(gross) / Decimal(1_000_000) / filled),
+        "gross_micros": gross, "fee_micros": fees,
+        "cash_delta_micros": (
+            int(result.portfolio.cash_micros) - int(result.portfolio_before.cash_micros)
+        ),
+        "remainder_status": "cancelled" if filled < result.order.shares else "none",
+    }
+    return output
+
+
+def _rejection_message(code: str) -> str:
+    messages = {
+        "insufficient_cash": "Required cash including fees exceeds available cash.",
+        "insufficient_shares": "Requested shares exceed the available position.",
+        "price_limit_not_market": "No displayed liquidity satisfies the price limit.",
+        "fok_not_filled": "The order could not be filled completely under FOK semantics.",
+        "no_liquidity": "No executable displayed liquidity is available.",
+    }
+    return messages.get(code, "The order was rejected by the paper broker.")
+
+
 def _belief_category(value: object) -> str:
     category = _required_string({"category": value}, "category")
     if category not in BELIEF_CATEGORIES:
@@ -1249,6 +1372,10 @@ def production_tool_context(
     frozen: Mapping[str, object],
     clock: Callable[[], datetime],
     maximum_beliefs_per_agent: int = 100,
+    immediate_order_executor: Callable[
+        [MarketOrderSubmission],
+        ExecutionReceipt,
+    ] | None = None,
 ) -> ToolContext:
     market_snapshot_ids = _uuid_list(frozen, "market_snapshot_ids")
     order_book_snapshot_ids = _uuid_list(frozen, "order_book_snapshot_ids")
@@ -1268,6 +1395,7 @@ def production_tool_context(
         clock,
         market_snapshot_ids,
         order_book_snapshot_ids,
+        immediate_order_executor=immediate_order_executor,
     )
 
 

@@ -13,6 +13,7 @@ from vtrade.broker import (
     ExecutionStatus,
     FeePolicy,
     LiquidityTimeInForce,
+    OrderAmountType,
     PaperOrder,
     PaperPolicy,
     PendingOrder,
@@ -161,6 +162,46 @@ class BrokerScenarioTests(unittest.TestCase):
         result = self.place(order(shares="5"), snapshot=snapshot, broker=broker)
         self.assertEqual(result.status, ExecutionStatus.PARTIAL)
         self.assertEqual([fill.shares for fill in result.fills], [Decimal(1), Decimal(2)])
+
+    def test_cash_sized_buy_never_exceeds_budget_including_fees(self) -> None:
+        broker = PredictionArenaPaperBroker(policy=PaperPolicy.LIQUIDITY_AWARE)
+        paper_order = replace(
+            order(shares="20"),
+            amount_type=OrderAmountType.CASH,
+            cash_budget_micros=MicroDollars(1_000_000),
+        )
+        result = self.place(
+            paper_order,
+            snapshot=book(asks=(("0.40", "1"), ("0.70", "20"))),
+            broker=broker,
+        )
+        self.assertIn(result.status, {ExecutionStatus.FILLED, ExecutionStatus.PARTIAL})
+        spent = sum(int(fill.gross_micros) + int(fill.fee_micros) for fill in result.fills)
+        self.assertLessEqual(spent, 1_000_000)
+        self.assertGreater(sum(fill.shares for fill in result.fills), Decimal(1))
+
+    def test_cash_sized_fok_rejects_when_the_budget_cannot_be_spent(self) -> None:
+        broker = PredictionArenaPaperBroker(policy=PaperPolicy.LIQUIDITY_AWARE)
+        paper_order = replace(
+            order(shares="20"),
+            amount_type=OrderAmountType.CASH,
+            cash_budget_micros=MicroDollars(1_000_000),
+            liquidity_time_in_force=LiquidityTimeInForce.FOK,
+        )
+        result = self.place(
+            paper_order,
+            snapshot=book(asks=(("0.40", "1"),)),
+            broker=broker,
+        )
+        self.assertEqual(result.status, ExecutionStatus.REJECTED)
+        self.assertEqual(result.rejection_code, RejectionCode.FOK_NOT_FILLED)
+
+    def test_limit_price_rejects_when_the_book_is_outside_the_limit(self) -> None:
+        broker = PredictionArenaPaperBroker(policy=PaperPolicy.LIQUIDITY_AWARE)
+        paper_order = replace(order(shares="1"), limit_price=Decimal("0.39"))
+        result = self.place(paper_order, snapshot=book(asks=(("0.40", "10"),)), broker=broker)
+        self.assertEqual(result.status, ExecutionStatus.REJECTED)
+        self.assertEqual(result.rejection_code, RejectionCode.PRICE_LIMIT_NOT_MARKET)
 
     def test_liquidity_aware_fok_rejects_atomically_when_depth_is_short(self) -> None:
         snapshot = book(asks=(("0.40", "1"), ("0.41", "2")))

@@ -62,12 +62,9 @@ class PostgresBrokerRepository:
     ) -> PersistenceResult:
         if str(agent_id) != result.order.agent_id:
             raise ValueError("database agent does not own the execution result")
-        fingerprint = _fingerprint(result)
-        order_id = _stable_database_uuid("order", result.order.id)
-        idempotency_key = f"paper-order:{result.order.id}"
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
             _lock_agent(cursor, agent_id)
-            _validate_execution_relations(
+            return self.persist_execution_locked(
                 cursor,
                 result,
                 agent_id=agent_id,
@@ -76,39 +73,57 @@ class PostgresBrokerRepository:
                 outcome_id=outcome_id,
                 snapshot_id=snapshot_id,
             )
-            existing = _existing(cursor, "orders", idempotency_key)
-            if existing is not None:
-                _assert_same_fingerprint(existing, fingerprint)
-                return PersistenceResult(existing[0], False, fingerprint)
-            if result.status.value != "rejected":
-                _assert_portfolio_version(cursor, agent_id, result.portfolio_before.version)
-            rejected_at = (
-                result.order.created_at if result.rejection_code is not None else None
-            )
-            accepted_at = None if rejected_at is not None else result.order.created_at
+
+    def persist_execution_locked(
+        self,
+        cursor: _Cursor,
+        result: ExecutionResult,
+        *,
+        agent_id: uuid.UUID,
+        intent_id: uuid.UUID,
+        market_id: uuid.UUID,
+        outcome_id: uuid.UUID,
+        snapshot_id: uuid.UUID,
+    ) -> PersistenceResult:
+        """Persist using a caller-owned transaction that already holds the agent lock."""
+        if str(agent_id) != result.order.agent_id:
+            raise ValueError("database agent does not own the execution result")
+        fingerprint = _fingerprint(result)
+        order_id = _stable_database_uuid("order", result.order.id)
+        idempotency_key = f"paper-order:{result.order.id}"
+        _validate_execution_relations(
+            cursor,
+            result,
+            agent_id=agent_id,
+            intent_id=intent_id,
+            market_id=market_id,
+            outcome_id=outcome_id,
+            snapshot_id=snapshot_id,
+        )
+        existing = _existing(cursor, "orders", idempotency_key)
+        if existing is not None:
+            _assert_same_fingerprint(existing, fingerprint)
+            return PersistenceResult(existing[0], False, fingerprint)
+        if result.status.value != "rejected":
+            _assert_portfolio_version(cursor, agent_id, result.portfolio_before.version)
+        rejected_at = result.order.created_at if result.rejection_code is not None else None
+        accepted_at = None if rejected_at is not None else result.order.created_at
+        cursor.execute(
+            "INSERT INTO orders "
+            "(id, intent_id, policy, status, requested_shares, accepted_at, "
+            "rejected_at, rejection_code, idempotency_key, created_at, "
+            "liquidity_time_in_force, execution_fingerprint) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (
+                order_id, intent_id, result.policy.value, result.status.value,
+                result.order.shares, accepted_at, rejected_at,
+                result.rejection_code.value if result.rejection_code else None,
+                idempotency_key, result.order.created_at,
+                result.order.liquidity_time_in_force.value, fingerprint,
+            ),
+        )
+        for fill in result.fills:
             cursor.execute(
-                "INSERT INTO orders "
-                "(id, intent_id, policy, status, requested_shares, accepted_at, "
-                "rejected_at, rejection_code, idempotency_key, created_at, "
-                "liquidity_time_in_force, execution_fingerprint) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                (
-                    order_id,
-                    intent_id,
-                    result.policy.value,
-                    result.status.value,
-                    result.order.shares,
-                    accepted_at,
-                    rejected_at,
-                    result.rejection_code.value if result.rejection_code else None,
-                    idempotency_key,
-                    result.order.created_at,
-                    result.order.liquidity_time_in_force.value,
-                    fingerprint,
-                ),
-            )
-            for fill in result.fills:
-                cursor.execute(
                     "INSERT INTO fills "
                     "(id, order_id, fill_index, shares, price, gross_micros, fee_micros, "
                     "snapshot_id, idempotency_key, filled_at, fee_rate, fee_exponent, "
@@ -131,8 +146,8 @@ class PostgresBrokerRepository:
                         result.fee_policy.formula_version,
                     ),
                 )
-            for entry in result.ledger_entries:
-                _insert_ledger(
+        for entry in result.ledger_entries:
+            _insert_ledger(
                     cursor,
                     entry,
                     agent_id=agent_id,
@@ -141,15 +156,15 @@ class PostgresBrokerRepository:
                     market_id=market_id,
                     outcome_id=outcome_id,
                 )
-            if result.status.value != "rejected":
-                _upsert_position(
-                    cursor,
-                    result,
-                    agent_id=agent_id,
-                    market_id=market_id,
-                    outcome_id=outcome_id,
-                )
-                _advance_portfolio_version(cursor, agent_id, result.portfolio.version)
+        if result.status.value != "rejected":
+            _upsert_position(
+                cursor,
+                result,
+                agent_id=agent_id,
+                market_id=market_id,
+                outcome_id=outcome_id,
+            )
+            _advance_portfolio_version(cursor, agent_id, result.portfolio.version)
         return PersistenceResult(order_id, True, fingerprint)
 
     def persist_settlement(

@@ -116,8 +116,8 @@ class PostgresPortfolioHandler:
             raise PortfolioPaginationError("agent cycle is not authorized for this agent")
         cursor.execute(
             "SELECT id FROM portfolio_query_snapshots "
-            "WHERE agent_cycle_id = %s AND agent_id = %s",
-            (self._agent_cycle_id, self._agent_id),
+            "WHERE agent_cycle_id = %s AND agent_id = %s AND portfolio_version = %s",
+            (self._agent_cycle_id, self._agent_id, cycle[2]),
         )
         existing = cursor.fetchone()
         if existing is not None:
@@ -248,7 +248,7 @@ def _bounded_items(
 
 def _token_upper_bound(value: object) -> int:
     raw = json.dumps(value, separators=(",", ":"), ensure_ascii=False, sort_keys=True)
-    return max(1, (len(raw.encode("utf-8")) + 3) // 4)
+    return max(1, len(raw.encode("utf-8")))
 
 
 def _cursor_hash(token: str) -> str:

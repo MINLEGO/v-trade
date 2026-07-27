@@ -22,8 +22,15 @@ class PaperPolicy(StrEnum):
 class LiquidityTimeInForce(StrEnum):
     """Remainder semantics for the non-baseline liquidity-aware policy."""
 
+    IOC = "IOC"
+    # Legacy persisted value retained only to replay existing experiments.
     FAK = "FAK"
     FOK = "FOK"
+
+
+class OrderAmountType(StrEnum):
+    CASH = "CASH"
+    SHARES = "SHARES"
 
 
 class ExecutionStatus(StrEnum):
@@ -50,6 +57,7 @@ class RejectionCode(StrEnum):
     CONCENTRATION_LIMIT = "concentration_limit"
     NO_LIQUIDITY = "no_liquidity"
     FOK_NOT_FILLED = "fok_not_filled"
+    PRICE_LIMIT_NOT_MARKET = "price_limit_not_market"
 
 
 class NoBidValuationPolicy(StrEnum):
@@ -247,10 +255,24 @@ class PaperOrder:
     shares: Decimal
     created_at: datetime
     liquidity_time_in_force: LiquidityTimeInForce = LiquidityTimeInForce.FAK
+    amount_type: OrderAmountType = OrderAmountType.SHARES
+    cash_budget_micros: MicroDollars | None = None
+    limit_price: Decimal | None = None
 
     def __post_init__(self) -> None:
         if not self.shares.is_finite() or self.shares <= 0:
             raise ValueError("paper order shares must be finite and positive")
+        if self.amount_type is OrderAmountType.CASH:
+            if self.side is not Side.BUY or self.cash_budget_micros is None:
+                raise ValueError("cash sizing is supported only for buy orders")
+            if int(self.cash_budget_micros) <= 0:
+                raise ValueError("cash budget must be positive")
+        elif self.cash_budget_micros is not None:
+            raise ValueError("share-sized orders cannot carry a cash budget")
+        if self.limit_price is not None and (
+            not self.limit_price.is_finite() or not Decimal(0) <= self.limit_price <= Decimal(1)
+        ):
+            raise ValueError("limit price must be finite and between zero and one")
         _require_aware(self.created_at, "order.created_at")
 
 
@@ -358,6 +380,10 @@ class PredictionArenaPaperBroker:
                 fee_policy,
                 RejectionCode.BELOW_MINIMUM_SIZE,
             )
+        if order.limit_price is not None and not self._has_eligible_level(order, snapshot):
+            return self._rejected(
+                order, snapshot, portfolio, fee_policy, RejectionCode.PRICE_LIMIT_NOT_MARKET
+            )
         planned = self._plan_fills(order, snapshot, fee_policy, now)
         if not planned:
             code = (
@@ -367,10 +393,14 @@ class PredictionArenaPaperBroker:
             )
             return self._rejected(order, snapshot, portfolio, fee_policy, code)
         total_shares = sum((fill.shares for fill in planned), start=Decimal(0))
+        fok_unfilled = total_shares != order.shares
+        if order.cash_budget_micros is not None:
+            spent = sum(int(fill.gross_micros) + int(fill.fee_micros) for fill in planned)
+            fok_unfilled = int(order.cash_budget_micros) - spent > 1
         if (
             self.policy is PaperPolicy.LIQUIDITY_AWARE
             and order.liquidity_time_in_force is LiquidityTimeInForce.FOK
-            and total_shares != order.shares
+            and fok_unfilled
         ):
             return self._rejected(
                 order,
@@ -495,15 +525,27 @@ class PredictionArenaPaperBroker:
         if self.policy is PaperPolicy.PREDICTIONARENA_UNCONDITIONAL:
             ordered = ordered[:1]
         remaining = order.shares
+        remaining_cash = (
+            int(order.cash_budget_micros) if order.cash_budget_micros is not None else None
+        )
         fills: list[PaperFill] = []
         for level in ordered:
+            if order.limit_price is not None and (
+                (order.side is Side.BUY and level.price > order.limit_price)
+                or (order.side is Side.SELL and level.price < order.limit_price)
+            ):
+                continue
             shares = (
                 remaining
                 if self.policy is PaperPolicy.PREDICTIONARENA_UNCONDITIONAL
                 else min(remaining, level.size)
             )
+            if remaining_cash is not None:
+                shares = self._shares_within_cash_budget(
+                    shares, level.price, fee_policy, remaining_cash
+                )
             if shares <= 0:
-                continue
+                break
             index = len(fills)
             fills.append(
                 PaperFill(
@@ -522,9 +564,50 @@ class PredictionArenaPaperBroker:
                 )
             )
             remaining -= shares
+            if remaining_cash is not None:
+                remaining_cash -= int(fills[-1].gross_micros) + int(fills[-1].fee_micros)
             if remaining <= 0:
                 break
         return tuple(fills)
+
+    @staticmethod
+    def _has_eligible_level(order: PaperOrder, snapshot: OrderBookSnapshot) -> bool:
+        if order.limit_price is None:
+            return True
+        levels = snapshot.asks if order.side is Side.BUY else snapshot.bids
+        return any(
+            level.price <= order.limit_price
+            if order.side is Side.BUY
+            else level.price >= order.limit_price
+            for level in levels
+        )
+
+    @staticmethod
+    def _shares_within_cash_budget(
+        maximum: Decimal,
+        price: Decimal,
+        fee_policy: FeePolicy,
+        budget_micros: int,
+    ) -> Decimal:
+        """Return the largest displayed quantity whose rounded gross plus fee fits cash."""
+        if maximum <= 0 or budget_micros <= 0:
+            return Decimal(0)
+        unit_micros = price * _MICROS * (
+            Decimal(1) + fee_policy.rate * (Decimal(1) - price))
+        high = min(maximum, Decimal(budget_micros) / unit_micros) if unit_micros else maximum
+        low = Decimal(0)
+        # Decimal quantities are persisted at 12 places; enough iterations to make
+        # the final one-micro adjustment deterministic without overspending.
+        for _ in range(80):
+            mid = (low + high) / 2
+            total = int(_money_micros(mid * price)) + int(
+                fee_policy.calculate_micros(mid, price, is_taker=True)
+            )
+            if total <= budget_micros:
+                low = mid
+            else:
+                high = mid
+        return low.quantize(Decimal("0.000000000001"), rounding=ROUND_HALF_UP)
 
     def _validate_financials(
         self,

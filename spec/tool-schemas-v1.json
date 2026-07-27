@@ -790,10 +790,21 @@
               "SELL"
             ]
           },
-          "amount": {
-            "type": "number"
-          },
-          "conviction": {
+            "amount": {
+              "type": "number"
+            },
+            "amount_type": {
+              "type": "string",
+              "enum": ["CASH", "SHARES"]
+            },
+            "time_in_force": {
+              "type": "string",
+              "enum": ["IOC", "FOK"]
+            },
+            "limit_price": {
+              "type": "number"
+            },
+            "conviction": {
             "type": "number"
           }
         },

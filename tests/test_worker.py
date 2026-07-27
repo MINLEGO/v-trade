@@ -109,12 +109,12 @@ class WorkerFailClosedTests(unittest.TestCase):
             LiquidityTimeInForce.FOK,
         )
         self.assertEqual(
-            _liquidity_time_in_force({"execution": {}}), LiquidityTimeInForce.FAK
+            _liquidity_time_in_force({"execution": {}}), LiquidityTimeInForce.IOC
         )
-        with self.assertRaisesRegex(
-            ProductionCompositionUnavailable, "unsupported liquidity time in force"
-        ):
-            _liquidity_time_in_force({"execution": {"liquidity_time_in_force": "IOC"}})
+        self.assertEqual(
+            _liquidity_time_in_force({"execution": {"liquidity_time_in_force": "IOC"}}),
+            LiquidityTimeInForce.IOC,
+        )
 
     def test_production_broker_port_uses_configured_policy_and_tif(self) -> None:
         port = ProductionBrokerPort(
