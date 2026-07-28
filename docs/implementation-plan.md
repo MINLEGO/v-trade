@@ -170,7 +170,7 @@ Expose provider-neutral discovery tools matching the documented PredictionArena 
 - inspect complete rules and outcome prices;
 - inspect one or more order books.
 
-For baseline compatibility, phase 0 must map every observed PredictionArena name to a canonical implementation while preserving the AI-facing name. The dated trace currently contains 29 names across research/discovery, account/history, memory/plans, and trading, including `web_search`, `discover_events`, `discover_hot_markets`, `discover_by_time_remaining`, `get_market_details`, `get_orderbook`, `get_balance`, `get_portfolio`, `get_general_beliefs`, `create_general_belief`, `create_long_term_plan`, `create_next_cycle_plan`, and `place_market_order`. Observed argument forms are evidence; unobserved optional fields, enums, schemas, and authorization limits remain `inferred`.
+For baseline compatibility, phase 0 maps retained observed PredictionArena names to canonical implementations while preserving the AI-facing name. The dated trace contained 29 names; the current boundary exposes 28 after removing `get_open_orders`, whose former pending-intent view no longer matches synchronous IOC/FOK execution. Observed argument forms are evidence; unobserved optional fields, enums, schemas, and authorization limits remain `inferred`.
 
 Quality thresholds are unpublished, so put them in a named, versioned `discovery_policy`. Initial values must be labelled inferred and tested against live market distributions before freezing the baseline.
 
@@ -189,7 +189,7 @@ Implement a bounded model/tool loop, not a single completion:
 
 Store cycle status, model termination status, and individual tool-call status independently. Public traces included failed cycles even when all recorded tool calls were successful, so tool success must never imply cycle success.
 
-The observed public traces show 29 distinct tool names across discovery, account/history, knowledge/plans, and trading, including `place_market_order`, `get_market_details`, `get_orderbook`, `web_search`, and structured belief/plan tools. Reproduce these as versioned provider-neutral schemas, but do not infer a complete contract from observed arguments alone. Record both tool-call success and cycle-level status: the public sample contains failed cycles whose individual tool calls are still marked successful.
+The observed public traces show 29 historical tool names across discovery, account/history, knowledge/plans, and trading; the current provider-neutral surface exposes 28 after removing the obsolete pending-order view. Reproduce the retained tools as versioned provider-neutral schemas, but do not infer a complete contract from observed arguments alone. Record both tool-call success and cycle-level status: the public sample contains failed cycles whose individual tool calls are still marked successful.
 
 Limits must be configuration, recorded per run:
 
@@ -307,7 +307,7 @@ Deliver:
 
 - a source-to-feature matrix classifying every rule as documented, inferred, or V-Trade deviation;
 - a dated, hashed PredictionArena cycle-fixture corpus and defensive fixture ingestor;
-- a name-by-name compatibility matrix for all 29 currently observed tools, with observed argument evidence separated from inferred schemas;
+- a name-by-name compatibility matrix for all 28 currently exposed tools, with observed argument evidence separated from inferred schemas;
 - canonical tool schemas, trace-derived initial prompt, and prompt-conformance checklist;
 - experiment definition schema and config file;
 - explicit answers to the open decisions in section 15.

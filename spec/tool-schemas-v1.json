@@ -546,21 +546,6 @@
       }
     },
     {
-      "name": "get_open_orders",
-      "classification": "inferred",
-      "observed_name": true,
-      "input_schema": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {},
-        "required": []
-      },
-      "output_schema": {
-        "type": "object",
-        "additionalProperties": true
-      }
-    },
-    {
       "name": "get_closed_trades",
       "classification": "inferred",
       "observed_name": true,

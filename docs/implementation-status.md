@@ -5,7 +5,7 @@ Checked: 2026-07-18.
 ## Stable local lot
 
 Phase 0 includes the source/feature matrix, the name-by-name matrix and canonical
-inferred schemas for all 29 observed tools, a trace-derived prompt and conformance
+inferred schemas for all 28 current tools, a trace-derived prompt and conformance
 checklist, a runnable versioned experiment definition, and a defensive raw-fixture
 ingestor. Phase 1 includes the Python 3.12 project, canonical domain ports/types,
 configuration hashing and run gate, append-only domain ledger, content-addressed gzip

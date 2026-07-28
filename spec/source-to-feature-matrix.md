@@ -40,7 +40,7 @@ upgrades observed behavior into a claim about unpublished internals.
 | Paper rather than real-money execution | vtrade_deviation | Owner safety/cost choice |
 | Gamma metadata and CLOB executable prices | inferred | Official APIs serve distinct data roles |
 | Frozen cutoff per agent-cycle | vtrade_deviation | Owner selected independent scheduling; cutoff is still immutable per cycle |
-| 29 AI-facing tool names | inferred | Observed public trace inventory, schemas unpublished |
+| 28 AI-facing tool names | vtrade_deviation | `get_open_orders` was removed after the synchronous IOC/FOK execution contract replaced pending broker validation |
 | Versioned discovery policy | inferred | Thresholds unpublished |
 | Bounded multi-turn tool loop | documented | Ordered tool-call traces demonstrate a loop |
 | Track cycle and tool statuses separately | inferred | Failed cycles contain successful calls |

@@ -7,11 +7,11 @@ from pathlib import Path
 
 
 class SpecificationTests(unittest.TestCase):
-    def test_exactly_29_unique_tool_schemas(self) -> None:
+    def test_exactly_28_unique_tool_schemas(self) -> None:
         document = json.loads(Path("spec/tool-schemas-v1.json").read_text(encoding="utf-8"))
         names = [tool["name"] for tool in document["tools"]]
-        self.assertEqual(len(names), 29)
-        self.assertEqual(len(set(names)), 29)
+        self.assertEqual(len(names), 28)
+        self.assertEqual(len(set(names)), 28)
 
     def test_only_portfolio_owns_the_frozen_pagination_contract(self) -> None:
         document = json.loads(Path("spec/tool-schemas-v1.json").read_text(encoding="utf-8"))

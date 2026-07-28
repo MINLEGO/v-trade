@@ -133,7 +133,7 @@ def _context(
 
 
 class ProductionToolRegistryTests(unittest.TestCase):
-    def test_registry_has_exact_schema_parity_for_all_29_names(self) -> None:
+    def test_registry_has_exact_schema_parity_for_all_28_names(self) -> None:
         expected = {
             row["name"]
             for row in json.loads(Path("spec/tool-schemas-v1.json").read_text(encoding="utf-8"))[
@@ -141,7 +141,7 @@ class ProductionToolRegistryTests(unittest.TestCase):
             ]
         }
         names = {tool.name for tool in ProductionToolRegistry(_context(_Cursor())).tool_specs()}
-        self.assertEqual(len(names), 29)
+        self.assertEqual(len(names), 28)
         self.assertEqual(names, expected)
 
     def test_orderbook_reads_only_snapshot_at_finalized_cutoff(self) -> None:

@@ -108,7 +108,7 @@ _PAGINATED_DISCOVERY_TOOLS = frozenset(
 
 
 class ProductionToolRegistry:
-    """Exact 29-name registry backed only by frozen DB state and real providers."""
+    """Exact 28-name registry backed only by frozen DB state and real providers."""
 
     def __init__(
         self,
@@ -139,8 +139,8 @@ class ProductionToolRegistry:
                 },
             }
         expected = set(self._handlers())
-        if set(self._schemas) != expected or len(expected) != 29:
-            raise ValueError("production handlers must exactly match all 29 frozen tool names")
+        if set(self._schemas) != expected or len(expected) != 28:
+            raise ValueError("production handlers must exactly match all 28 frozen tool names")
 
     def tool_specs(self) -> tuple[ToolSpec, ...]:
         handlers = self._handlers()
@@ -204,7 +204,6 @@ class ProductionToolRegistry:
             "get_orderbook": self._get_orderbook,
             "get_balance": self._get_balance,
             "get_portfolio": self._context.portfolio,
-            "get_open_orders": self._get_open_orders,
             "get_closed_trades": self._get_closed_trades,
             "get_settlements": self._get_settlements,
             "get_general_beliefs": self._get_beliefs,
@@ -464,17 +463,6 @@ class ProductionToolRegistry:
         if not rows:
             raise ToolContextUnavailable("agent balance is unavailable")
         return {"cash_micros": int(str(rows[0][0])), "portfolio_version": int(str(rows[0][1]))}
-
-    def _get_open_orders(self, _arguments: JsonObject) -> JsonObject:
-        rows = self._query(
-            "SELECT oi.id, oi.validation_status, oi.shares, oi.created_at "
-            "FROM order_intents oi JOIN agent_cycles ac ON ac.id = oi.agent_cycle_id "
-            "LEFT JOIN orders o ON o.intent_id = oi.id WHERE ac.agent_id = %s "
-            "AND o.id IS NULL AND oi.validation_status = 'pending_broker_validation' "
-            "ORDER BY oi.created_at, oi.id LIMIT 100",
-            (self._context.claim.agent_id,),
-        )
-        return {"orders": [_named(row, ("id", "status", "shares", "created_at")) for row in rows]}
 
     def _get_closed_trades(self, arguments: JsonObject) -> JsonObject:
         rows = self._query(
@@ -773,7 +761,6 @@ class ProductionToolRegistry:
         if name.startswith("get_") and name in {
             "get_balance",
             "get_portfolio",
-            "get_open_orders",
             "get_closed_trades",
             "get_settlements",
         }:
