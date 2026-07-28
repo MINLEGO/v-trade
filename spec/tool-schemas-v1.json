@@ -773,7 +773,7 @@
       }
     },
     {
-      "name": "submit_market_order_intent",
+      "name": "place_market_order",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {

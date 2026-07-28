@@ -98,7 +98,7 @@ class HarnessTests(unittest.TestCase):
         schema = {
             "type": "function",
             "function": {
-                "name": "submit_market_order_intent",
+                "name": "place_market_order",
                 "parameters": {
                     "type": "object",
                     "additionalProperties": False,
@@ -117,7 +117,7 @@ class HarnessTests(unittest.TestCase):
                     {
                         "id": "bad",
                         "function": {
-                            "name": "submit_market_order_intent",
+                            "name": "place_market_order",
                             "arguments": json.dumps({"shares": "all"}),
                         },
                     }

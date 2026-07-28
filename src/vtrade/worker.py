@@ -703,7 +703,7 @@ class _PostgresTradingState:
                 submission.side,
                 submission.amount_micros,
                 submission.shares,
-                "observed_submit_market_order_intent",
+                "observed_place_market_order",
                 "submitted through frozen tool contract",
                 submission.confidence,
                 f"intent:{submission.intent_id}",
