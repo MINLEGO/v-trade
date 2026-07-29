@@ -170,7 +170,7 @@ Expose provider-neutral discovery tools matching the documented PredictionArena 
 - inspect complete rules and outcome prices;
 - inspect one or more order books.
 
-For baseline compatibility, phase 0 maps retained observed PredictionArena names to canonical implementations while preserving the AI-facing name. The dated trace contained 29 names; the current boundary exposes 28 after removing `get_open_orders`, whose former pending-intent view no longer matches synchronous IOC/FOK execution. Observed argument forms are evidence; unobserved optional fields, enums, schemas, and authorization limits remain `inferred`.
+For baseline compatibility, phase 0 maps retained observed PredictionArena names to canonical implementations while preserving the AI-facing name. The dated trace contained 29 names; the current boundary exposes 27 after removing `get_open_orders` and the duplicate `browse_markets_by_volume`. Observed argument forms are evidence; unobserved optional fields, enums, schemas, and authorization limits remain `inferred`.
 
 Quality thresholds are unpublished, so put them in a named, versioned `discovery_policy`. Initial values must be labelled inferred and tested against live market distributions before freezing the baseline.
 
@@ -307,7 +307,7 @@ Deliver:
 
 - a source-to-feature matrix classifying every rule as documented, inferred, or V-Trade deviation;
 - a dated, hashed PredictionArena cycle-fixture corpus and defensive fixture ingestor;
-- a name-by-name compatibility matrix for all 28 currently exposed tools, with observed argument evidence separated from inferred schemas;
+- a name-by-name compatibility matrix for all 27 currently exposed tools, with observed argument evidence separated from inferred schemas;
 - canonical tool schemas, trace-derived initial prompt, and prompt-conformance checklist;
 - experiment definition schema and config file;
 - explicit answers to the open decisions in section 15.

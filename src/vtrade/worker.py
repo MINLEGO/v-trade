@@ -308,7 +308,7 @@ class ProductionPromptPort:
 
 
 class ProductionHarnessPort:
-    """Execute all 28 tools through the bounded real model/provider harness."""
+    """Execute all 27 tools through the bounded real model/provider harness."""
 
     def __init__(
         self,

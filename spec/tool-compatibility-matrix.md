@@ -1,6 +1,6 @@
 # PredictionArena tool compatibility matrix
 
-All 28 names below are preserved exactly at the AI-facing boundary. Argument keys are
+All 27 names below are preserved exactly at the AI-facing boundary. Argument keys are
 trace evidence from the 50-cycle sample; types, optionality, defaults, bounds, response
 envelopes and authorization are V-Trade `inferred` contracts unless a later primary
 source establishes them.
@@ -14,7 +14,6 @@ source establishes them.
 | `get_market_details` | discovery | slug | frozen market cache |
 | `web_search` | research | query | configured research provider only |
 | `get_orderbook` | discovery | token_id | cutoff-compatible archived snapshot |
-| `browse_markets_by_volume` | discovery | limit, min_liquidity, min_volume_24hr | frozen market cache |
 | `discover_by_price_volatility` | discovery | limit, min_liquidity, min_volatility | frozen market cache |
 | `get_event_markets` | discovery | event_id | frozen market cache |
 | `get_newest_events` | discovery | limit, min_liquidity | frozen market cache |

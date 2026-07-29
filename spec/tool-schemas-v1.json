@@ -204,36 +204,6 @@
       }
     },
     {
-      "name": "browse_markets_by_volume",
-      "classification": "inferred",
-      "observed_name": true,
-      "input_schema": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "cursor": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Opaque cursor returned by the preceding discovery page."
-          },
-          "limit": {
-            "type": "integer"
-          },
-          "min_liquidity": {
-            "type": "number"
-          },
-          "min_volume_24hr": {
-            "type": "number"
-          }
-        },
-        "required": []
-      },
-      "output_schema": {
-        "type": "object",
-        "additionalProperties": true
-      }
-    },
-    {
       "name": "discover_by_price_volatility",
       "classification": "inferred",
       "observed_name": true,

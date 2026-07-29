@@ -94,7 +94,6 @@ _PAGINATED_DISCOVERY_TOOLS = frozenset(
         "discover_by_time_remaining",
         "discover_events",
         "list_top_events",
-        "browse_markets_by_volume",
         "discover_by_price_volatility",
         "get_event_markets",
         "get_newest_events",
@@ -108,7 +107,7 @@ _PAGINATED_DISCOVERY_TOOLS = frozenset(
 
 
 class ProductionToolRegistry:
-    """Exact 28-name registry backed only by frozen DB state and real providers."""
+    """Exact 27-name registry backed only by frozen DB state and real providers."""
 
     def __init__(
         self,
@@ -139,8 +138,8 @@ class ProductionToolRegistry:
                 },
             }
         expected = set(self._handlers())
-        if set(self._schemas) != expected or len(expected) != 28:
-            raise ValueError("production handlers must exactly match all 28 frozen tool names")
+        if set(self._schemas) != expected or len(expected) != 27:
+            raise ValueError("production handlers must exactly match all 27 frozen tool names")
 
     def tool_specs(self) -> tuple[ToolSpec, ...]:
         handlers = self._handlers()
@@ -187,7 +186,6 @@ class ProductionToolRegistry:
                 "discover_events",
                 "list_top_events",
                 "get_market_details",
-                "browse_markets_by_volume",
                 "discover_by_price_volatility",
                 "get_event_markets",
                 "get_newest_events",
