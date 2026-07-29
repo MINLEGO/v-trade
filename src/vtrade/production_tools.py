@@ -475,18 +475,86 @@ class ProductionToolRegistry:
 
     def _get_closed_trades(self, arguments: JsonObject) -> JsonObject:
         rows = self._query(
-            "SELECT f.id, oi.side, f.shares, f.price, f.gross_micros, f.fee_micros, "
-            "f.filled_at FROM fills f JOIN orders o ON o.id = f.order_id "
-            "JOIN order_intents oi ON oi.id = o.intent_id JOIN agent_cycles ac "
-            "ON ac.id = oi.agent_cycle_id WHERE ac.agent_id = %s "
-            "ORDER BY f.filled_at DESC, f.id DESC LIMIT %s",
+            "WITH fill_events AS ("
+            "SELECT p.id AS position_id, m.id AS market_id, m.question AS market_question, "
+            "o.id AS outcome_id, o.name AS outcome, f.id AS fill_id, f.filled_at, "
+            "oi.side, f.shares, f.gross_micros, f.fee_micros, "
+            "CASE WHEN oi.side = 'BUY' THEN f.shares ELSE -f.shares END AS signed_shares "
+            "FROM fills f "
+            "JOIN orders ord ON ord.id = f.order_id "
+            "JOIN order_intents oi ON oi.id = ord.intent_id "
+            "JOIN agent_cycles ac ON ac.id = oi.agent_cycle_id "
+            "JOIN outcomes o ON o.id = oi.outcome_id "
+            "JOIN markets m ON m.id = o.market_id AND m.id = oi.market_id "
+            "JOIN positions p ON p.agent_id = ac.agent_id AND p.outcome_id = oi.outcome_id "
+            "WHERE ac.agent_id = %s"
+            "), balances AS ("
+            "SELECT fill_events.*, "
+            "COALESCE(SUM(signed_shares) OVER ("
+            "PARTITION BY outcome_id ORDER BY filled_at, fill_id "
+            "ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS shares_before "
+            "FROM fill_events"
+            "), numbered AS ("
+            "SELECT balances.*, SUM(CASE WHEN side = 'BUY' AND shares_before = 0 "
+            "THEN 1 ELSE 0 END) OVER ("
+            "PARTITION BY outcome_id ORDER BY filled_at, fill_id "
+            "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS trade_number "
+            "FROM balances"
+            "), aggregated AS ("
+            "SELECT position_id, market_id, market_question, outcome_id, outcome, trade_number, "
+            "MIN(filled_at) AS opened_at, MAX(filled_at) AS closed_at, "
+            "SUM(shares) FILTER (WHERE side = 'BUY') AS total_bought_shares, "
+            "SUM(shares) FILTER (WHERE side = 'SELL') AS total_sold_shares, "
+            "SUM(gross_micros) FILTER (WHERE side = 'BUY') AS entry_cost_micros, "
+            "SUM(gross_micros) FILTER (WHERE side = 'SELL') AS exit_proceeds_micros, "
+            "SUM(fee_micros) FILTER (WHERE side = 'SELL') AS exit_fees_micros, "
+            "SUM(fee_micros) AS total_fees_micros, "
+            "SUM(signed_shares) AS remaining_shares "
+            "FROM numbered WHERE trade_number > 0 "
+            "GROUP BY position_id, market_id, market_question, outcome_id, outcome, trade_number "
+            "HAVING SUM(signed_shares) = 0 "
+            ") SELECT position_id, market_id, market_question, outcome_id, outcome, opened_at, "
+            "closed_at, "
+            "CASE WHEN total_bought_shares::text LIKE '%.%' THEN "
+            "trim(trailing '.' FROM trim(trailing '0' FROM total_bought_shares::text)) "
+            "ELSE total_bought_shares::text END AS total_bought_shares, "
+            "CASE WHEN total_sold_shares::text LIKE '%.%' THEN "
+            "trim(trailing '.' FROM trim(trailing '0' FROM total_sold_shares::text)) "
+            "ELSE total_sold_shares::text END AS total_sold_shares, "
+            "CASE WHEN entry_cost_micros = 0 THEN '0' ELSE "
+            "trim(trailing '.' FROM trim(trailing '0' FROM "
+            "round(entry_cost_micros::numeric / "
+            "NULLIF(total_bought_shares * 1000000, 0), 12)::text)) END "
+            "AS average_entry_price, "
+            "CASE WHEN total_sold_shares = 0 THEN '0' ELSE "
+            "trim(trailing '.' FROM trim(trailing '0' FROM "
+            "round(exit_proceeds_micros::numeric / "
+            "NULLIF(total_sold_shares * 1000000, 0), 12)::text)) END "
+            "AS average_exit_price, "
+            "entry_cost_micros::bigint AS entry_cost_micros, "
+            "exit_proceeds_micros::bigint AS exit_proceeds_micros, "
+            "total_fees_micros::bigint AS total_fees_micros, "
+            "(exit_proceeds_micros - entry_cost_micros - exit_fees_micros)::bigint "
+            "AS realized_pnl_micros, "
+            "CASE WHEN entry_cost_micros = 0 THEN '0' ELSE "
+            "trim(trailing '.' FROM trim(trailing '0' FROM round(("
+            "exit_proceeds_micros - entry_cost_micros - exit_fees_micros"
+            ")::numeric / NULLIF(entry_cost_micros, 0), 4)::text)) END "
+            "AS return_on_cost, 'sold' AS close_reason "
+            "FROM aggregated ORDER BY closed_at DESC, position_id DESC LIMIT %s",
             (self._context.claim.agent_id, _limit(arguments, default=100)),
         )
         return {
             "trades": [
                 _named(
                     row,
-                    ("id", "side", "shares", "price", "gross_micros", "fee_micros", "filled_at"),
+                    (
+                        "position_id", "market_id", "market_question", "outcome_id", "outcome",
+                        "opened_at", "closed_at", "total_bought_shares", "total_sold_shares",
+                        "average_entry_price", "average_exit_price", "entry_cost_micros",
+                        "exit_proceeds_micros", "total_fees_micros", "realized_pnl_micros",
+                        "return_on_cost", "close_reason",
+                    ),
                 )
                 for row in rows
             ]

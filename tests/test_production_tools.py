@@ -26,11 +26,13 @@ class _Cursor:
         *,
         book_observed_at: datetime = NOW,
         market_rows: list[tuple[object, ...]] | None = None,
+        closed_trade_rows: list[tuple[object, ...]] | None = None,
     ) -> None:
         self.rows: list[tuple[object, ...]] = []
         self.queries: list[tuple[str, tuple[object, ...]]] = []
         self.book_observed_at = book_observed_at
         self.market_rows = market_rows
+        self.closed_trade_rows = closed_trade_rows
 
     def __enter__(self):
         return self
@@ -78,6 +80,8 @@ class _Cursor:
             ]
         elif query.startswith("SELECT b.id, b.active"):
             self.rows = [(uuid.uuid4(), False, Decimal("0.4"), "old", "macro", [], NOW)]
+        elif query.startswith("WITH fill_events AS"):
+            self.rows = self.closed_trade_rows or []
         else:
             self.rows = []
         return self
@@ -157,6 +161,56 @@ class ProductionToolRegistryTests(unittest.TestCase):
         self.assertEqual(len(params[1]), 1)
         self.assertEqual(params[2], NOW)
         self.assertIn("obs.id = ANY(%s::uuid[])", query)
+
+    def test_closed_trades_aggregate_a_sell_to_zero(self) -> None:
+        position_id, market_id, outcome_id = (uuid.uuid4() for _ in range(3))
+        cursor = _Cursor(
+            closed_trade_rows=[
+                (
+                    position_id,
+                    market_id,
+                    "Will the event happen?",
+                    outcome_id,
+                    "YES",
+                    NOW - timedelta(minutes=5),
+                    NOW,
+                    "100",
+                    "100",
+                    "0.42",
+                    "0.57",
+                    42_000_000,
+                    57_000_000,
+                    0,
+                    15_000_000,
+                    "0.3571",
+                    "sold",
+                )
+            ]
+        )
+        tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
+
+        output = tools["get_closed_trades"].handler({"limit": 10})
+
+        self.assertEqual(output["trades"][0]["position_id"], str(position_id))
+        self.assertEqual(output["trades"][0]["total_bought_shares"], "100")
+        self.assertEqual(output["trades"][0]["total_sold_shares"], "100")
+        self.assertEqual(output["trades"][0]["average_entry_price"], "0.42")
+        self.assertEqual(output["trades"][0]["average_exit_price"], "0.57")
+        self.assertEqual(output["trades"][0]["realized_pnl_micros"], 15_000_000)
+        self.assertEqual(output["trades"][0]["return_on_cost"], "0.3571")
+        self.assertEqual(output["trades"][0]["close_reason"], "sold")
+        query, params = cursor.queries[0]
+        self.assertIn("HAVING SUM(signed_shares) = 0", query)
+        self.assertIn("side = 'SELL'", query)
+        self.assertEqual(params[1], 10)
+
+    def test_partial_sell_does_not_create_a_closed_trade(self) -> None:
+        cursor = _Cursor(closed_trade_rows=[])
+        tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
+
+        output = tools["get_closed_trades"].handler({})
+
+        self.assertEqual(output, {"trades": []})
 
     def test_place_order_persists_only_pending_intent(self) -> None:
         cursor = _Cursor()

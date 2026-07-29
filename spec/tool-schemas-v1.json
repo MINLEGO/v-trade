@@ -531,7 +531,43 @@
       },
       "output_schema": {
         "type": "object",
-        "additionalProperties": true
+        "additionalProperties": false,
+        "properties": {
+          "trades": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "position_id": {"type": "string", "format": "uuid"},
+                "market_id": {"type": "string", "format": "uuid"},
+                "market_question": {"type": "string"},
+                "outcome_id": {"type": "string", "format": "uuid"},
+                "outcome": {"type": "string"},
+                "opened_at": {"type": "string", "format": "date-time"},
+                "closed_at": {"type": "string", "format": "date-time"},
+                "total_bought_shares": {"type": "string"},
+                "total_sold_shares": {"type": "string"},
+                "average_entry_price": {"type": "string"},
+                "average_exit_price": {"type": "string"},
+                "entry_cost_micros": {"type": "integer"},
+                "exit_proceeds_micros": {"type": "integer"},
+                "total_fees_micros": {"type": "integer"},
+                "realized_pnl_micros": {"type": "integer"},
+                "return_on_cost": {"type": "string"},
+                "close_reason": {"type": "string", "enum": ["sold"]}
+              },
+              "required": [
+                "position_id", "market_id", "market_question", "outcome_id", "outcome",
+                "opened_at", "closed_at", "total_bought_shares", "total_sold_shares",
+                "average_entry_price", "average_exit_price", "entry_cost_micros",
+                "exit_proceeds_micros", "total_fees_micros", "realized_pnl_micros",
+                "return_on_cost", "close_reason"
+              ]
+            }
+          }
+        },
+        "required": ["trades"]
       }
     },
     {
