@@ -244,6 +244,59 @@ class ProductionToolRegistryTests(unittest.TestCase):
         self.assertFalse(second["has_more"])
         self.assertIsNone(second["next_cursor"])
 
+    def test_event_discovery_applies_market_filters_before_grouping(self) -> None:
+        event_a = uuid.uuid4()
+        event_b = uuid.uuid4()
+
+        def market_row(
+            event_id: uuid.UUID,
+            market_ref: str,
+            liquidity: int,
+            volume_24hr: int,
+        ) -> tuple[object, ...]:
+            return (
+                uuid.uuid4(),
+                market_ref,
+                f"{market_ref}-slug",
+                event_id,
+                market_ref,
+                "Snapshot rules",
+                NOW - timedelta(days=1),
+                NOW + timedelta(days=1),
+                volume_24hr * 1_000_000,
+                liquidity * 1_000_000,
+                "open",
+                True,
+                {"volume_24hr": str(volume_24hr), "created_at": NOW.isoformat()},
+                [{"venue_token_id": f"{market_ref}-token", "name": "Yes"}],
+            )
+
+        rows = [
+            market_row(event_a, "qualifying", liquidity=20, volume_24hr=30),
+            market_row(event_a, "low-volume", liquidity=20, volume_24hr=5),
+            market_row(event_b, "low-liquidity", liquidity=5, volume_24hr=30),
+        ]
+
+        cases = (
+            ("discover_events", {"min_liquidity": 10, "min_volume_24hr": 10}, 1),
+            ("list_top_events", {"min_liquidity": 10, "min_volume_24hr": 10}, 1),
+            ("get_newest_events", {"min_liquidity": 10}, 2),
+        )
+        for name, arguments, expected_market_count in cases:
+            with self.subTest(name=name):
+                cursor = _Cursor(market_rows=rows)
+                tools = {
+                    tool.name: tool
+                    for tool in ProductionToolRegistry(_context(cursor)).tool_specs()
+                }
+                output = tools[name].handler(arguments)
+
+                self.assertEqual(len(output["events"]), 1)
+                self.assertEqual(output["events"][0]["event_id"], str(event_a))
+                self.assertEqual(
+                    len(output["events"][0]["markets"]), expected_market_count
+                )
+
     def test_discovery_cursor_is_bound_to_its_arguments_and_cutoff(self) -> None:
         row = (
             uuid.uuid4(),

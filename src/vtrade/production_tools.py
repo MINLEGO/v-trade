@@ -310,7 +310,14 @@ class ProductionToolRegistry:
 
     def _discover_event_groups(self, name: str, arguments: JsonObject) -> JsonObject:
         keyword = str(arguments.get("keyword") or "").casefold()
-        markets = list(self._market_rows())
+        minimum_liquidity = _money_filter(arguments.get("min_liquidity", 0))
+        minimum_volume = _money_filter(arguments.get("min_volume_24hr", 0))
+        markets = [
+            row
+            for row in self._market_rows()
+            if int(str(row[9])) >= minimum_liquidity
+            and _metadata_money(row[12], "volume_24hr") >= minimum_volume
+        ]
         grouped: dict[str, JsonObject] = {}
         for row in markets:
             event_id = str(row[3])
