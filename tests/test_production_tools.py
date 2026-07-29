@@ -193,6 +193,40 @@ class ProductionToolRegistryTests(unittest.TestCase):
         self.assertIn("ms.id = ANY(%s::uuid[])", query)
         self.assertEqual(len(params[1]), 1)
 
+    def test_search_tags_matches_only_tag_names(self) -> None:
+        def market_row(market_ref: str, metadata: dict[str, object]) -> tuple[object, ...]:
+            return (
+                uuid.uuid4(),
+                market_ref,
+                f"{market_ref}-slug",
+                uuid.uuid4(),
+                "Snapshot question",
+                "Snapshot rules",
+                NOW - timedelta(days=1),
+                NOW + timedelta(days=1),
+                1_000_000,
+                2_000_000,
+                "open",
+                True,
+                metadata,
+                [{"venue_token_id": f"{market_ref}-token", "name": "Yes"}],
+            )
+
+        cursor = _Cursor(
+            market_rows=[
+                market_row("tag-match", {"tags": [{"label": "Politics"}]}),
+                market_row(
+                    "metadata-only-match",
+                    {"description": "Politics", "tags": [{"label": "Sports"}]},
+                ),
+            ]
+        )
+        tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
+
+        output = tools["search_tags"].handler({"query": "politics"})
+
+        self.assertEqual([market["market_ref"] for market in output["markets"]], ["tag-match"])
+
     def test_market_details_resolves_candidate_market_ref_and_returns_canonical_slug(self) -> None:
         cursor = _Cursor()
         tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}

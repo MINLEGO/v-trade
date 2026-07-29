@@ -253,7 +253,11 @@ class ProductionToolRegistry:
             query = _required_string(arguments, "query").casefold()
             rows = self._market_rows()
             return self._market_output(
-                [row for row in rows if query in str(row[12]).casefold()],
+                [
+                    row
+                    for row in rows
+                    if any(query in tag.casefold() for tag in _tag_names(row[12]))
+                ],
                 name=name,
                 arguments=arguments,
             )
@@ -829,21 +833,7 @@ _DISCOVERY_CARD_LOG = logging.getLogger("vtrade.discovery_card")
 
 
 def _discovery_card(row: Sequence[object]) -> JsonObject:
-    meta = _metadata(row[12])
-    tag_names: list[str] = []
-    raw_tags = meta.get("tags")
-    tag_list = raw_tags if isinstance(raw_tags, list) else []
-    for t in tag_list:
-        if isinstance(t, dict):
-            label = t.get("label") or t.get("name")
-            if label:
-                tag_names.append(str(label))
-            else:
-                _DISCOVERY_CARD_LOG.warning(
-                    "skipping tag with no label/name: %s", t
-                )
-        elif isinstance(t, str):
-            tag_names.append(t)
+    tag_names = _tag_names(row[12])
     raw_outcomes = row[13]
     outcomes: list[JsonObject] = []
     if isinstance(raw_outcomes, list):
@@ -865,6 +855,24 @@ def _discovery_card(row: Sequence[object]) -> JsonObject:
         "tag_names": tag_names,
         "outcomes": outcomes,
     }
+
+
+def _tag_names(value: object) -> list[str]:
+    raw_tags = _metadata(value).get("tags")
+    tag_list = raw_tags if isinstance(raw_tags, list) else []
+    tag_names: list[str] = []
+    for tag in tag_list:
+        if isinstance(tag, dict):
+            label = tag.get("label") or tag.get("name")
+            if label:
+                tag_names.append(str(label))
+            else:
+                _DISCOVERY_CARD_LOG.warning(
+                    "skipping tag with no label/name: %s", tag
+                )
+        elif isinstance(tag, str):
+            tag_names.append(tag)
+    return tag_names
 
 
 def _market_lookup(arguments: Mapping[str, object]) -> tuple[str, str]:
