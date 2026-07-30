@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import binascii
-import html
 import json
 import os
 import secrets
@@ -13,7 +12,7 @@ from pathlib import Path
 from typing import Annotated, Protocol
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 
@@ -21,6 +20,8 @@ from vtrade.admin import AdminRepositoryError, InvalidOperatorAction, Page
 from vtrade.admin import PostgresAdminRepository as AdminRepository
 from vtrade.artifacts import SupabaseArtifactStore
 from vtrade.config import ConfigurationError, load_experiment_config, required_environment
+from vtrade.dashboard.repository import DashboardRepositoryError, PostgresDashboardRepository
+from vtrade.dashboard.web import DashboardDataSource, create_dashboard_router
 
 
 class _StorageProbe(Protocol):
@@ -103,10 +104,14 @@ def create_app(
     *,
     settings: AdminSettings | None = None,
     repository: _AdminRepository | None = None,
+    dashboard_repository: DashboardDataSource | None = None,
     storage: _StorageProbe | None = None,
 ) -> FastAPI:
     runtime_settings = settings or AdminSettings.from_environment()
     runtime_repository = repository or AdminRepository(runtime_settings.database_url)
+    runtime_dashboard_repository = dashboard_repository or PostgresDashboardRepository(
+        runtime_settings.database_url
+    )
     runtime_storage = storage or SupabaseArtifactStore.from_environment()
 
     def authenticate(authorization: Annotated[str | None, Header()] = None) -> None:
@@ -149,7 +154,9 @@ def create_app(
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Content-Security-Policy"] = (
-            "default-src 'none'; style-src 'unsafe-inline'"
+            "default-src 'none'; script-src 'self'; style-src 'self'; "
+            "connect-src 'self'; img-src 'self' data:; font-src 'self'; "
+            "base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
         )
         return response
 
@@ -163,6 +170,15 @@ def create_app(
     @app.exception_handler(InvalidOperatorAction)
     async def invalid_action(_request: Request, exc: InvalidOperatorAction) -> JSONResponse:
         return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+    @app.exception_handler(DashboardRepositoryError)
+    async def dashboard_repository_failure(
+        _request: Request, _exc: DashboardRepositoryError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"detail": "dashboard data source unavailable"},
+        )
 
     @app.exception_handler(KeyError)
     async def missing_target(_request: Request, _exc: KeyError) -> JSONResponse:
@@ -208,34 +224,7 @@ def create_app(
             content=json.loads(json.dumps(body, default=str)),
         )
 
-    @app.get("/", include_in_schema=False)
-    @app.get("/admin")
-    def dashboard() -> HTMLResponse:
-        overview = runtime_repository.overview()
-        leaderboard = runtime_repository.view("leaderboard", page=Page(limit=100))
-        freshness = runtime_repository.view("freshness")
-        alerts = runtime_repository.view("alerts", page=Page(limit=100))
-        positions = runtime_repository.view("positions", page=Page(limit=100))
-        trades = runtime_repository.view("trades", page=Page(limit=100))
-        settlements = runtime_repository.view("settlements", page=Page(limit=100))
-        rejections = runtime_repository.view("rejections", page=Page(limit=100))
-        cycles = runtime_repository.view("cycles", page=Page(limit=100))
-        usage = runtime_repository.view("usage", page=Page(limit=100))
-        config_versions = runtime_repository.view("config_versions", page=Page(limit=100))
-        body = _render_dashboard(
-            overview,
-            leaderboard,
-            positions,
-            trades,
-            settlements,
-            rejections,
-            cycles,
-            usage,
-            freshness,
-            config_versions,
-            alerts,
-        )
-        return HTMLResponse(body)
+    app.include_router(create_dashboard_router(runtime_dashboard_repository))
 
     @app.get("/admin/overview")
     def overview() -> dict[str, object]:
@@ -357,47 +346,3 @@ def create_app(
         )
 
     return app
-
-
-def _render_dashboard(
-    overview: dict[str, object],
-    leaderboard: list[dict[str, object]],
-    positions: list[dict[str, object]],
-    trades: list[dict[str, object]],
-    settlements: list[dict[str, object]],
-    rejections: list[dict[str, object]],
-    cycles: list[dict[str, object]],
-    usage: list[dict[str, object]],
-    freshness: list[dict[str, object]],
-    config_versions: list[dict[str, object]],
-    alerts: list[dict[str, object]],
-) -> str:
-    sections = (
-        ("Overview", [overview]),
-        ("Leaderboard and PnL", leaderboard),
-        ("Positions and executable bid valuation", positions),
-        ("Trades", trades),
-        ("Settlements", settlements),
-        ("Rejections", rejections),
-        ("Cycles and decision versions", cycles),
-        ("Model and search usage and cost", usage),
-        ("Data freshness", freshness),
-        ("Configuration, prompt, model and code versions", config_versions),
-        ("Alerts", alerts),
-    )
-    rendered_sections = []
-    for title, rows in sections:
-        payload = html.escape(json.dumps(rows, default=str, indent=2))
-        rendered_sections.append(
-            f"<section><h2>{html.escape(title)}</h2><pre>{payload}</pre></section>"
-        )
-    rendered = "".join(rendered_sections)
-    return (
-        "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
-        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<title>V-Trade private admin</title><style>"
-        "body{font-family:system-ui;background:#10141b;color:#eef3f8;margin:2rem;max-width:110rem}"
-        "section{background:#18202b;padding:1rem;margin:1rem 0;border-radius:.5rem;overflow:auto}"
-        "pre{font-size:.8rem;white-space:pre-wrap}h1,h2{color:#8fd3ff}</style></head>"
-        f"<body><h1>V-Trade private admin</h1>{rendered}</body></html>"
-    )

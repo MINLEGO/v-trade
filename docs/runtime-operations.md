@@ -114,6 +114,14 @@ and cost, freshness, alerts, and decision versions. Global and per-agent pause/r
 are the only control mutations; each requires an operator identity and idempotency key
 and is committed with an append-only `operator_actions` audit record.
 
+The dashboard UI is a separate, read-only presentation module mounted by the private
+API. Its 30-day default window can be changed to 24 hours, seven days, or the complete
+run. The cycle explorer joins retained model reasoning, tool calls, research sources,
+provider usage, belief and plan revisions, order execution, and runtime checkpoints
+without importing worker or broker logic. Detailed payloads are marked unavailable
+after retention cleanup; surviving audit metadata is never presented as if the raw
+reasoning were still available.
+
 ## Validation boundaries
 
 Offline unit/recovery tests do not contact model or research providers. PostgreSQL
