@@ -600,7 +600,7 @@ class ProductionToolRegistry:
             "r.evidence, r.created_at FROM beliefs b JOIN LATERAL "
             "(SELECT * FROM belief_revisions WHERE belief_id = b.id "
             "ORDER BY revision DESC LIMIT 1) r ON true WHERE b.agent_id = %s "
-            "ORDER BY r.created_at, b.id LIMIT %s",
+            "ORDER BY r.created_at DESC, b.id DESC LIMIT %s",
             (self._context.claim.agent_id, _limit(arguments, default=100)),
         )
         return {

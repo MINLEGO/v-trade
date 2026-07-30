@@ -290,6 +290,16 @@ class PostgresHarnessRepositoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "maximum_beliefs_per_agent"):
             PostgresHarnessRepository("postgresql://unused", maximum_beliefs_per_agent=0)
 
+    def test_belief_reads_are_newest_first(self) -> None:
+        self.repository.read_beliefs(actor_id=AGENT_ID, target_agent_id=AGENT_ID)
+
+        belief_query = next(
+            query
+            for query, _params in self.connection.cursor_instance.queries
+            if query.startswith("SELECT b.id, r.confidence")
+        )
+        self.assertIn("ORDER BY r.created_at DESC, b.id DESC", belief_query)
+
     def test_phase_four_migration_contains_budget_replay_and_retention_tables(self) -> None:
         migration = Path("migrations/0004_model_research_harness.sql").read_text(encoding="utf-8")
         for required in (

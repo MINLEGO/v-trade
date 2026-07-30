@@ -639,7 +639,8 @@ class PostgresHarnessRepository:
                 "SELECT b.id, r.confidence, r.content, r.category, r.evidence, r.created_at "
                 "FROM beliefs b JOIN LATERAL (SELECT * FROM belief_revisions "
                 "WHERE belief_id = b.id ORDER BY revision DESC LIMIT 1) r ON true "
-                "WHERE b.agent_id = %s AND b.active = true ORDER BY r.created_at, b.id",
+                "WHERE b.agent_id = %s AND b.active = true "
+                "ORDER BY r.created_at DESC, b.id DESC",
                 (actor_id,),
             )
             rows: list[dict[str, object]] = []

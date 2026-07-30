@@ -505,6 +505,8 @@ class ProductionToolRegistryTests(unittest.TestCase):
         self.assertFalse(output["beliefs"][0]["active"])
         self.assertIn("confidence", output["beliefs"][0])
         self.assertNotIn("probability", output["beliefs"][0])
+        belief_query, _params = cursor.queries[0]
+        self.assertIn("ORDER BY r.created_at DESC, b.id DESC", belief_query)
 
     def test_tools_refuse_unfinalized_cutoff(self) -> None:
         with self.assertRaisesRegex(ToolContextUnavailable, "finalized"):
