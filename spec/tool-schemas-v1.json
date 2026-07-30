@@ -591,7 +591,35 @@
       },
       "output_schema": {
         "type": "object",
-        "additionalProperties": true
+        "additionalProperties": false,
+        "properties": {
+          "settlements": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": {"type": "string"},
+                "position_id": {"type": "string"},
+                "market_id": {"type": "string"},
+                "market_question": {"type": "string"},
+                "outcome_id": {"type": "string"},
+                "outcome": {"type": "string"},
+                "winning_outcome": {"type": ["string", "null"]},
+                "shares": {"type": "string"},
+                "payout_micros": {"type": "integer"},
+                "realized_pnl_micros": {"type": "integer"},
+                "settled_at": {"type": "string"}
+              },
+              "required": [
+                "id", "position_id", "market_id", "market_question", "outcome_id",
+                "outcome", "winning_outcome", "shares", "payout_micros",
+                "realized_pnl_micros", "settled_at"
+              ]
+            }
+          }
+        },
+        "required": ["settlements"]
       }
     },
     {

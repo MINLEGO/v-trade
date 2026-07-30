@@ -27,12 +27,14 @@ class _Cursor:
         book_observed_at: datetime = NOW,
         market_rows: list[tuple[object, ...]] | None = None,
         closed_trade_rows: list[tuple[object, ...]] | None = None,
+        settlement_rows: list[tuple[object, ...]] | None = None,
     ) -> None:
         self.rows: list[tuple[object, ...]] = []
         self.queries: list[tuple[str, tuple[object, ...]]] = []
         self.book_observed_at = book_observed_at
         self.market_rows = market_rows
         self.closed_trade_rows = closed_trade_rows
+        self.settlement_rows = settlement_rows
 
     def __enter__(self):
         return self
@@ -82,6 +84,8 @@ class _Cursor:
             self.rows = [(uuid.uuid4(), False, Decimal("0.4"), "old", "macro", [], NOW)]
         elif query.startswith("WITH fill_events AS"):
             self.rows = self.closed_trade_rows or []
+        elif query.startswith("SELECT s.id, s.position_id"):
+            self.rows = self.settlement_rows or []
         else:
             self.rows = []
         return self
@@ -211,6 +215,51 @@ class ProductionToolRegistryTests(unittest.TestCase):
         output = tools["get_closed_trades"].handler({})
 
         self.assertEqual(output, {"trades": []})
+
+    def test_settlements_include_position_market_outcome_and_winner(self) -> None:
+        settlement_id, position_id, market_id, outcome_id = (uuid.uuid4() for _ in range(4))
+        cursor = _Cursor(
+            settlement_rows=[
+                (
+                    settlement_id,
+                    position_id,
+                    market_id,
+                    "Will the event happen?",
+                    outcome_id,
+                    "No",
+                    "Yes",
+                    "100",
+                    0,
+                    -42_000_000,
+                    NOW,
+                )
+            ]
+        )
+        tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
+
+        output = tools["get_settlements"].handler({"limit": 10})
+
+        settlement = output["settlements"][0]
+        self.assertEqual(
+            settlement,
+            {
+                "id": str(settlement_id),
+                "position_id": str(position_id),
+                "market_id": str(market_id),
+                "market_question": "Will the event happen?",
+                "outcome_id": str(outcome_id),
+                "outcome": "No",
+                "winning_outcome": "Yes",
+                "shares": "100",
+                "payout_micros": 0,
+                "realized_pnl_micros": -42_000_000,
+                "settled_at": str(NOW),
+            },
+        )
+        query, params = cursor.queries[0]
+        self.assertIn("LEFT JOIN outcomes winning_o", query)
+        self.assertIn("r.winning_outcome_id", query)
+        self.assertEqual(params[1], 10)
 
     def test_place_order_persists_only_pending_intent(self) -> None:
         cursor = _Cursor()

@@ -562,13 +562,28 @@ class ProductionToolRegistry:
 
     def _get_settlements(self, arguments: JsonObject) -> JsonObject:
         rows = self._query(
-            "SELECT id, shares, payout_micros, realized_pnl_micros, settled_at "
-            "FROM settlements WHERE agent_id = %s ORDER BY settled_at DESC, id DESC LIMIT %s",
+            "SELECT s.id, s.position_id, m.id AS market_id, m.question AS market_question, "
+            "o.id AS outcome_id, o.name AS outcome, winning_o.name AS winning_outcome, "
+            "s.shares, s.payout_micros, s.realized_pnl_micros, s.settled_at "
+            "FROM settlements s "
+            "JOIN positions p ON p.id = s.position_id "
+            "JOIN outcomes o ON o.id = p.outcome_id "
+            "JOIN markets m ON m.id = o.market_id "
+            "JOIN resolutions r ON r.id = s.resolution_id "
+            "LEFT JOIN outcomes winning_o ON winning_o.id = r.winning_outcome_id "
+            "WHERE s.agent_id = %s ORDER BY s.settled_at DESC, s.id DESC LIMIT %s",
             (self._context.claim.agent_id, _limit(arguments, default=100)),
         )
         return {
             "settlements": [
-                _named(row, ("id", "shares", "payout_micros", "realized_pnl_micros", "settled_at"))
+                _named(
+                    row,
+                    (
+                        "id", "position_id", "market_id", "market_question", "outcome_id",
+                        "outcome", "winning_outcome", "shares", "payout_micros",
+                        "realized_pnl_micros", "settled_at",
+                    ),
+                )
                 for row in rows
             ]
         }
