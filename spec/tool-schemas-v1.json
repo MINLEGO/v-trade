@@ -497,6 +497,11 @@
                 "outcome_id": {"type": "string", "format": "uuid"},
                 "outcome": {"type": "string"},
                 "shares": {"type": "string"},
+                "venue_token_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Venue token identifier for this exact outcome. Pass this value as token_id to get_orderbook or place_market_order."
+                },
                 "average_cost": {"type": "string"},
                 "cost_basis_micros": {"type": "integer"},
                 "realized_pnl_micros": {"type": "integer"},
@@ -504,7 +509,7 @@
               },
               "required": [
                 "position_id", "market_id", "market_question", "outcome_id",
-                "outcome", "shares", "average_cost", "cost_basis_micros",
+                "venue_token_id", "outcome", "shares", "average_cost", "cost_basis_micros",
                 "realized_pnl_micros", "updated_at"
               ]
             }
