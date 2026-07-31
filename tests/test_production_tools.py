@@ -8,6 +8,7 @@ from contextlib import AbstractContextManager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 from vtrade.production_tools import (
@@ -130,12 +131,22 @@ class _Memory:
         self.appended_beliefs.append(belief)
 
 
+class _Exa:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, object], datetime]] = []
+
+    def search(self, query: str, options: dict[str, object], *, now: datetime):
+        self.calls.append((query, options, now))
+        return SimpleNamespace(output={"query": query, "results": []}, telemetry=())
+
+
 def _context(
     cursor: _Cursor,
     *,
     cutoff=NOW,
     maximum_default_result_tokens: int = 4_000,
     memory: _Memory | None = None,
+    exa: _Exa | None = None,
 ) -> ToolContext:
     claim = CycleClaim(
         uuid.uuid4(),
@@ -151,7 +162,7 @@ def _context(
     return ToolContext(
         "postgresql://unused",
         claim,
-        cast(Any, object()),
+        cast(Any, exa if exa is not None else object()),
         cast(Any, memory if memory is not None else object()),
         cast(Any, lambda arguments: {"items": [], "has_more": False}),
         lambda _url: connection,
@@ -173,6 +184,40 @@ class ProductionToolRegistryTests(unittest.TestCase):
         names = {tool.name for tool in ProductionToolRegistry(_context(_Cursor())).tool_specs()}
         self.assertEqual(len(names), 27)
         self.assertEqual(names, expected)
+
+    def test_web_search_forwards_all_public_options_to_exa(self) -> None:
+        exa = _Exa()
+        tools = {
+            tool.name: tool
+            for tool in ProductionToolRegistry(_context(_Cursor(), exa=exa)).tool_specs()
+        }
+
+        output = tools["web_search"].handler(
+            {
+                "query": "latest evidence",
+                "max_highlight_length": 1500,
+                "num_results": 10,
+                "start_published_date": 30,
+                "end_published_date": 0,
+            }
+        )
+
+        self.assertEqual(output.output, {"query": "latest evidence", "results": []})
+        self.assertEqual(
+            exa.calls,
+            [
+                (
+                    "latest evidence",
+                    {
+                        "max_highlight_length": 1500,
+                        "num_results": 10,
+                        "start_published_date": 30,
+                        "end_published_date": 0,
+                    },
+                    NOW,
+                )
+            ],
+        )
 
     def test_orderbook_reads_only_snapshot_at_finalized_cutoff(self) -> None:
         cursor = _Cursor()

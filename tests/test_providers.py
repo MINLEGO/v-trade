@@ -21,6 +21,7 @@ from vtrade.providers import (
     BudgetReservation,
     ExaResearchProvider,
     OpenRouterModelGateway,
+    ProviderConfigurationError,
     ProviderDisabled,
     ProviderPayloadError,
     RecordedModelGateway,
@@ -245,19 +246,38 @@ class ProviderTests(unittest.TestCase):
 
         def handler(request: httpx.Request) -> httpx.Response:
             self.assertEqual(request.url, EXA_SEARCH_URL)
+            self.assertEqual(
+                json.loads(request.content),
+                {
+                    "query": "query",
+                    "type": "auto",
+                    "numResults": 10,
+                    "contents": {"highlights": {"maxCharacters": 1500}},
+                    "startPublishedDate": "2026-06-16",
+                    "endPublishedDate": "2026-07-16",
+                },
+            )
             return httpx.Response(
                 200,
                 json={
+                    "requestId": "request-id",
+                    "searchType": "auto",
                     "results": [
                         {
                             "title": "Primary",
                             "url": "https://example.com",
+                            "id": "https://example.com",
                             "publishedDate": "2026-07-16T00:00:00Z",
+                            "author": "Author Name",
+                            "image": "https://example.com/image.png",
+                            "favicon": "https://example.com/favicon.ico",
                             "highlights": ["evidence"],
                         }
                     ],
+                    "searchTime": 1026.9,
                     "costDollars": {"total": 0},
                     "requestCredits": 1,
+                    "resolvedSearchType": "",
                 },
             )
 
@@ -268,7 +288,7 @@ class ProviderTests(unittest.TestCase):
             client=httpx.Client(transport=httpx.MockTransport(handler)),
             clock=lambda: next(clocks),
         )
-        response = provider.search("query", {"num_results": 5})
+        response = provider.search("query", {}, now=NOW)
         self.assertEqual(
             response.output,
             {
@@ -288,6 +308,92 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(
             response.telemetry.nominal_cost_micros, EXA_MAX_SEARCH_COST_MICROS
         )
+
+    def test_exa_search_enforces_highlight_budget_and_date_options(self) -> None:
+        requests: list[dict] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(json.loads(request.content))
+            return httpx.Response(200, json={"results": [], "costDollars": {"total": 0}})
+
+        provider = ExaResearchProvider(
+            "exa-key",
+            self.store,
+            self.budget,
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        provider.search(
+            "query",
+            {
+                "max_highlight_length": 1500,
+                "num_results": 10,
+                "start_published_date": 30,
+                "end_published_date": 0,
+            },
+            now=NOW,
+        )
+        self.assertEqual(
+            requests,
+            [
+                {
+                    "query": "query",
+                    "type": "auto",
+                    "numResults": 10,
+                    "contents": {"highlights": {"maxCharacters": 1500}},
+                    "startPublishedDate": "2026-06-16",
+                    "endPublishedDate": "2026-07-16",
+                }
+            ],
+        )
+
+        with self.assertRaisesRegex(ProviderConfigurationError, "must not exceed 15000"):
+            provider.search(
+                "query",
+                {"max_highlight_length": 1501, "num_results": 10},
+                now=NOW,
+            )
+        self.assertEqual(len(requests), 1)
+
+        provider.search(
+            "query",
+            {
+                "max_highlight_length": 1500,
+                "num_results": 10,
+                "start_published_date": "2026-07-01",
+                "end_published_date": "2026-07-24",
+            },
+            now=NOW,
+        )
+        self.assertEqual(requests[-1]["startPublishedDate"], "2026-07-01")
+        self.assertEqual(requests[-1]["endPublishedDate"], "2026-07-24")
+
+    def test_exa_search_rejects_invalid_published_date_ranges_before_request(self) -> None:
+        requests = 0
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            nonlocal requests
+            requests += 1
+            return httpx.Response(500)
+
+        provider = ExaResearchProvider(
+            "exa-key",
+            self.store,
+            self.budget,
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        with self.assertRaisesRegex(ProviderConfigurationError, "must not be later"):
+            provider.search(
+                "query",
+                {"start_published_date": 0, "end_published_date": 30},
+                now=NOW,
+            )
+        with self.assertRaisesRegex(ProviderConfigurationError, "YYYY-MM-DD"):
+            provider.search(
+                "query",
+                {"start_published_date": "not-a-date"},
+                now=NOW,
+            )
+        self.assertEqual(requests, 0)
 
     def test_search_result_count_above_ten_fails_before_provider_request(self) -> None:
         requests = 0

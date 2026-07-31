@@ -5,7 +5,7 @@ import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Protocol
 
@@ -19,6 +19,11 @@ TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 EXA_MAX_SEARCH_COST_MICROS = 20_000
 EXA_MAX_CREDITS_PER_SEARCH = Decimal(10)
 TAVILY_MAX_SEARCH_COST_MICROS = 8_000
+DEFAULT_WEB_SEARCH_NUM_RESULTS = 10
+DEFAULT_WEB_SEARCH_HIGHLIGHT_LENGTH = 1_500
+MAX_WEB_SEARCH_HIGHLIGHT_CHARACTERS = 15_000
+DEFAULT_WEB_SEARCH_START_DAYS_AGO = 30
+DEFAULT_WEB_SEARCH_END_DAYS_AGO = 0
 
 WEB_SEARCH_TOOL_SCHEMA: JsonObject = {
     "type": "function",
@@ -31,7 +36,40 @@ WEB_SEARCH_TOOL_SCHEMA: JsonObject = {
             "required": ["query"],
             "properties": {
                 "query": {"type": "string", "minLength": 1},
-                "num_results": {"type": "integer", "minimum": 1, "maximum": 10},
+                "max_highlight_length": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_WEB_SEARCH_HIGHLIGHT_CHARACTERS,
+                    "default": DEFAULT_WEB_SEARCH_HIGHLIGHT_LENGTH,
+                    "description": (
+                        "Maximum characters returned in highlights per result. "
+                        "The product with num_results must not exceed 15000."
+                    ),
+                },
+                "num_results": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10,
+                    "default": DEFAULT_WEB_SEARCH_NUM_RESULTS,
+                },
+                "start_published_date": {
+                    "type": ["integer", "string"],
+                    "minimum": 0,
+                    "pattern": r"^\d{4}-\d{2}-\d{2}$",
+                    "default": DEFAULT_WEB_SEARCH_START_DAYS_AGO,
+                    "description": (
+                        "Range start as non-negative days back from now or YYYY-MM-DD."
+                    ),
+                },
+                "end_published_date": {
+                    "type": ["integer", "string"],
+                    "minimum": 0,
+                    "pattern": r"^\d{4}-\d{2}-\d{2}$",
+                    "default": DEFAULT_WEB_SEARCH_END_DAYS_AGO,
+                    "description": (
+                        "Range end as non-negative days back from now or YYYY-MM-DD."
+                    ),
+                },
                 "include_domains": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -370,13 +408,23 @@ class ExaResearchProvider:
         self._client = client or httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0))
         self._clock = clock
 
-    def search(self, query: str, options: JsonObject) -> SearchResponse:
-        normalized = _search_options(query, options)
+    def search(
+        self,
+        query: str,
+        options: JsonObject,
+        *,
+        now: datetime | None = None,
+    ) -> SearchResponse:
+        normalized = _search_options(query, options, now=now)
         payload: JsonObject = {
             "query": query,
             "type": "auto",
             "numResults": normalized["num_results"],
-            "contents": {"highlights": True},
+            "contents": {
+                "highlights": {"maxCharacters": normalized["max_highlight_length"]}
+            },
+            "startPublishedDate": normalized["start_published_date"],
+            "endPublishedDate": normalized["end_published_date"],
         }
         if normalized["include_domains"]:
             payload["includeDomains"] = normalized["include_domains"]
@@ -457,10 +505,16 @@ class TavilyResearchProvider:
         self._client = client or httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0))
         self._clock = clock
 
-    def search(self, query: str, options: JsonObject) -> SearchResponse:
+    def search(
+        self,
+        query: str,
+        options: JsonObject,
+        *,
+        now: datetime | None = None,
+    ) -> SearchResponse:
         if not self._enabled:
             raise ProviderDisabled("Tavily is disabled in predictionarena-polymarket-v1")
-        normalized = _search_options(query, options)
+        normalized = _search_options(query, options, now=now)
         payload: JsonObject = {
             "query": query,
             "search_depth": "basic",
@@ -533,22 +587,67 @@ def canonical_redacted_json(value: Any) -> bytes:
     ).encode()
 
 
-def _search_options(query: str, options: JsonObject) -> JsonObject:
+def _search_options(
+    query: str,
+    options: JsonObject,
+    *,
+    now: datetime | None = None,
+) -> JsonObject:
     if not isinstance(query, str) or not query.strip():
         raise ProviderConfigurationError("search query must be non-empty")
     allowed = {
+        "max_highlight_length",
         "num_results",
+        "start_published_date",
+        "end_published_date",
         "include_domains",
         "exclude_domains",
     }
     unknown = set(options) - allowed
     if unknown:
         raise ProviderConfigurationError(f"unsupported search options: {sorted(unknown)}")
-    num_results = int(options.get("num_results", 5))
-    if not 1 <= num_results <= 10:
+    num_results = options.get("num_results", DEFAULT_WEB_SEARCH_NUM_RESULTS)
+    if (
+        not isinstance(num_results, int)
+        or isinstance(num_results, bool)
+        or not 1 <= num_results <= 10
+    ):
         raise ProviderConfigurationError("num_results must be between 1 and 10")
+    max_highlight_length = options.get(
+        "max_highlight_length", DEFAULT_WEB_SEARCH_HIGHLIGHT_LENGTH
+    )
+    if (
+        not isinstance(max_highlight_length, int)
+        or isinstance(max_highlight_length, bool)
+        or not 1 <= max_highlight_length <= MAX_WEB_SEARCH_HIGHLIGHT_CHARACTERS
+    ):
+        raise ProviderConfigurationError(
+            "max_highlight_length must be between 1 and 15000"
+        )
+    if max_highlight_length * num_results > MAX_WEB_SEARCH_HIGHLIGHT_CHARACTERS:
+        raise ProviderConfigurationError(
+            "max_highlight_length multiplied by num_results must not exceed 15000"
+        )
+    reference_now = _search_reference_now(now)
+    start_published_date = _published_date_option(
+        options.get("start_published_date", DEFAULT_WEB_SEARCH_START_DAYS_AGO),
+        reference_now=reference_now,
+        name="start_published_date",
+    )
+    end_published_date = _published_date_option(
+        options.get("end_published_date", DEFAULT_WEB_SEARCH_END_DAYS_AGO),
+        reference_now=reference_now,
+        name="end_published_date",
+    )
+    if start_published_date > end_published_date:
+        raise ProviderConfigurationError(
+            "start_published_date must not be later than end_published_date"
+        )
     return {
         "num_results": num_results,
+        "max_highlight_length": max_highlight_length,
+        "start_published_date": start_published_date,
+        "end_published_date": end_published_date,
         "include_domains": _string_list(options.get("include_domains", [])),
         "exclude_domains": _string_list(options.get("exclude_domains", [])),
     }
@@ -564,10 +663,21 @@ def _normalize_search_output(query: str, payload: JsonObject, *, provider: str) 
         url = item.get("url")
         if not isinstance(url, str) or not url:
             raise ProviderPayloadError(f"{provider} result URL is required")
-        content = item.get("content", item.get("text"))
-        if not isinstance(content, str):
+        content: str
+        if provider == "exa":
             highlights = item.get("highlights", [])
-            content = "\n".join(str(value) for value in highlights)
+            content = (
+                "\n".join(str(value) for value in highlights)
+                if isinstance(highlights, list)
+                else ""
+            )
+        else:
+            candidate = item.get("content", item.get("text"))
+            if isinstance(candidate, str):
+                content = candidate
+            else:
+                highlights = item.get("highlights", [])
+                content = "\n".join(str(value) for value in highlights)
         results.append(
             {
                 "title": str(item.get("title") or ""),
@@ -577,6 +687,33 @@ def _normalize_search_output(query: str, payload: JsonObject, *, provider: str) 
             }
         )
     return {"query": query, "results": results}
+
+
+def _search_reference_now(value: datetime | None) -> datetime:
+    reference_now = datetime.now(UTC) if value is None else value
+    if reference_now.tzinfo is None or reference_now.utcoffset() is None:
+        raise ProviderConfigurationError("search reference time must be timezone-aware")
+    return reference_now.astimezone(UTC)
+
+
+def _published_date_option(
+    value: Any,
+    *,
+    reference_now: datetime,
+    name: str,
+) -> str:
+    if isinstance(value, int) and not isinstance(value, bool):
+        if value < 0:
+            raise ProviderConfigurationError(f"{name} days back must be non-negative")
+        return (reference_now.date() - timedelta(days=value)).isoformat()
+    if isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        try:
+            return date.fromisoformat(value).isoformat()
+        except ValueError as exc:
+            raise ProviderConfigurationError(
+                f"{name} must be non-negative days back or YYYY-MM-DD"
+            ) from exc
+    raise ProviderConfigurationError(f"{name} must be non-negative days back or YYYY-MM-DD")
 
 
 def _validate_openrouter_response(payload: JsonObject, expected_model: str) -> None:

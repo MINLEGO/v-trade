@@ -46,6 +46,29 @@ class SpecificationTests(unittest.TestCase):
                 self.assertEqual(property_schema["items"]["minLength"], 1)
                 self.assertEqual(property_schema["minItems"], 1)
 
+    def test_web_search_exposes_bounded_highlights_and_published_date_options(self) -> None:
+        document = json.loads(Path("spec/tool-schemas-v1.json").read_text(encoding="utf-8"))
+        tool = next(row for row in document["tools"] if row["name"] == "web_search")
+        properties = tool["input_schema"]["properties"]
+        self.assertEqual(
+            set(properties),
+            {
+                "query",
+                "max_highlight_length",
+                "num_results",
+                "start_published_date",
+                "end_published_date",
+            },
+        )
+        self.assertEqual(properties["max_highlight_length"]["default"], 1500)
+        self.assertEqual(properties["num_results"]["default"], 10)
+        self.assertEqual(properties["num_results"]["maximum"], 10)
+        self.assertEqual(properties["start_published_date"]["default"], 30)
+        self.assertEqual(properties["end_published_date"]["default"], 0)
+        output = tool["output_schema"]
+        self.assertFalse(output["additionalProperties"])
+        self.assertFalse(output["properties"]["results"]["items"]["additionalProperties"])
+
     def test_prompt_has_no_unresolved_placeholder(self) -> None:
         body = Path("spec/prompt/predictionarena-polymarket-v1.md").read_text(encoding="utf-8")
         placeholders = re.findall(r"\{[A-Za-z_][A-Za-z0-9_]*\}", body)

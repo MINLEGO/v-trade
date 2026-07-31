@@ -12,7 +12,7 @@ source establishes them.
 | `discover_events` | discovery | keyword (string or tuple[str]), limit, min_liquidity, min_volume_24hr | frozen market cache |
 | `list_top_events` | discovery | limit, min_liquidity, min_volume_24hr | frozen market cache |
 | `get_market_details` | discovery | slug | frozen market cache |
-| `web_search` | research | query | configured research provider only |
+| `web_search` | research | query, max_highlight_length, num_results, start_published_date, end_published_date | configured research provider only |
 | `get_orderbook` | discovery | token_id | cutoff-compatible archived snapshot |
 | `discover_by_price_volatility` | discovery | limit, min_liquidity, min_volatility | frozen market cache |
 | `get_event_markets` | discovery | event_id | frozen market cache |

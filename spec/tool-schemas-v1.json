@@ -175,7 +175,41 @@
         "additionalProperties": false,
         "properties": {
           "query": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
+          },
+          "max_highlight_length": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 15000,
+            "default": 1500,
+            "description": "Maximum characters returned in highlights per result. The product with num_results must not exceed 15000."
+          },
+          "num_results": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 10
+          },
+          "start_published_date": {
+            "type": [
+              "integer",
+              "string"
+            ],
+            "minimum": 0,
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "default": 30,
+            "description": "Range start as non-negative days back from now or YYYY-MM-DD."
+          },
+          "end_published_date": {
+            "type": [
+              "integer",
+              "string"
+            ],
+            "minimum": 0,
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "default": 0,
+            "description": "Range end as non-negative days back from now or YYYY-MM-DD."
           }
         },
         "required": [
@@ -184,7 +218,46 @@
       },
       "output_schema": {
         "type": "object",
-        "additionalProperties": true
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                },
+                "published_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "content": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title",
+                "url",
+                "published_at",
+                "content"
+              ]
+            }
+          }
+        },
+        "required": [
+          "query",
+          "results"
+        ]
       }
     },
     {

@@ -449,11 +449,8 @@ class ProductionToolRegistry:
     def _web_search(self, arguments: JsonObject) -> ToolExecution:
         response = self._context.exa.search(
             _required_string(arguments, "query"),
-            {
-                "num_results": 10,
-                "include_domains": [],
-                "exclude_domains": [],
-            },
+            {key: value for key, value in arguments.items() if key != "query"},
+            now=self._context.now(),
         )
         return ToolExecution(response.output, (response.telemetry,))
 

@@ -90,6 +90,8 @@ Prices contained in market metadata or outcomes are indicative snapshots, not ex
 
 Search the external web for current evidence relevant to an event, market thesis, probability estimate, resolution rule, forecast, or catalyst. The tool returns up to ten search results with available titles, snippets, URLs and publication timestamps.
 
+You can balance the number of result and their quality using `num_results` and `max_highlight_length`. Note that to avoid truncated results, the total number of characters in highlights must not exceed 15000 character and will return an error otherwise. For example, tha max lenght for 10 results would be 1500 characters. The optional `start_published_date` and `end_published_date` arguments define the publication-date range. Each accepts a non-negative number of days back from now or a `YYYY-MM-DD` date; they default to 30 and 0 respectively.
+
 Check the publication date and ensure that evidence was available before the cycle’s data cutoff. Prefer primary or authoritative sources, distinguish independent sources from repeated reporting, and actively search for evidence that could disconfirm the thesis.
 
 Search-result snippets may be incomplete or misleading. Do not treat a snippet as sufficient evidence when the underlying claim is material to the trade, and never let external reporting override the market’s official resolution rules.
