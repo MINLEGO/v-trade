@@ -46,6 +46,8 @@ with volume and liquidity used only as secondary tie-breakers.
 
 Find open, tradeable markets whose `closes_at` time is between `hours_min` and `hours_max` hours after the current cycle cutoff. Use this tool to locate markets approaching closure or markets within a specific trading horizon.
 
+Results are ordered by remaining time ascending, with the soonest-closing markets first.
+
 A market’s closing time is not necessarily its resolution or payout time; always inspect the full resolution rules
 
 ---
@@ -160,7 +162,7 @@ Find open, tradeable markets whose volume trend is classified as `increasing` or
 
 A market is classified as increasing when its latest 24-hour volume is at least its average daily volume over the recorded week; otherwise it is classified as decreasing.
 
-Results are ordered primarily by total historical volume, not by the strength of the trend. Use volume changes as an opportunity-discovery signal, not as sufficient evidence for a directional trade.
+Results are ordered by trend strength. Use volume changes as an opportunity-discovery signal, not as sufficient evidence for a directional trade.
 
 ---
 
@@ -216,7 +218,7 @@ After calling `place_market_order`, prefer the `portfolio_after` state returned 
 
 Retrieve the calling agent’s positive-share positions from an immutable portfolio snapshot associated with the current agent cycle and portfolio version. Each position includes market and outcome identifiers, the market question, share quantity, average cost, cost basis, realized P&L and last update time.
 
-Results are ordered deterministically and may be paginated. When `has_more` is true, continue calling this tool with `next_cursor` until every page has been reviewed. A cursor is valid only for the same agent and cycle.
+Results are ordered deterministically and may be paginated. When `has_more` is true, you may continue calling this tool with `next_cursor` until every page has been reviewed if needed.
 
 The result does not provide a current executable exit price or unrealized P&L. Use the position’s venue token identifier with `get_orderbook` to estimate liquidation value and exit liquidity.
 
@@ -226,11 +228,9 @@ The result does not provide a current executable exit price or unrealized P&L. U
 
 **Proposed description**
 
-Return the calling agent’s most recent execution fills, ordered from newest to oldest. Each record includes the executed side, filled shares, execution price, gross value, fee and fill time.
+Return positions that were fully closed through SELL executions, ordered from newest to oldest. Each record aggregates the complete position lifecycle, including entry and exit quantities, average prices, fees, realized P&L, and opening and closing times.
 
-Despite the tool name, the result represents fills rather than only fully closed trades or closed positions. It may include BUY fills that opened or increased a position and SELL fills that only partially reduced one.
-
-The tool does not include rejected order attempts, unfilled remainders or the complete thesis associated with the trade. Compare fills with the current portfolio and settlements when reconstructing performance.
+Partially sold positions are not included until their remaining shares reach zero. Positions closed through market settlement are returned separately by get_settlements.
 
 ---
 
@@ -238,11 +238,9 @@ The tool does not include rejected order attempts, unfilled remainders or the co
 
 **Proposed description**
 
-Return the calling agent’s most recent settled position records, ordered from newest to oldest. Each record includes the settled share quantity, payout, realized P&L and settlement time.
+Return the calling agent’s most recent settled position records, ordered from newest to oldest. Each record includes the settled share quantity, payout, realized P&L, settlement time, market question, winning outcome and the outcome choosen by the agent.
 
 Use this tool to verify that an outcome has been settled and to distinguish realized settlement results from unrealized position value. Settlement P&L is authoritative for completed positions.
-
-Current implementation limitation: settlement records do not currently include the associated market, outcome or position identifier, which may make individual records difficult to associate with a thesis.
 
 ---
 
@@ -256,6 +254,8 @@ Retrieve stored beliefs belonging to the calling agent. By default, only active 
 
 Beliefs may concern a specific event, general trading strategy, market sentiment, market structure or risk management. Treat them as fallible historical conclusions rather than current facts. Verify time-sensitive beliefs against current evidence before using them.
 
+Results are ordered newest first and may be paginated. When `has_more` is true, call the tool again with the returned `next_cursor` to retrieve the next page. The cursor is opaque; keep the filtering arguments unchanged when continuing.
+
 Use this tool periodically to identify stale, duplicated or conflicting beliefs. Delete beliefs that are no longer supported rather than allowing contradictory memory to accumulate.
 
 ---
@@ -264,11 +264,13 @@ Use this tool periodically to identify stale, duplicated or conflicting beliefs.
 
 **Proposed description**
 
-Search the calling agent’s active beliefs using an optional case-insensitive `keyword` substring and an optional exact `category`. Categories are `event_analysis`, `trading_strategy`, `market_sentiment`, `market_structure` and `risk_assessment`.
+Search the calling agent’s beliefs using an optional case-insensitive `keyword` substring and an optional exact `category`. Categories are `event_analysis`, `trading_strategy`, `market_sentiment`, `market_structure` and `risk_assessment`.
 
-Use this tool when only a subset of memory is relevant to the current market or decision. An empty keyword and category return the available active beliefs up to the selected limit.
+Use this tool when only a subset of memory is relevant to the current market or decision. An empty keyword and category return the available beliefs up to the selected limit, restricted to active beliefs by default.
 
-The search covers active beliefs only. It does not search inactive history, evidence contents or semantic similarity, and a missing result does not prove that the agent has never stored a related belief.
+When `include_inactive` is true, the search also covers inactive history. It does not search evidence contents or semantic similarity, and a missing result does not prove that the agent has never stored a related belief.
+
+Results are ordered newest first and may be paginated. When `has_more` is true, you may call the tool again with the returned `next_cursor`, keeping `keyword`, `category` and `include_inactive` unchanged.
 
 ---
 
@@ -276,13 +278,13 @@ The search covers active beliefs only. It does not search inactive history, evid
 
 **Proposed description**
 
-Store a durable belief or learned conclusion for use in later cycles. Supply concise `belief_content`, one valid category and a `confidence` value from 0 to 1 representing confidence in the claim.
+Store a durable belief or learned conclusion for use in later cycles. Supply concise `belief_content`, one valid category and a `confidence` value from 0 to 1 representing confidence in the claim. You may also provide an optional `evidence` list containing concise source references or supporting observations.
 
 Use this tool for information expected to remain useful beyond the current cycle, including event analysis, strategy lessons, market-structure observations and risk-management conclusions. Do not store temporary prices, balances, execution status or facts that will quickly become stale.
 
 This tool creates a new belief rather than updating an existing one. Before creating a belief, check for duplicates or conflicts. Delete a superseded belief and create a corrected replacement when necessary.
 
-Current implementation limitation: the tool does not accept structured evidence, sample size, expiration date, probability range or explicit invalidation conditions.
+Evidence is stored with the belief for later review; it is not searched by `search_general_beliefs`. The tool does not accept sample size, expiration date, probability range or explicit invalidation conditions.
 
 ---
 
@@ -292,9 +294,9 @@ Current implementation limitation: the tool does not accept structured evidence,
 
 Deactivate one belief belonging to the calling agent by its `belief_id`. Use this tool when a belief is stale, duplicated, contradicted by stronger evidence or replaced by a more accurate formulation.
 
-Deletion is a soft deactivation for audit purposes; the historical record is retained and may still be retrieved with `get_general_beliefs` using `include_inactive: true`.
+Deletion is a soft deactivation for audit purposes; the historical record is retained and may still be retrieved with `get_general_beliefs` or `search_general_beliefs` using `include_inactive: true`.
 
-This tool cannot delete another agent’s belief and does not provide a way to reactivate a deactivated belief. Create a new corrected belief when the underlying conclusion changes.
+This tool does not provide a way to reactivate a deactivated belief, and deactivated beliefs may be completely deleted in the future. Create a new corrected belief when the underlying conclusion changes.
 
 ---
 
