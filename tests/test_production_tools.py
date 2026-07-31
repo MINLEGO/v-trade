@@ -456,6 +456,39 @@ class ProductionToolRegistryTests(unittest.TestCase):
                     len(output["events"][0]["markets"]), expected_market_count
                 )
 
+    def test_newest_markets_is_sorted_by_creation_date_descending(self) -> None:
+        rows = []
+        for market_ref, created_at in (
+            ("older", NOW - timedelta(hours=3)),
+            ("newer", NOW - timedelta(hours=1)),
+        ):
+            rows.append(
+                (
+                    uuid.uuid4(),
+                    market_ref,
+                    f"{market_ref}-slug",
+                    uuid.uuid4(),
+                    market_ref,
+                    "Snapshot rules",
+                    NOW - timedelta(days=1),
+                    NOW + timedelta(days=1),
+                    1_000_000,
+                    2_000_000,
+                    "open",
+                    True,
+                    {"created_at": created_at.isoformat()},
+                    [{"venue_token_id": f"{market_ref}-token", "name": "Yes"}],
+                )
+            )
+
+        cursor = _Cursor(market_rows=rows)
+        tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
+        output = tools["get_newest_markets"].handler({"hours_back": 24})
+
+        self.assertEqual(
+            [item["market_ref"] for item in output["markets"]], ["newer", "older"]
+        )
+
     def test_discovery_cursor_is_bound_to_its_arguments_and_cutoff(self) -> None:
         row = (
             uuid.uuid4(),

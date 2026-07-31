@@ -4,7 +4,7 @@
   "notice": "Names and observed argument keys come from public traces. Types, required fields, bounds and outputs are inferred V-Trade contracts.",
   "tools": [
     {
-      "name": "discover_hot_markets",
+      "name": "get_newest_markets",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {

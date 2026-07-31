@@ -90,7 +90,7 @@ class ToolContext:
 
 _PAGINATED_DISCOVERY_TOOLS = frozenset(
     {
-        "discover_hot_markets",
+        "get_newest_markets",
         "discover_by_time_remaining",
         "discover_events",
         "list_top_events",
@@ -183,7 +183,7 @@ class ProductionToolRegistry:
         discovery = {
             name: (lambda arguments, tool_name=name: self._discover(tool_name, arguments))
             for name in (
-                "discover_hot_markets",
+                "get_newest_markets",
                 "discover_by_time_remaining",
                 "discover_events",
                 "list_top_events",
@@ -301,9 +301,13 @@ class ProductionToolRegistry:
         elif name == "discover_by_competitive_score":
             minimum = Decimal(str(arguments.get("min_score", 0)))
             rows = [row for row in rows if _metadata_decimal(row[12], "competitive") >= minimum]
-        elif name == "discover_hot_markets":
+        elif name == "get_newest_markets":
             hours = Decimal(str(arguments.get("hours_back", 24)))
             rows = [row for row in rows if _created_within(row[12], self._context.cutoff, hours)]
+            rows.sort(
+                key=lambda row: (_created_at_sort_key(row[12]), str(row[0])),
+                reverse=True,
+            )
         elif name == "get_newest_events":
             rows.sort(key=lambda row: (str(row[6]), str(row[0])), reverse=True)
         else:
@@ -1409,6 +1413,16 @@ def _created_within(value: object, cutoff: datetime, hours: Decimal) -> bool:
         return False
     age_hours = Decimal(str((cutoff - created).total_seconds())) / Decimal(3600)
     return Decimal(0) <= age_hours <= hours
+
+
+def _created_at_sort_key(value: object) -> datetime:
+    raw = _metadata_string(value, "created_at")
+    if raw is None:
+        return datetime.min.replace(tzinfo=UTC)
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(UTC)
+    except ValueError:
+        return datetime.min.replace(tzinfo=UTC)
 
 
 def _bounded_output(value: JsonObject, maximum_tokens: int) -> JsonObject:

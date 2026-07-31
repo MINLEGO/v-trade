@@ -1,7 +1,7 @@
 # Issue :
 **1. Market Discovery returns only 1-2 markets (Argentina WC + Jesus Christ)**
 
-- **Root cause**: `_market_rows()` at [`src/vtrade/production_tools.py:311-316`](src/vtrade/production_tools.py:311) queries only `self._context.market_snapshot_ids` — the **frozen snapshot set** from the cycle. The cycle freezes only 10-11 market IDs, and of those, only 1-2 are `status='open' AND tradeable=true`. All discovery tools (`discover_events`, `discover_hot_markets`, `list_top_events`, `search_tags`, `browse_markets_by_volume`, `discover_by_time_remaining`, `discover_by_price_volatility`, `get_newest_events`, `get_all_active_markets`) all call `_market_rows(100)` then filter — so they all return the same tiny subset.
+- **Root cause**: `_market_rows()` at [`src/vtrade/production_tools.py:311-316`](src/vtrade/production_tools.py:311) queries only `self._context.market_snapshot_ids` — the **frozen snapshot set** from the cycle. The cycle freezes only 10-11 market IDs, and of those, only 1-2 are `status='open' AND tradeable=true`. All discovery tools (`discover_events`, `get_newest_markets`, `list_top_events`, `search_tags`, `browse_markets_by_volume`, `discover_by_time_remaining`, `discover_by_price_volatility`, `get_newest_events`, `get_all_active_markets`) all call `_market_rows(100)` then filter — so they all return the same tiny subset.
 
 - **Evidence**: Cycle 1 `discover_events("Argentina Spain World Cup final")` → empty. `discover_events("FIFA World Cup")` → empty, `truncated: true`. `list_top_events` → empty, `truncated: true`. `discover_hot_markets` → empty. Only `discover_events("Argentina")` finds the market. This pattern repeats identically across all 3 cycles.
 

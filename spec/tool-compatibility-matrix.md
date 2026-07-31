@@ -7,7 +7,7 @@ source establishes them.
 
 | AI-facing name | Function | Observed argument keys | V-Trade authorization |
 |---|---|---|---|
-| `discover_hot_markets` | discovery | hours_back, limit, min_liquidity, min_volume_24hr | frozen market cache |
+| `get_newest_markets` | discovery | hours_back, limit, min_liquidity, min_volume_24hr | frozen market cache; creation date descending |
 | `discover_by_time_remaining` | discovery | hours_min, hours_max, limit, min_liquidity | frozen market cache |
 | `discover_events` | discovery | keyword, limit, min_liquidity, min_volume_24hr | frozen market cache |
 | `list_top_events` | discovery | limit, min_liquidity, min_volume_24hr | frozen market cache |
