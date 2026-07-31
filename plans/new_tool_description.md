@@ -20,7 +20,8 @@ Monetary discovery filters such as `min_liquidity` and `min_volume_24hr` use dol
 
 # Redundant info which can be generalized in the shared part :
 - Optional `min_liquidity` and `min_volume_24hr` filters can exclude inactive or shallow markets.
-- 
+- Retrieve the full resolution rules with `get_market_details` and executable liquidity with `get_orderbook` before trading.
+- Discovery filters identify candidates, not positive expected value. Validate the thesis with current evidence, official resolution rules, and executable liquidity.
 
 # Market discovery tools
 
@@ -32,15 +33,10 @@ List open, tradeable markets created within the last `hours_back` hours
 of the current cycle cutoff. The default lookback is 24 hours.
 
 Use this tool to identify newly listed individual markets that may not yet
-have been widely researched or efficiently priced. Optional `min_liquidity`
-and `min_volume_24hr` filters can exclude inactive or shallow markets.
+have been widely researched or efficiently priced.
 
 Results should be ordered primarily by creation time from newest to oldest,
 with volume and liquidity used only as secondary tie-breakers.
-
-Newness does not imply positive expected value. Retrieve the full resolution
-rules with `get_market_details` and executable liquidity with `get_orderbook`
-before trading.
 
 ---
 
@@ -50,7 +46,7 @@ before trading.
 
 Find open, tradeable markets whose `closes_at` time is between `hours_min` and `hours_max` hours after the current cycle cutoff. Use this tool to locate markets approaching closure or markets within a specific trading horizon.
 
-An optional `min_liquidity` filter may be used to exclude very shallow markets. Results are ordered primarily by total market volume and liquidity. A market’s closing time is not necessarily its resolution or payout time; always inspect the full resolution rules with `get_market_details`.
+A market’s closing time is not necessarily its resolution or payout time; always inspect the full resolution rules
 
 ---
 
@@ -62,8 +58,6 @@ Search for groups of related markets by event. The optional `keyword` is matched
 
 Each event contains compact discovery cards for its associated markets. Use `get_event_markets` to inspect an event more systematically and `get_market_details` before trading any market.
 
-Current implementation note: the declared `min_liquidity` and `min_volume_24hr` arguments are not currently applied by this tool. Do not rely on these filters until the implementation is corrected.
-
 ---
 
 ## `list_top_events`
@@ -72,9 +66,7 @@ Current implementation note: the declared `min_liquidity` and `min_volume_24hr` 
 
 List groups of related markets ordered by their aggregated total historical volume. Use this tool to identify the largest or most established events in the frozen market universe.
 
-Each event contains compact discovery cards for its associated markets. Use `get_event_markets` to retrieve the markets of a selected event and `get_market_details` to inspect exact resolution conditions.
-
-Current implementation note: the declared `min_liquidity` and `min_volume_24hr` arguments are not currently applied by this tool.
+Each event contains compact discovery cards for its associated markets. Use additional tools to inspect exact resolution conditions.
 
 ---
 
@@ -114,27 +106,15 @@ The tool rejects missing, causally invalid or stale books. A missing or rejected
 
 ---
 
-## `browse_markets_by_volume`
-
-**Proposed description**
-
-Browse open, tradeable markets ordered primarily by total historical volume and then liquidity. Optional `min_liquidity` and `min_volume_24hr` filters can be used to remove small or inactive markets.
-
-Use this tool for broad opportunity discovery when no specific category or event has already been selected. Returned outcome prices are indicative only. Retrieve full details and an executable order book before forming or executing a trade.
-
-Current implementation note: this tool is functionally almost identical to `get_all_active_markets`.
-
----
-
 ## `discover_by_price_volatility`
 
 **Proposed description**
 
 Find open, tradeable markets whose recorded price volatility is at least `min_volatility`. Volatility is currently defined as the larger absolute value of the recorded one-hour and one-day price changes.
 
-An optional `min_liquidity` filter may be used to exclude shallow markets. Results are filtered by volatility but are ordered primarily by total market volume, not by volatility magnitude.
+Results are filtered by volatility but are ordered primarily by total market volume, not by volatility magnitude.
 
-Use this tool to identify markets with recent repricing or potential catalysts. A price move alone is not evidence of positive expected value; inspect the event, current evidence and executable order book before trading.
+Use this tool to identify markets with recent repricing or potential catalysts.
 
 ---
 
@@ -146,7 +126,7 @@ Retrieve the open, tradeable markets associated with one event. Supply the requi
 
 Markets are ordered primarily by total historical volume. Use this tool after `discover_events`, `list_top_events` or `get_newest_events` to compare related outcomes and identify mutually related or correlated positions.
 
-The returned cards are summaries only. Retrieve each candidate’s full resolution rules with `get_market_details`, and do not assume that similarly worded markets resolve under identical conditions.
+The returned cards are summaries only. Do not assume that similarly worded markets resolve under identical conditions.
 
 ---
 
@@ -158,21 +138,17 @@ List event groups ordered by the creation time of their newest associated market
 
 Each event contains compact discovery cards for its associated markets. Newness does not imply positive expected value and may coincide with low liquidity or unclear resolution conditions.
 
-Current implementation note: the declared `min_liquidity` argument is not currently applied by this tool.
-
 ---
 
 ## `get_all_active_markets`
 
 **Proposed description**
 
-List all open and tradeable markets included in the current cycle’s frozen universe. Optional `min_liquidity` and `min_volume_24hr` filters can reduce the result set.
+List all open and tradeable markets included in the current cycle’s frozen universe.
 
 Results are ordered primarily by total historical volume and liquidity. Use this tool for exhaustive or broad discovery when narrower discovery tools are not appropriate. Follow pagination when `has_more` is true.
 
 Returned prices are indicative only. Use `get_market_details` and `get_orderbook` before trading.
-
-Current implementation note: this tool is functionally almost identical to `browse_markets_by_volume`.
 
 ---
 
@@ -182,7 +158,7 @@ Current implementation note: this tool is functionally almost identical to `brow
 
 Find open, tradeable markets whose volume trend is classified as `increasing` or `decreasing`. The current classification compares the market’s 24-hour volume with one seventh of its recorded one-week volume.
 
-A market is classified as increasing when its latest 24-hour volume is at least its average daily volume over the recorded week; otherwise it is classified as decreasing. An optional `min_liquidity` filter may be applied.
+A market is classified as increasing when its latest 24-hour volume is at least its average daily volume over the recorded week; otherwise it is classified as decreasing.
 
 Results are ordered primarily by total historical volume, not by the strength of the trend. Use volume changes as an opportunity-discovery signal, not as sufficient evidence for a directional trade.
 
@@ -192,9 +168,9 @@ Results are ordered primarily by total historical volume, not by the strength of
 
 **Proposed description**
 
-Find open, tradeable markets whose metadata `competitive` score is at least `min_score`. An optional `min_liquidity` filter may be used to exclude shallow markets.
+Find open, tradeable markets whose metadata `competitive` score is at least `min_score`.
 
-The competitive score is supplied by the market-data source and should be treated as a discovery heuristic rather than a probability or expected-value estimate. Results are ordered primarily by total market volume, not by competitive score.
+The competitive score is supplied by the market-data source and should be treated as a discovery heuristic rather than a probability or expected-value estimate. Results are ordered by competitive score descending, then by total market volume, liquidity and market id for deterministic tie-breaking.
 
 Inspect the market rules, outcome prices and order-book depth before deciding whether a competitive market offers a tradeable edge.
 
@@ -205,8 +181,6 @@ Inspect the market rules, outcome prices and order-book depth before deciding wh
 **Proposed description**
 
 Find open, tradeable markets whose `closes_at` calendar date falls within the inclusive `start_date` and `end_date` range. Dates use the `YYYY-MM-DD` format. Either boundary may be omitted.
-
-An optional `min_liquidity` filter may be used to exclude shallow markets. Results are ordered primarily by total market volume and liquidity.
 
 This tool filters by the stated market closing date, not necessarily by the final resolution, settlement or payout date. Inspect the resolution rules before relying on the date for trading decisions.
 

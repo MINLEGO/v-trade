@@ -318,6 +318,49 @@ class ProductionToolRegistryTests(unittest.TestCase):
         self.assertIn("ms.id = ANY(%s::uuid[])", query)
         self.assertEqual(len(params[1]), 1)
 
+    def test_discover_by_competitive_score_is_sorted_descending(self) -> None:
+        def market_row(
+            market_ref: str,
+            competitive: str,
+            volume: int,
+        ) -> tuple[object, ...]:
+            return (
+                uuid.uuid4(),
+                market_ref,
+                f"{market_ref}-slug",
+                uuid.uuid4(),
+                "Snapshot question",
+                "Snapshot rules",
+                NOW - timedelta(days=1),
+                NOW + timedelta(days=1),
+                volume,
+                2_000_000,
+                "open",
+                True,
+                {"competitive": competitive},
+                [{"venue_token_id": f"{market_ref}-token", "name": "Yes"}],
+            )
+
+        cursor = _Cursor(
+            market_rows=[
+                market_row("low-score-high-volume", "0.20", 9_000_000),
+                market_row("high-score-low-volume", "0.90", 1_000_000),
+                market_row("mid-score", "0.60", 5_000_000),
+            ]
+        )
+        tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
+
+        output = tools["discover_by_competitive_score"].handler({"limit": 3})
+
+        self.assertEqual(
+            [item["market_ref"] for item in output["markets"]],
+            ["high-score-low-volume", "mid-score", "low-score-high-volume"],
+        )
+        self.assertEqual(
+            [item["competitive"] for item in output["markets"]],
+            [0.9, 0.6, 0.2],
+        )
+
     def test_search_tags_matches_only_tag_names(self) -> None:
         def market_row(market_ref: str, metadata: dict[str, object]) -> tuple[object, ...]:
             return (

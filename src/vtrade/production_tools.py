@@ -301,6 +301,15 @@ class ProductionToolRegistry:
         elif name == "discover_by_competitive_score":
             minimum = Decimal(str(arguments.get("min_score", 0)))
             rows = [row for row in rows if _metadata_decimal(row[12], "competitive") >= minimum]
+            rows.sort(
+                key=lambda row: (
+                    _metadata_decimal(row[12], "competitive"),
+                    int(str(row[8])),
+                    int(str(row[9])),
+                    str(row[0]),
+                ),
+                reverse=True,
+            )
         elif name == "get_newest_markets":
             hours = Decimal(str(arguments.get("hours_back", 24)))
             rows = [row for row in rows if _created_within(row[12], self._context.cutoff, hours)]
