@@ -170,7 +170,7 @@ Results are ordered primarily by total historical volume, not by the strength of
 
 Find open, tradeable markets whose metadata `competitive` score is at least `min_score`.
 
-The competitive score is supplied by the market-data source and should be treated as a discovery heuristic rather than a probability or expected-value estimate. Results are ordered by competitive score descending, then by total market volume, liquidity and market id for deterministic tie-breaking.
+The competitive score is supplied by the market-data source and should be treated as a discovery heuristic rather than a probability or expected-value estimate. Results are ordered by competitive score descending, then by total market volume.
 
 Inspect the market rules, outcome prices and order-book depth before deciding whether a competitive market offers a tradeable edge.
 
@@ -190,11 +190,9 @@ This tool filters by the stated market closing date, not necessarily by the fina
 
 **Proposed description**
 
-Search open, tradeable markets using a case-insensitive text query over their stored metadata. Use this tool to locate markets associated with a topic, category, label or tag that may not be easy to find through event names alone.
+Search open, tradeable markets using a case-insensitive text query over their associated tags. Use this tool to locate markets associated with a topic, category, label or tag that may not be easy to find through event names alone.
 
 Results are ordered primarily by total market volume. Returned cards are summaries and must be followed by `get_market_details` and, when trading, `get_orderbook`.
-
-Current implementation note: despite the tool name, matching is performed against the complete serialized metadata object and is not restricted to normalized tag names. Matches may therefore come from unrelated metadata fields.
 
 ---
 
