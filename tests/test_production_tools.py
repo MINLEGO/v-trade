@@ -404,6 +404,91 @@ class ProductionToolRegistryTests(unittest.TestCase):
             [0.9, 0.6, 0.2],
         )
 
+    def test_discover_by_time_remaining_is_sorted_soonest_first(self) -> None:
+        def market_row(market_ref: str, closes_in_hours: int, volume: int) -> tuple[object, ...]:
+            return (
+                uuid.uuid4(),
+                market_ref,
+                f"{market_ref}-slug",
+                uuid.uuid4(),
+                "Snapshot question",
+                "Snapshot rules",
+                NOW - timedelta(days=1),
+                NOW + timedelta(hours=closes_in_hours),
+                volume,
+                2_000_000,
+                "open",
+                True,
+                {"volume_24hr": "1", "volume_1wk": "7"},
+                [{"venue_token_id": f"{market_ref}-token", "name": "Yes"}],
+            )
+
+        cursor = _Cursor(
+            market_rows=[
+                market_row("far-close-high-volume", 24, 9_000_000),
+                market_row("near-close-low-volume", 2, 1_000_000),
+                market_row("mid-close", 8, 5_000_000),
+            ]
+        )
+        tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
+
+        output = tools["discover_by_time_remaining"].handler(
+            {"hours_min": 0, "hours_max": 48, "limit": 3}
+        )
+
+        self.assertEqual(
+            [item["market_ref"] for item in output["markets"]],
+            ["near-close-low-volume", "mid-close", "far-close-high-volume"],
+        )
+
+    def test_discover_by_volume_trend_is_sorted_by_strength(self) -> None:
+        def market_row(
+            market_ref: str,
+            volume_24hr: int,
+            volume_1wk: int,
+            volume: int,
+        ) -> tuple[object, ...]:
+            return (
+                uuid.uuid4(),
+                market_ref,
+                f"{market_ref}-slug",
+                uuid.uuid4(),
+                "Snapshot question",
+                "Snapshot rules",
+                NOW - timedelta(days=1),
+                NOW + timedelta(days=1),
+                volume,
+                2_000_000,
+                "open",
+                True,
+                {"volume_24hr": str(volume_24hr), "volume_1wk": str(volume_1wk)},
+                [{"venue_token_id": f"{market_ref}-token", "name": "Yes"}],
+            )
+
+        cursor = _Cursor(
+            market_rows=[
+                market_row("weak-increase-high-volume", 15, 70, 9_000_000),
+                market_row("strong-increase-low-volume", 60, 70, 1_000_000),
+                market_row("mid-increase", 30, 70, 5_000_000),
+                market_row("weak-decrease-high-volume", 9, 70, 9_000_000),
+                market_row("strong-decrease-low-volume", 1, 70, 1_000_000),
+                market_row("mid-decrease", 5, 70, 5_000_000),
+            ]
+        )
+        tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
+
+        increasing = tools["discover_by_volume_trend"].handler({"trend": "increasing", "limit": 3})
+        decreasing = tools["discover_by_volume_trend"].handler({"trend": "decreasing", "limit": 3})
+
+        self.assertEqual(
+            [item["market_ref"] for item in increasing["markets"]],
+            ["strong-increase-low-volume", "mid-increase", "weak-increase-high-volume"],
+        )
+        self.assertEqual(
+            [item["market_ref"] for item in decreasing["markets"]],
+            ["strong-decrease-low-volume", "mid-decrease", "weak-decrease-high-volume"],
+        )
+
     def test_search_tags_matches_only_tag_names(self) -> None:
         def market_row(market_ref: str, metadata: dict[str, object]) -> tuple[object, ...]:
             return (

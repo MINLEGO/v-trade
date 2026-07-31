@@ -282,6 +282,14 @@ class ProductionToolRegistry:
                 for row in rows
                 if _hours_remaining(row[7], self._context.cutoff, minimum, maximum)
             ]
+            rows.sort(
+                key=lambda row: (
+                    _hours_until_close(row[7], self._context.cutoff),
+                    int(str(row[8])),
+                    int(str(row[9])),
+                    str(row[0]),
+                )
+            )
         elif name == "discover_by_date_range":
             start = str(arguments.get("start_date") or "")
             end = str(arguments.get("end_date") or "")
@@ -307,6 +315,15 @@ class ProductionToolRegistry:
             if trend not in {"increasing", "decreasing"}:
                 raise ValueError("trend must be increasing or decreasing")
             rows = [row for row in rows if _volume_trend(row[12]) == trend]
+            rows.sort(
+                key=lambda row: (
+                    _volume_trend_strength(row[12]),
+                    int(str(row[8])),
+                    int(str(row[9])),
+                    str(row[0]),
+                ),
+                reverse=trend == "increasing",
+            )
         elif name == "discover_by_competitive_score":
             minimum = Decimal(str(arguments.get("min_score", 0)))
             rows = [row for row in rows if _metadata_decimal(row[12], "competitive") >= minimum]
@@ -1377,8 +1394,14 @@ def _money_filter(value: object) -> int:
 def _hours_remaining(value: object, cutoff: datetime, minimum: Decimal, maximum: Decimal) -> bool:
     if not isinstance(value, datetime):
         return False
-    hours = Decimal(str((value - cutoff).total_seconds())) / Decimal(3600)
+    hours = _hours_until_close(value, cutoff)
     return minimum <= hours <= maximum
+
+
+def _hours_until_close(value: object, cutoff: datetime) -> Decimal:
+    if not isinstance(value, datetime):
+        return Decimal("Infinity")
+    return Decimal(str((value - cutoff).total_seconds())) / Decimal(3600)
 
 
 def _metadata(value: object) -> Mapping[str, object]:
@@ -1414,9 +1437,15 @@ def _price_volatility(value: object) -> Decimal:
 
 
 def _volume_trend(value: object) -> str:
+    return "increasing" if _volume_trend_strength(value) >= Decimal(1) else "decreasing"
+
+
+def _volume_trend_strength(value: object) -> Decimal:
     daily = _metadata_decimal(value, "volume_24hr")
     weekly_daily_average = _metadata_decimal(value, "volume_1wk") / Decimal(7)
-    return "increasing" if daily >= weekly_daily_average else "decreasing"
+    if weekly_daily_average == 0:
+        return Decimal("Infinity") if daily > 0 else Decimal(1)
+    return daily / weekly_daily_average
 
 
 def _created_within(value: object, cutoff: datetime, hours: Decimal) -> bool:
