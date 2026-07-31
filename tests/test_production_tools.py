@@ -318,6 +318,49 @@ class ProductionToolRegistryTests(unittest.TestCase):
         self.assertIn("ms.id = ANY(%s::uuid[])", query)
         self.assertEqual(len(params[1]), 1)
 
+    def test_discover_by_price_volatility_is_sorted_descending(self) -> None:
+        def market_row(
+            market_ref: str,
+            one_hour_change: str,
+            one_day_change: str,
+            volume: int,
+        ) -> tuple[object, ...]:
+            return (
+                uuid.uuid4(),
+                market_ref,
+                f"{market_ref}-slug",
+                uuid.uuid4(),
+                "Snapshot question",
+                "Snapshot rules",
+                NOW - timedelta(days=1),
+                NOW + timedelta(days=1),
+                volume,
+                2_000_000,
+                "open",
+                True,
+                {
+                    "one_hour_price_change": one_hour_change,
+                    "one_day_price_change": one_day_change,
+                },
+                [{"venue_token_id": f"{market_ref}-token", "name": "Yes"}],
+            )
+
+        cursor = _Cursor(
+            market_rows=[
+                market_row("low-volatility-high-volume", "0.10", "0.20", 9_000_000),
+                market_row("high-volatility-low-volume", "-0.75", "0.10", 1_000_000),
+                market_row("mid-volatility", "0.40", "-0.50", 5_000_000),
+            ]
+        )
+        tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
+
+        output = tools["discover_by_price_volatility"].handler({"limit": 3})
+
+        self.assertEqual(
+            [item["market_ref"] for item in output["markets"]],
+            ["high-volatility-low-volume", "mid-volatility", "low-volatility-high-volume"],
+        )
+
     def test_discover_by_competitive_score_is_sorted_descending(self) -> None:
         def market_row(
             market_ref: str,

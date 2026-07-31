@@ -293,6 +293,15 @@ class ProductionToolRegistry:
         elif name == "discover_by_price_volatility":
             minimum = Decimal(str(arguments.get("min_volatility", 0)))
             rows = [row for row in rows if _price_volatility(row[12]) >= minimum]
+            rows.sort(
+                key=lambda row: (
+                    _price_volatility(row[12]),
+                    int(str(row[8])),
+                    int(str(row[9])),
+                    str(row[0]),
+                ),
+                reverse=True,
+            )
         elif name == "discover_by_volume_trend":
             trend = str(arguments.get("trend") or "increasing").casefold()
             if trend not in {"increasing", "decreasing"}:

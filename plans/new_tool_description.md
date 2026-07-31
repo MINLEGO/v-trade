@@ -56,7 +56,7 @@ A market’s closing time is not necessarily its resolution or payout time; alwa
 
 Search for groups of related markets by event. The optional `keyword` is matched case-insensitively against market questions and market metadata. Markets are grouped by `event_id`, and event groups are ordered by their aggregated 24-hour volume.
 
-Each event contains compact discovery cards for its associated markets. Use `get_event_markets` to inspect an event more systematically and `get_market_details` before trading any market.
+Each event contains compact discovery cards for its associated markets. Use `get_event_markets` to inspect an event more systematically.
 
 ---
 
@@ -112,7 +112,7 @@ The tool rejects missing, causally invalid or stale books. A missing or rejected
 
 Find open, tradeable markets whose recorded price volatility is at least `min_volatility`. Volatility is currently defined as the larger absolute value of the recorded one-hour and one-day price changes.
 
-Results are filtered by volatility but are ordered primarily by total market volume, not by volatility magnitude.
+Results are ordered by volatility magnitude descending, then by total market volume.
 
 Use this tool to identify markets with recent repricing or potential catalysts.
 
@@ -146,7 +146,7 @@ Each event contains compact discovery cards for its associated markets. Newness 
 
 List all open and tradeable markets included in the current cycle’s frozen universe.
 
-Results are ordered primarily by total historical volume and liquidity. Use this tool for exhaustive or broad discovery when narrower discovery tools are not appropriate. Follow pagination when `has_more` is true.
+Results are ordered primarily by total historical volume and liquidity. Use this tool for exhaustive or broad discovery when narrower discovery tools are not appropriate. If needed, you can follow pagination when `has_more` is true.
 
 Returned prices are indicative only. Use `get_market_details` and `get_orderbook` before trading.
 
