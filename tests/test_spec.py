@@ -31,6 +31,21 @@ class SpecificationTests(unittest.TestCase):
             self.assertEqual(properties["limit"]["maximum"], 100)
             self.assertEqual(properties["limit"]["default"], 100)
 
+    def test_keyword_searches_accept_strings_or_keyword_arrays(self) -> None:
+        document = json.loads(Path("spec/tool-schemas-v1.json").read_text(encoding="utf-8"))
+        tools = {tool["name"]: tool for tool in document["tools"]}
+        for name, key in (
+            ("discover_events", "keyword"),
+            ("search_tags", "query"),
+            ("search_general_beliefs", "keyword"),
+        ):
+            with self.subTest(name=name):
+                property_schema = tools[name]["input_schema"]["properties"][key]
+                self.assertEqual(property_schema["type"], ["string", "array"])
+                self.assertEqual(property_schema["items"]["type"], "string")
+                self.assertEqual(property_schema["items"]["minLength"], 1)
+                self.assertEqual(property_schema["minItems"], 1)
+
     def test_prompt_has_no_unresolved_placeholder(self) -> None:
         body = Path("spec/prompt/predictionarena-polymarket-v1.md").read_text(encoding="utf-8")
         placeholders = re.findall(r"\{[A-Za-z_][A-Za-z0-9_]*\}", body)

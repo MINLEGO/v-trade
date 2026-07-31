@@ -583,7 +583,14 @@ def _validate_schema_value(value: Any, schema: Mapping[str, Any], *, path: str) 
         "object": isinstance(value, dict),
         None: True,
     }
-    if expected not in valid or not valid[expected]:
+    expected_types = expected if isinstance(expected, list) else [expected]
+    if not expected_types or not all(
+        type_name is None
+        or (isinstance(type_name, str) and type_name in valid)
+        for type_name in expected_types
+    ):
+        raise ToolValidationError(f"argument {path} has an invalid type schema")
+    if not any(valid[type_name] for type_name in expected_types):
         raise ToolValidationError(f"argument {path} must be {expected}")
     if isinstance(value, str):
         if len(value) < int(schema.get("minLength", 0)):

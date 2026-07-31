@@ -135,6 +135,60 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(called, 0)
         self.assertFalse(result.tool_calls[0].success)
 
+    def test_union_type_argument_schema_accepts_string_and_array(self) -> None:
+        seen: list[dict[str, object]] = []
+
+        def handler(arguments: dict[str, object]) -> dict[str, object]:
+            seen.append(arguments)
+            return {"ok": True}
+
+        schema = {
+            "type": "function",
+            "function": {
+                "name": "search",
+                "parameters": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "keyword": {
+                            "type": ["string", "array"],
+                            "items": {"type": "string"},
+                        }
+                    },
+                },
+            },
+        }
+        calls = [
+            {
+                "id": "string-keyword",
+                "function": {"name": "search", "arguments": json.dumps({"keyword": "alpha"})},
+            },
+            {
+                "id": "array-keyword",
+                "function": {
+                    "name": "search",
+                    "arguments": json.dumps({"keyword": ["alpha", "beta"]}),
+                },
+            },
+        ]
+        harness = BoundedToolHarness(
+            RecordedModelGateway(
+                (
+                    response({"role": "assistant", "tool_calls": calls}),
+                    response({"role": "assistant", "content": "done"}),
+                ),
+                self.store,
+            ),
+            (ToolSpec(schema, handler, "market"),),
+            limits(),
+            monotonic=lambda: 0,
+        )
+
+        result = harness.run([], model_config=config())
+
+        self.assertTrue(all(record.success for record in result.tool_calls))
+        self.assertEqual(seen, [{"keyword": "alpha"}, {"keyword": ["alpha", "beta"]}])
+
     def test_expected_handler_error_is_recorded_but_system_error_propagates(self) -> None:
         schema = {
             "type": "function",

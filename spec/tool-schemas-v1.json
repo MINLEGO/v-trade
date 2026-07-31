@@ -83,7 +83,16 @@
             "description": "Opaque cursor returned by the preceding discovery page."
           },
           "keyword": {
-            "type": "string"
+            "type": [
+              "string",
+              "array"
+            ],
+            "description": "Optional keyword or non-empty tuple of keywords; matches events containing any keyword.",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1
           },
           "limit": {
             "type": "integer"
@@ -428,7 +437,16 @@
             "description": "Opaque cursor returned by the preceding discovery page."
           },
           "query": {
-            "type": "string"
+            "type": [
+              "string",
+              "array"
+            ],
+            "description": "Keyword or non-empty tuple of keywords; matches tags containing any keyword.",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1
           },
           "limit": {
             "type": "integer"
@@ -667,7 +685,16 @@
             "description": "Opaque cursor returned by the preceding belief search page."
           },
           "keyword": {
-            "type": "string"
+            "type": [
+              "string",
+              "array"
+            ],
+            "description": "Optional keyword or non-empty tuple of keywords; matches beliefs containing any keyword.",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1
           },
           "category": {
             "type": "string",

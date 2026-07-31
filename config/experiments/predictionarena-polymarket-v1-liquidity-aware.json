@@ -19,7 +19,7 @@
     },
     "tool_schemas": {
       "path": "spec/tool-schemas-v1.json",
-      "sha256": "bc8666f82f668b49f1ccd2dc8ed0a21f29394086b649df8a7a8ce3cf889b9dfa",
+      "sha256": "d3d7e5b66dc433688d83c5c7553773df54aac6fc79e91cc5a4ef6905fc58e7d0",
       "classification": "inferred"
     }
   },

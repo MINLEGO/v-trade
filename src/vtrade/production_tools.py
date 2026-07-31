@@ -252,13 +252,17 @@ class ProductionToolRegistry:
             )
             return self._market_output(rows, name=name, arguments=arguments)
         if name == "search_tags":
-            query = _required_string(arguments, "query").casefold()
+            queries = _keyword_terms(arguments, "query", required=True)
             rows = self._market_rows()
             return self._market_output(
                 [
                     row
                     for row in rows
-                    if any(query in tag.casefold() for tag in _tag_names(row[12]))
+                    if any(
+                        query in tag.casefold()
+                        for tag in _tag_names(row[12])
+                        for query in queries
+                    )
                 ],
                 name=name,
                 arguments=arguments,
@@ -352,7 +356,7 @@ class ProductionToolRegistry:
         return self._market_output(rows, name=name, arguments=arguments)
 
     def _discover_event_groups(self, name: str, arguments: JsonObject) -> JsonObject:
-        keyword = str(arguments.get("keyword") or "").casefold()
+        keywords = _keyword_terms(arguments, "keyword")
         minimum_liquidity = _money_filter(arguments.get("min_liquidity", 0))
         minimum_volume = _money_filter(arguments.get("min_volume_24hr", 0))
         markets = [
@@ -364,7 +368,8 @@ class ProductionToolRegistry:
         grouped: dict[str, JsonObject] = {}
         for row in markets:
             event_id = str(row[3])
-            if keyword and keyword not in f"{row[4]} {row[12]}".casefold():
+            searchable = f"{row[4]} {row[12]}".casefold()
+            if keywords and not any(keyword in searchable for keyword in keywords):
                 continue
             event = grouped.setdefault(
                 event_id,
@@ -651,12 +656,15 @@ class ProductionToolRegistry:
 
     def _search_beliefs(self, arguments: JsonObject) -> JsonObject:
         rows = self._beliefs(bool(arguments.get("include_inactive", False)))
-        keyword = str(arguments.get("keyword") or "").casefold()
+        keywords = _keyword_terms(arguments, "keyword")
         category = str(arguments.get("category") or "").casefold()
         matches = [
             row
             for row in rows
-            if (not keyword or keyword in str(row.get("content", "")).casefold())
+            if (
+                not keywords
+                or any(keyword in str(row.get("content", "")).casefold() for keyword in keywords)
+            )
             and (not category or category == str(row.get("category", "")).casefold())
         ]
         limit, offset = _page_parameters(
@@ -1242,6 +1250,37 @@ def _required_string(arguments: Mapping[str, object], key: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{key} is required")
     return value.strip()
+
+
+def _keyword_terms(
+    arguments: Mapping[str, object], key: str, *, required: bool = False
+) -> tuple[str, ...]:
+    value = arguments.get(key)
+    if value is None:
+        if required:
+            raise ValueError(f"{key} is required")
+        return ()
+    if isinstance(value, str):
+        if not value.strip():
+            if required:
+                raise ValueError(f"{key} is required")
+            return ()
+        values: list[object] = [value]
+    elif isinstance(value, (list, tuple)):
+        values = list(value)
+        if not values:
+            if required:
+                raise ValueError(f"{key} is required")
+            return ()
+    else:
+        raise ValueError(f"{key} must be a string or a tuple of strings")
+
+    terms: list[str] = []
+    for item in values:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(f"{key} must contain non-empty strings")
+        terms.append(item.strip().casefold())
+    return tuple(dict.fromkeys(terms))
 
 
 def _limit(arguments: Mapping[str, object], *, default: int) -> int:

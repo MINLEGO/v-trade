@@ -56,7 +56,7 @@ A market’s closing time is not necessarily its resolution or payout time; alwa
 
 **Proposed description**
 
-Search for groups of related markets by event. The optional `keyword` is matched case-insensitively against market questions and market metadata. Markets are grouped by `event_id`, and event groups are ordered by their aggregated 24-hour volume.
+Search for groups of related markets by event. The optional(s) `keyword` are matched case-insensitively against market questions and market metadata. Markets are grouped by `event_id`, and event groups are ordered by their aggregated 24-hour volume.
 
 Each event contains compact discovery cards for its associated markets. Use `get_event_markets` to inspect an event more systematically.
 
@@ -264,7 +264,7 @@ Use this tool periodically to identify stale, duplicated or conflicting beliefs.
 
 **Proposed description**
 
-Search the calling agent’s beliefs using an optional case-insensitive `keyword` substring and an optional exact `category`. Categories are `event_analysis`, `trading_strategy`, `market_sentiment`, `market_structure` and `risk_assessment`.
+Search the calling agent’s beliefs using optionals case-insensitive `keyword` substrings and an optional exact `category`. Categories are `event_analysis`, `trading_strategy`, `market_sentiment`, `market_structure` and `risk_assessment`.
 
 Use this tool when only a subset of memory is relevant to the current market or decision. An empty keyword and category return the available beliefs up to the selected limit, restricted to active beliefs by default.
 

@@ -523,6 +523,41 @@ class ProductionToolRegistryTests(unittest.TestCase):
 
         self.assertEqual([market["market_ref"] for market in output["markets"]], ["tag-match"])
 
+    def test_search_tags_accepts_multiple_keywords(self) -> None:
+        def market_row(market_ref: str, tags: list[str]) -> tuple[object, ...]:
+            return (
+                uuid.uuid4(),
+                market_ref,
+                f"{market_ref}-slug",
+                uuid.uuid4(),
+                "Snapshot question",
+                "Snapshot rules",
+                NOW - timedelta(days=1),
+                NOW + timedelta(days=1),
+                1_000_000,
+                2_000_000,
+                "open",
+                True,
+                {"tags": [{"label": tag} for tag in tags]},
+                [{"venue_token_id": f"{market_ref}-token", "name": "Yes"}],
+            )
+
+        cursor = _Cursor(
+            market_rows=[
+                market_row("politics", ["Politics"]),
+                market_row("sports", ["Sports"]),
+                market_row("both", ["Politics", "Sports"]),
+            ]
+        )
+        tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
+
+        output = tools["search_tags"].handler({"query": ("politics", "sports")})
+
+        self.assertEqual(
+            [market["market_ref"] for market in output["markets"]],
+            ["politics", "sports", "both"],
+        )
+
     def test_market_details_resolves_candidate_market_ref_and_returns_canonical_slug(self) -> None:
         cursor = _Cursor()
         tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
@@ -626,6 +661,48 @@ class ProductionToolRegistryTests(unittest.TestCase):
                 self.assertEqual(
                     len(output["events"][0]["markets"]), expected_market_count
                 )
+
+    def test_event_discovery_accepts_multiple_keywords(self) -> None:
+        event_a = uuid.uuid4()
+        event_b = uuid.uuid4()
+
+        def market_row(event_id: uuid.UUID, market_ref: str) -> tuple[object, ...]:
+            return (
+                uuid.uuid4(),
+                market_ref,
+                f"{market_ref}-slug",
+                event_id,
+                market_ref,
+                "Snapshot rules",
+                NOW - timedelta(days=1),
+                NOW + timedelta(days=1),
+                30_000_000,
+                20_000_000,
+                "open",
+                True,
+                {"volume_24hr": "30", "created_at": NOW.isoformat()},
+                [{"venue_token_id": f"{market_ref}-token", "name": "Yes"}],
+            )
+
+        cursor = _Cursor(
+            market_rows=[
+                market_row(event_a, "alpha market"),
+                market_row(event_b, "beta market"),
+                market_row(event_a, "gamma market"),
+            ]
+        )
+        tools = {tool.name: tool for tool in ProductionToolRegistry(_context(cursor)).tool_specs()}
+
+        output = tools["discover_events"].handler({"keyword": ["alpha", "beta"]})
+
+        self.assertEqual(
+            {event["event_id"] for event in output["events"]},
+            {str(event_a), str(event_b)},
+        )
+        self.assertEqual(
+            [len(event["markets"]) for event in output["events"]],
+            [1, 1],
+        )
 
     def test_newest_markets_is_sorted_by_creation_date_descending(self) -> None:
         rows = []
@@ -755,6 +832,25 @@ class ProductionToolRegistryTests(unittest.TestCase):
         )
         self.assertEqual(len(search_with_inactive["beliefs"]), 1)
         self.assertFalse(search_with_inactive["beliefs"][0]["active"])
+
+    def test_search_general_beliefs_accepts_multiple_keywords(self) -> None:
+        beliefs = _test_beliefs(2)
+        beliefs[0] = {**beliefs[0], "content": "world cup thesis"}
+        beliefs[1] = {**beliefs[1], "content": "risk management"}
+        cursor = _Cursor()
+        tools = {
+            tool.name: tool
+            for tool in ProductionToolRegistry(
+                _context(cursor, memory=_Memory(beliefs))
+            ).tool_specs()
+        }
+
+        output = tools["search_general_beliefs"].handler({"keyword": ("world cup", "risk")})
+
+        self.assertEqual(
+            [belief["id"] for belief in output["beliefs"]],
+            [belief["id"] for belief in beliefs],
+        )
 
     def test_create_general_belief_persists_evidence_and_defaults_to_empty(self) -> None:
         memory = _Memory([])
