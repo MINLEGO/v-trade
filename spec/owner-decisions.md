@@ -40,12 +40,21 @@ Recorded: 2026-07-18.
   and at most 88,000 tokens of assembled input.
 - Tool payloads: at most 4,000 tokens of arguments per tool call and 4,000 tokens
   per tool result by default. `get_portfolio` may return up to 24,000 tokens and
-  must paginate beyond that limit.
+  must paginate beyond that limit. `get_general_beliefs` and
+  `search_general_beliefs` retain the default 4,000-token ceiling and must paginate
+  beyond it.
 - `get_portfolio` pagination: optional opaque cursor and optional `limit` from 1 to
   200 (default 100), response fields `items`, `next_cursor`, and `has_more`, with a
   stable total order by ascending `position_id`. The first page materializes one
   immutable snapshot bound to the calling agent and agent cycle; later pages read
   only that snapshot. Invalid or foreign cursors are rejected.
+- General-belief pagination: both belief retrieval tools accept an optional opaque
+  cursor and `limit` from 1 to 100 (default 100), return `beliefs`, `next_cursor`,
+  `has_more`, and `payload_truncated`, and keep a stable newest-first order by
+  `created_at` then belief ID. Both tools default to active beliefs only;
+  `include_inactive` explicitly includes historical beliefs. Cursors are bound to
+  the tool's filters and cycle cutoff; invalid, foreign, or mismatched cursors are
+  rejected.
 - Scheduling: each model/agent has its own start date, hourly schedule and immutable
   per-cycle data cutoff. Simultaneous start is not required. Adding/removing an agent
   does not change any existing agent.

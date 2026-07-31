@@ -26,8 +26,8 @@ source establishes them.
 | `get_portfolio` | account | none | calling agent only |
 | `get_closed_trades` | account | limit | calling agent only |
 | `get_settlements` | account | limit | calling agent only |
-| `get_general_beliefs` | knowledge | limit, include_inactive | calling agent only |
-| `search_general_beliefs` | knowledge | keyword, category, limit | calling agent only |
+| `get_general_beliefs` | knowledge | cursor, limit, include_inactive | calling agent only; newest-first paginated result |
+| `search_general_beliefs` | knowledge | cursor, keyword, category, include_inactive, limit | calling agent only; newest-first paginated result |
 | `create_general_belief` | knowledge | belief_content, category, confidence | calling agent only |
 | `delete_general_belief` | knowledge | belief_id | calling agent only; deactivate, never erase |
 | `create_long_term_plan` | knowledge | plan_content | calling agent only |

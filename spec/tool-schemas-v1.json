@@ -630,11 +630,20 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Opaque cursor returned by the preceding belief page."
+          },
           "limit": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 100
           },
           "include_inactive": {
-            "type": "boolean"
+            "type": "boolean",
+            "default": false
           }
         },
         "required": []
@@ -652,6 +661,11 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Opaque cursor returned by the preceding belief search page."
+          },
           "keyword": {
             "type": "string"
           },
@@ -665,8 +679,15 @@
               "risk_assessment"
             ]
           },
+          "include_inactive": {
+            "type": "boolean",
+            "default": false
+          },
           "limit": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 100
           }
         },
         "required": []

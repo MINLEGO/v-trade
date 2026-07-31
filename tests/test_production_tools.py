@@ -109,11 +109,27 @@ class _Connection:
         return self.cursor_instance
 
 
+class _Memory:
+    def __init__(
+        self,
+        beliefs: list[dict[str, object]],
+        *,
+        active_beliefs: list[dict[str, object]] | None = None,
+    ) -> None:
+        self.beliefs = beliefs
+        self.active_beliefs = beliefs if active_beliefs is None else active_beliefs
+
+    def read_beliefs(self, *, actor_id: uuid.UUID, target_agent_id: uuid.UUID):
+        assert actor_id == target_agent_id
+        return list(self.active_beliefs)
+
+
 def _context(
     cursor: _Cursor,
     *,
     cutoff=NOW,
     maximum_default_result_tokens: int = 4_000,
+    memory: _Memory | None = None,
 ) -> ToolContext:
     claim = CycleClaim(
         uuid.uuid4(),
@@ -130,7 +146,7 @@ def _context(
         "postgresql://unused",
         claim,
         cast(Any, object()),
-        cast(Any, object()),
+        cast(Any, memory if memory is not None else object()),
         cast(Any, lambda arguments: {"items": [], "has_more": False}),
         lambda _url: connection,
         lambda: NOW,
@@ -508,9 +524,92 @@ class ProductionToolRegistryTests(unittest.TestCase):
         belief_query, _params = cursor.queries[0]
         self.assertIn("ORDER BY r.created_at DESC, b.id DESC", belief_query)
 
+    def test_belief_tools_default_to_active_and_search_can_include_inactive(self) -> None:
+        active = _test_beliefs(1)[0]
+        inactive = {**active, "id": str(uuid.uuid4()), "content": "old belief", "active": False}
+        cursor = _Cursor()
+        memory = _Memory([active, inactive], active_beliefs=[active])
+        tools = {
+            tool.name: tool
+            for tool in ProductionToolRegistry(_context(cursor, memory=memory)).tool_specs()
+        }
+
+        general = tools["get_general_beliefs"].handler({})
+        search_default = tools["search_general_beliefs"].handler({"keyword": "old"})
+        self.assertEqual([row["id"] for row in general["beliefs"]], [active["id"]])
+        self.assertEqual(search_default["beliefs"], [])
+        self.assertEqual(cursor.queries, [])
+
+        search_with_inactive = tools["search_general_beliefs"].handler(
+            {"keyword": "old", "include_inactive": True}
+        )
+        self.assertEqual(len(search_with_inactive["beliefs"]), 1)
+        self.assertFalse(search_with_inactive["beliefs"][0]["active"])
+
+    def test_general_beliefs_paginate_to_the_result_token_ceiling(self) -> None:
+        beliefs = _test_beliefs(100)
+        tools = {
+            tool.name: tool
+            for tool in ProductionToolRegistry(
+                _context(_Cursor(), memory=_Memory(beliefs))
+            ).tool_specs()
+        }
+
+        page = tools["get_general_beliefs"].handler({})
+        collected = list(page["beliefs"])
+        self.assertLess(len(collected), len(beliefs))
+        self.assertTrue(page["payload_truncated"])
+        self.assertTrue(page["has_more"])
+        while page["next_cursor"] is not None:
+            page = tools["get_general_beliefs"].handler({"cursor": page["next_cursor"]})
+            collected.extend(page["beliefs"])
+
+        self.assertEqual([row["id"] for row in collected], [row["id"] for row in beliefs])
+        self.assertFalse(page["has_more"])
+        self.assertIsNone(page["next_cursor"])
+
+    def test_search_general_beliefs_paginates_and_binds_cursor_to_filters(self) -> None:
+        beliefs = _test_beliefs(100)
+        tools = {
+            tool.name: tool
+            for tool in ProductionToolRegistry(
+                _context(_Cursor(), memory=_Memory(beliefs))
+            ).tool_specs()
+        }
+
+        first = tools["search_general_beliefs"].handler({"keyword": "thesis"})
+        self.assertTrue(first["has_more"])
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            tools["search_general_beliefs"].handler(
+                {"keyword": "different", "cursor": first["next_cursor"]}
+            )
+
+        collected = list(first["beliefs"])
+        page = first
+        while page["next_cursor"] is not None:
+            page = tools["search_general_beliefs"].handler(
+                {"keyword": "thesis", "cursor": page["next_cursor"]}
+            )
+            collected.extend(page["beliefs"])
+        self.assertEqual([row["id"] for row in collected], [row["id"] for row in beliefs])
+
     def test_tools_refuse_unfinalized_cutoff(self) -> None:
         with self.assertRaisesRegex(ToolContextUnavailable, "finalized"):
             _context(_Cursor(), cutoff=None)
+
+
+def _test_beliefs(count: int) -> list[dict[str, object]]:
+    return [
+        {
+            "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"belief-{index}")),
+            "confidence": "0.7",
+            "content": f"thesis {index} " + ("evidence " * 40),
+            "category": "event_analysis",
+            "evidence": [f"source-{index}"],
+            "created_at": (NOW - timedelta(minutes=index)).isoformat(),
+        }
+        for index in range(count)
+    ]
 
 
 if __name__ == "__main__":

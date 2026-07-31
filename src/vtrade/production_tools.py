@@ -102,6 +102,8 @@ _PAGINATED_DISCOVERY_TOOLS = frozenset(
         "discover_by_competitive_score",
         "discover_by_date_range",
         "search_tags",
+        "get_general_beliefs",
+        "search_general_beliefs",
     }
 )
 
@@ -589,37 +591,27 @@ class ProductionToolRegistry:
         }
 
     def _get_beliefs(self, arguments: JsonObject) -> JsonObject:
-        if not bool(arguments.get("include_inactive", False)):
-            rows = self._context.memory.read_beliefs(
-                actor_id=self._context.claim.agent_id,
-                target_agent_id=self._context.claim.agent_id,
-            )
-            return {"beliefs": rows[: _limit(arguments, default=100)]}
-        records = self._query(
-            "SELECT b.id, b.active, r.confidence, r.content, r.category, "
-            "r.evidence, r.created_at FROM beliefs b JOIN LATERAL "
-            "(SELECT * FROM belief_revisions WHERE belief_id = b.id "
-            "ORDER BY revision DESC LIMIT 1) r ON true WHERE b.agent_id = %s "
-            "ORDER BY r.created_at DESC, b.id DESC LIMIT %s",
-            (self._context.claim.agent_id, _limit(arguments, default=100)),
+        beliefs = self._beliefs(bool(arguments.get("include_inactive", False)))
+        limit, offset = _page_parameters(
+            "get_general_beliefs",
+            arguments,
+            self._context.cutoff,
+            default_limit=100,
         )
-        return {
-            "beliefs": [
-                {
-                    "id": str(row[0]),
-                    "active": bool(row[1]),
-                    "confidence": str(row[2]),
-                    "content": str(row[3]),
-                    "category": str(row[4]),
-                    "evidence": row[5],
-                    "created_at": str(row[6]),
-                }
-                for row in records
-            ]
-        }
+        return _paged_output(
+            "beliefs",
+            beliefs,
+            name="get_general_beliefs",
+            arguments=arguments,
+            cutoff=self._context.cutoff,
+            limit=limit,
+            offset=offset,
+            maximum_tokens=self._context.maximum_default_result_tokens,
+            as_of=self._context.cutoff.isoformat(),
+        )
 
     def _search_beliefs(self, arguments: JsonObject) -> JsonObject:
-        rows = cast(list[JsonObject], self._get_beliefs({"limit": 100})["beliefs"])
+        rows = self._beliefs(bool(arguments.get("include_inactive", False)))
         keyword = str(arguments.get("keyword") or "").casefold()
         category = str(arguments.get("category") or "").casefold()
         matches = [
@@ -628,7 +620,52 @@ class ProductionToolRegistry:
             if (not keyword or keyword in str(row.get("content", "")).casefold())
             and (not category or category == str(row.get("category", "")).casefold())
         ]
-        return {"beliefs": matches[: _limit(arguments, default=100)]}
+        limit, offset = _page_parameters(
+            "search_general_beliefs",
+            arguments,
+            self._context.cutoff,
+            default_limit=100,
+        )
+        return _paged_output(
+            "beliefs",
+            matches,
+            name="search_general_beliefs",
+            arguments=arguments,
+            cutoff=self._context.cutoff,
+            limit=limit,
+            offset=offset,
+            maximum_tokens=self._context.maximum_default_result_tokens,
+            as_of=self._context.cutoff.isoformat(),
+        )
+
+    def _beliefs(self, include_inactive: bool) -> list[JsonObject]:
+        if not include_inactive:
+            return list(
+                self._context.memory.read_beliefs(
+                    actor_id=self._context.claim.agent_id,
+                    target_agent_id=self._context.claim.agent_id,
+                )
+            )
+        records = self._query(
+            "SELECT b.id, b.active, r.confidence, r.content, r.category, "
+            "r.evidence, r.created_at FROM beliefs b JOIN LATERAL "
+            "(SELECT * FROM belief_revisions WHERE belief_id = b.id "
+            "ORDER BY revision DESC LIMIT 1) r ON true WHERE b.agent_id = %s "
+            "ORDER BY r.created_at DESC, b.id DESC",
+            (self._context.claim.agent_id,),
+        )
+        return [
+            {
+                "id": str(row[0]),
+                "active": bool(row[1]),
+                "confidence": str(row[2]),
+                "content": str(row[3]),
+                "category": str(row[4]),
+                "evidence": row[5],
+                "created_at": str(row[6]),
+            }
+            for row in records
+        ]
 
     def _create_belief(self, arguments: JsonObject) -> JsonObject:
         confidence = _unit_interval(arguments.get("confidence"), "confidence")
@@ -981,8 +1018,10 @@ def _page_parameters(
     tool_name: str,
     arguments: Mapping[str, object],
     cutoff: datetime,
+    *,
+    default_limit: int = 20,
 ) -> tuple[int, int]:
-    limit = _limit(arguments, default=20)
+    limit = _limit(arguments, default=default_limit)
     raw_cursor = arguments.get("cursor")
     if raw_cursor is None:
         return limit, 0

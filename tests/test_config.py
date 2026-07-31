@@ -162,6 +162,13 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(limits["default_maximum_tool_result_tokens"], 4_000)
         self.assertEqual(limits["get_portfolio_maximum_tool_result_tokens"], 24_000)
         self.assertTrue(limits["get_portfolio_pagination_required_beyond_limit"])
+        self.assertTrue(limits["general_beliefs_pagination_required_beyond_limit"])
+        belief_pagination = config.raw["owner_decisions"]["general_beliefs_pagination_contract"]
+        self.assertEqual(belief_pagination["maximum_result_tokens"], 4_000)
+        self.assertEqual(
+            belief_pagination["response"],
+            ["beliefs", "next_cursor", "has_more", "payload_truncated"],
+        )
         for model in config.raw["models"]:
             self.assertEqual(model["maximum_context_tokens"], 100_000)
             self.assertEqual(model["maximum_prompt_tokens"], 88_000)

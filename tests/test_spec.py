@@ -13,7 +13,7 @@ class SpecificationTests(unittest.TestCase):
         self.assertEqual(len(names), 27)
         self.assertEqual(len(set(names)), 27)
 
-    def test_only_portfolio_owns_the_frozen_pagination_contract(self) -> None:
+    def test_paginated_tools_expose_their_cursor_contract(self) -> None:
         document = json.loads(Path("spec/tool-schemas-v1.json").read_text(encoding="utf-8"))
         tools = {tool["name"]: tool for tool in document["tools"]}
         self.assertEqual(tools["get_balance"]["input_schema"]["properties"], {})
@@ -24,6 +24,12 @@ class SpecificationTests(unittest.TestCase):
             set(portfolio["output_schema"]["required"]),
             {"items", "next_cursor", "has_more"},
         )
+        for name in ("get_general_beliefs", "search_general_beliefs"):
+            properties = tools[name]["input_schema"]["properties"]
+            self.assertIn("cursor", properties)
+            self.assertEqual(properties["include_inactive"]["default"], False)
+            self.assertEqual(properties["limit"]["maximum"], 100)
+            self.assertEqual(properties["limit"]["default"], 100)
 
     def test_prompt_has_no_unresolved_placeholder(self) -> None:
         body = Path("spec/prompt/predictionarena-polymarket-v1.md").read_text(encoding="utf-8")
