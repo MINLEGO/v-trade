@@ -677,7 +677,7 @@ class ProductionToolRegistry:
             confidence,
             _required_string(arguments, "belief_content"),
             category,
-            (),
+            _belief_evidence(arguments.get("evidence", [])),
             now,
         )
         self._context.memory.append_belief(
@@ -1321,6 +1321,17 @@ def _belief_category(value: object) -> str:
     if category not in BELIEF_CATEGORIES:
         raise ValueError(f"category must be one of {BELIEF_CATEGORIES}")
     return category
+
+
+def _belief_evidence(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise ValueError("evidence must be an array of strings")
+    evidence: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError("evidence must contain only non-empty strings")
+        evidence.append(item.strip())
+    return tuple(evidence)
 
 
 def _date_at_midnight_utc(value: object) -> datetime:

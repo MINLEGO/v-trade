@@ -722,6 +722,13 @@
             "type": "number",
             "minimum": 0,
             "maximum": 1
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
           }
         },
         "required": [

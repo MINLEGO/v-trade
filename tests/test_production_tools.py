@@ -118,10 +118,16 @@ class _Memory:
     ) -> None:
         self.beliefs = beliefs
         self.active_beliefs = beliefs if active_beliefs is None else active_beliefs
+        self.appended_beliefs = []
 
     def read_beliefs(self, *, actor_id: uuid.UUID, target_agent_id: uuid.UUID):
         assert actor_id == target_agent_id
         return list(self.active_beliefs)
+
+    def append_belief(self, belief, *, actor_id: uuid.UUID, cycle_id: uuid.UUID):
+        assert actor_id
+        assert cycle_id
+        self.appended_beliefs.append(belief)
 
 
 def _context(
@@ -545,6 +551,49 @@ class ProductionToolRegistryTests(unittest.TestCase):
         )
         self.assertEqual(len(search_with_inactive["beliefs"]), 1)
         self.assertFalse(search_with_inactive["beliefs"][0]["active"])
+
+    def test_create_general_belief_persists_evidence_and_defaults_to_empty(self) -> None:
+        memory = _Memory([])
+        tools = {
+            tool.name: tool
+            for tool in ProductionToolRegistry(_context(_Cursor(), memory=memory)).tool_specs()
+        }
+        create = tools["create_general_belief"].handler
+        create(
+            {
+                "belief_content": "Evidence-backed thesis",
+                "category": "event_analysis",
+                "confidence": 0.8,
+                "evidence": ["source-a", "source-b"],
+            }
+        )
+        create(
+            {
+                "belief_content": "Belief without evidence",
+                "category": "risk_assessment",
+                "confidence": 0.4,
+            }
+        )
+
+        self.assertEqual(memory.appended_beliefs[0].evidence, ("source-a", "source-b"))
+        self.assertEqual(memory.appended_beliefs[1].evidence, ())
+
+    def test_create_general_belief_rejects_malformed_evidence(self) -> None:
+        memory = _Memory([])
+        tools = {
+            tool.name: tool
+            for tool in ProductionToolRegistry(_context(_Cursor(), memory=memory)).tool_specs()
+        }
+        with self.assertRaisesRegex(ValueError, "evidence"):
+            tools["create_general_belief"].handler(
+                {
+                    "belief_content": "Malformed evidence",
+                    "category": "event_analysis",
+                    "confidence": 0.5,
+                    "evidence": ["", 123],
+                }
+            )
+        self.assertEqual(memory.appended_beliefs, [])
 
     def test_general_beliefs_paginate_to_the_result_token_ceiling(self) -> None:
         beliefs = _test_beliefs(100)

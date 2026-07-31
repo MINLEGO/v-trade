@@ -55,6 +55,9 @@ class SpecificationTests(unittest.TestCase):
         self.assertEqual(belief["properties"]["confidence"]["minimum"], 0)
         self.assertEqual(belief["properties"]["confidence"]["maximum"], 1)
         self.assertEqual(belief["properties"]["category"]["enum"], expected)
+        self.assertEqual(belief["properties"]["evidence"]["type"], "array")
+        self.assertEqual(belief["properties"]["evidence"]["items"]["type"], "string")
+        self.assertNotIn("evidence", belief["required"])
 
     def test_fixture_manifest_records_owner_approved_raw_capture(self) -> None:
         manifest = json.loads(Path("spec/fixtures/manifest.json").read_text(encoding="utf-8"))
