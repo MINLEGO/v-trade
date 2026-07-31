@@ -10,7 +10,7 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from vtrade.domain.ports import JsonObject
-from vtrade.providers import ModelResponse, ProviderTelemetry
+from vtrade.providers import EXA_RESEARCH_TOOL_NAMES, ModelResponse, ProviderTelemetry
 
 
 class HarnessLimitExceeded(RuntimeError):
@@ -214,9 +214,11 @@ class BoundedToolHarness:
                 )
             if len(records) + len(calls) > self._limits.maximum_total_tool_calls:
                 raise HarnessLimitExceeded("total tool-call ceiling would be exceeded")
-            proposed_web = sum(1 for call in calls if _tool_name(call) == "web_search")
+            proposed_web = sum(
+                1 for call in calls if _tool_name(call) in EXA_RESEARCH_TOOL_NAMES
+            )
             if web_searches + proposed_web > self._limits.maximum_web_searches:
-                raise HarnessLimitExceeded("strict web-search ceiling would be exceeded")
+                raise HarnessLimitExceeded("strict Exa research ceiling would be exceeded")
             web_searches += proposed_web
             call_ids = [call.get("id") for call in calls]
             duplicate_ids = {
@@ -581,6 +583,7 @@ def _validate_schema_value(value: Any, schema: Mapping[str, Any], *, path: str) 
         "boolean": isinstance(value, bool),
         "array": isinstance(value, list),
         "object": isinstance(value, dict),
+        "null": value is None,
         None: True,
     }
     expected_types = expected if isinstance(expected, list) else [expected]

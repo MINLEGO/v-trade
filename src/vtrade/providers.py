@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -15,6 +16,7 @@ from vtrade.domain.ports import ArtifactStore, JsonObject
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 EXA_SEARCH_URL = "https://api.exa.ai/search"
+EXA_CONTENTS_URL = "https://api.exa.ai/contents"
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 EXA_MAX_SEARCH_COST_MICROS = 20_000
 EXA_MAX_CREDITS_PER_SEARCH = Decimal(10)
@@ -24,6 +26,8 @@ DEFAULT_WEB_SEARCH_HIGHLIGHT_LENGTH = 1_500
 MAX_WEB_SEARCH_HIGHLIGHT_CHARACTERS = 15_000
 DEFAULT_WEB_SEARCH_START_DAYS_AGO = 30
 DEFAULT_WEB_SEARCH_END_DAYS_AGO = 0
+DEFAULT_FETCH_WEBPAGE_MAX_LENGTH = 4_000
+MAX_FETCH_WEBPAGE_LENGTH = 12_000
 
 WEB_SEARCH_TOOL_SCHEMA: JsonObject = {
     "type": "function",
@@ -84,6 +88,44 @@ WEB_SEARCH_TOOL_SCHEMA: JsonObject = {
         },
     },
 }
+
+FETCH_WEBPAGE_TOOL_SCHEMA: JsonObject = {
+    "type": "function",
+    "function": {
+        "name": "fetch_webpage",
+        "description": "Fetch one webpage and return focused content for precise analysis.",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["url", "result_type"],
+            "properties": {
+                "url": {"type": "string", "minLength": 1},
+                "result_type": {
+                    "type": "string",
+                    "enum": ["full_text", "highlights"],
+                },
+                "highlight_query": {
+                    "type": ["string", "null"],
+                    "minLength": 1,
+                    "default": None,
+                    "description": (
+                        "Query guiding highlight selection. It is invalid when result_type "
+                        "is full_text."
+                    ),
+                },
+                "max_length": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_FETCH_WEBPAGE_LENGTH,
+                    "default": DEFAULT_FETCH_WEBPAGE_MAX_LENGTH,
+                    "description": "Maximum characters returned from the webpage content.",
+                },
+            },
+        },
+    },
+}
+
+EXA_RESEARCH_TOOL_NAMES = frozenset({"web_search", "fetch_webpage"})
 
 
 class ProviderConfigurationError(ValueError):
@@ -403,6 +445,10 @@ class ExaResearchProvider:
         if not api_key:
             raise ProviderConfigurationError("Exa API key is required")
         self._headers = {"x-api-key": api_key, "Content-Type": "application/json"}
+        self._contents_headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
         self._store = artifact_store
         self._budget = budget
         self._client = client or httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0))
@@ -432,7 +478,61 @@ class ExaResearchProvider:
             payload["excludeDomains"] = normalized["exclude_domains"]
         return self._request(payload, EXA_MAX_SEARCH_COST_MICROS)
 
+    def fetch(self, url: str, options: JsonObject) -> SearchResponse:
+        normalized = _fetch_options(url, options)
+        payload: JsonObject = {"urls": [normalized["url"]]}
+        if normalized["result_type"] == "full_text":
+            payload["text"] = {"maxCharacters": normalized["max_length"]}
+        else:
+            highlights: JsonObject = {"maxCharacters": normalized["max_length"]}
+            if normalized["highlight_query"] is not None:
+                highlights["query"] = normalized["highlight_query"]
+            payload["highlights"] = highlights
+        return self._request_contents(
+            payload,
+            url=str(normalized["url"]),
+            result_type=str(normalized["result_type"]),
+            estimate=EXA_MAX_SEARCH_COST_MICROS,
+        )
+
     def _request(self, payload: JsonObject, estimate: int) -> SearchResponse:
+        return self._request_exa(
+            payload,
+            endpoint=EXA_SEARCH_URL,
+            headers=self._headers,
+            normalizer=lambda parsed: _normalize_search_output(
+                str(payload["query"]), parsed, provider="exa"
+            ),
+            estimate=estimate,
+        )
+
+    def _request_contents(
+        self,
+        payload: JsonObject,
+        *,
+        url: str,
+        result_type: str,
+        estimate: int,
+    ) -> SearchResponse:
+        return self._request_exa(
+            payload,
+            endpoint=EXA_CONTENTS_URL,
+            headers=self._contents_headers,
+            normalizer=lambda parsed: _normalize_contents_output(
+                url, result_type, parsed, provider="exa"
+            ),
+            estimate=estimate,
+        )
+
+    def _request_exa(
+        self,
+        payload: JsonObject,
+        *,
+        endpoint: str,
+        headers: Mapping[str, str],
+        normalizer: Callable[[JsonObject], JsonObject],
+        estimate: int,
+    ) -> SearchResponse:
         reservation = self._budget.reserve(
             "exa",
             estimate,
@@ -440,11 +540,11 @@ class ExaResearchProvider:
             credit_count=EXA_MAX_CREDITS_PER_SEARCH,
         )
         started = _clock_ms(self._clock)
-        response = self._client.post(EXA_SEARCH_URL, headers=self._headers, json=payload)
+        response = self._client.post(endpoint, headers=headers, json=payload)
         latency = _clock_ms(self._clock) - started
         response.raise_for_status()
         parsed = _json_object(response.content, "Exa response")
-        output = _normalize_search_output(str(payload["query"]), parsed, provider="exa")
+        output = normalizer(parsed)
         cost = _object(parsed.get("costDollars", {}), "Exa costDollars")
         # Exa defines costDollars as an endpoint-dependent estimated cost and states
         # that billing is computed separately. The strict 18,000-request ceiling is
@@ -653,6 +753,44 @@ def _search_options(
     }
 
 
+def _fetch_options(url: str, options: JsonObject) -> JsonObject:
+    if not isinstance(url, str) or not url.strip():
+        raise ProviderConfigurationError("webpage URL must be non-empty")
+    normalized_url = url.strip()
+    parsed_url = urlsplit(normalized_url)
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+        raise ProviderConfigurationError("webpage URL must be an absolute HTTP(S) URL")
+    allowed = {"result_type", "highlight_query", "max_length"}
+    unknown = set(options) - allowed
+    if unknown:
+        raise ProviderConfigurationError(f"unsupported webpage options: {sorted(unknown)}")
+    result_type = options.get("result_type")
+    if result_type not in {"full_text", "highlights"}:
+        raise ProviderConfigurationError("result_type must be full_text or highlights")
+    highlight_query = options.get("highlight_query")
+    if highlight_query is not None:
+        if not isinstance(highlight_query, str) or not highlight_query.strip():
+            raise ProviderConfigurationError("highlight_query must be a non-empty string or null")
+        if result_type == "full_text":
+            raise ProviderConfigurationError(
+                "highlight_query is invalid when result_type is full_text"
+            )
+        highlight_query = highlight_query.strip()
+    max_length = options.get("max_length", DEFAULT_FETCH_WEBPAGE_MAX_LENGTH)
+    if (
+        not isinstance(max_length, int)
+        or isinstance(max_length, bool)
+        or not 1 <= max_length <= MAX_FETCH_WEBPAGE_LENGTH
+    ):
+        raise ProviderConfigurationError("max_length must be between 1 and 12000")
+    return {
+        "url": normalized_url,
+        "result_type": result_type,
+        "highlight_query": highlight_query,
+        "max_length": max_length,
+    }
+
+
 def _normalize_search_output(query: str, payload: JsonObject, *, provider: str) -> JsonObject:
     rows = payload.get("results")
     if not isinstance(rows, list):
@@ -687,6 +825,62 @@ def _normalize_search_output(query: str, payload: JsonObject, *, provider: str) 
             }
         )
     return {"query": query, "results": results}
+
+
+def _normalize_contents_output(
+    url: str,
+    result_type: str,
+    payload: JsonObject,
+    *,
+    provider: str,
+) -> JsonObject:
+    statuses = payload.get("statuses")
+    if not isinstance(statuses, list) or not statuses:
+        raise ProviderPayloadError(f"{provider} contents response lacks statuses")
+    for raw_status in statuses:
+        status = _object(raw_status, f"{provider} contents status")
+        if status.get("status") != "success":
+            error = status.get("error")
+            error_tag = "unknown"
+            if isinstance(error, Mapping):
+                error_tag = str(error.get("tag") or error_tag)
+            status_url = str(status.get("id") or url)
+            raise ProviderPayloadError(
+                f"{provider} contents failed for {status_url}: {error_tag}"
+            )
+    rows = payload.get("results")
+    if not isinstance(rows, list) or not rows:
+        raise ProviderPayloadError(f"{provider} contents response lacks results")
+    item: JsonObject | None = None
+    for row in rows:
+        candidate = _object(row, f"{provider} contents result")
+        if candidate.get("url") == url or candidate.get("id") == url:
+            item = candidate
+            break
+    if item is None:
+        raise ProviderPayloadError(f"{provider} contents result lacks requested URL")
+    result_url = item.get("url")
+    if not isinstance(result_url, str) or not result_url:
+        raise ProviderPayloadError(f"{provider} contents result URL is required")
+    output: JsonObject = {
+        "title": str(item.get("title") or ""),
+        "url": result_url,
+        "published_at": _optional_string(item.get("publishedDate")),
+        "author": _optional_string(item.get("author")),
+    }
+    if result_type == "full_text":
+        text = item.get("text")
+        if not isinstance(text, str):
+            raise ProviderPayloadError(f"{provider} contents result lacks full text")
+        output["full_text"] = text
+    else:
+        highlights = item.get("highlights")
+        if not isinstance(highlights, list) or not all(
+            isinstance(value, str) for value in highlights
+        ):
+            raise ProviderPayloadError(f"{provider} contents result lacks highlights")
+        output["highlights"] = highlights
+    return output
 
 
 def _search_reference_now(value: datetime | None) -> datetime:

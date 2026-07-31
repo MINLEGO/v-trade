@@ -134,10 +134,24 @@ class _Memory:
 class _Exa:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, object], datetime]] = []
+        self.fetch_calls: list[tuple[str, dict[str, object]]] = []
 
     def search(self, query: str, options: dict[str, object], *, now: datetime):
         self.calls.append((query, options, now))
         return SimpleNamespace(output={"query": query, "results": []}, telemetry=())
+
+    def fetch(self, url: str, options: dict[str, object]):
+        self.fetch_calls.append((url, options))
+        return SimpleNamespace(
+            output={
+                "title": "Page",
+                "url": url,
+                "published_at": None,
+                "author": None,
+                "highlights": ["evidence"],
+            },
+            telemetry=(),
+        )
 
 
 def _context(
@@ -174,7 +188,7 @@ def _context(
 
 
 class ProductionToolRegistryTests(unittest.TestCase):
-    def test_registry_has_exact_schema_parity_for_all_27_names(self) -> None:
+    def test_registry_has_exact_schema_parity_for_all_28_names(self) -> None:
         expected = {
             row["name"]
             for row in json.loads(Path("spec/tool-schemas-v1.json").read_text(encoding="utf-8"))[
@@ -182,7 +196,7 @@ class ProductionToolRegistryTests(unittest.TestCase):
             ]
         }
         names = {tool.name for tool in ProductionToolRegistry(_context(_Cursor())).tool_specs()}
-        self.assertEqual(len(names), 27)
+        self.assertEqual(len(names), 28)
         self.assertEqual(names, expected)
 
     def test_web_search_forwards_all_public_options_to_exa(self) -> None:
@@ -215,6 +229,37 @@ class ProductionToolRegistryTests(unittest.TestCase):
                         "end_published_date": 0,
                     },
                     NOW,
+                )
+            ],
+        )
+
+    def test_fetch_webpage_forwards_public_options_to_exa(self) -> None:
+        exa = _Exa()
+        tools = {
+            tool.name: tool
+            for tool in ProductionToolRegistry(_context(_Cursor(), exa=exa)).tool_specs()
+        }
+
+        output = tools["fetch_webpage"].handler(
+            {
+                "url": "https://example.com/page",
+                "result_type": "highlights",
+                "highlight_query": "key evidence",
+                "max_length": 4000,
+            }
+        )
+
+        self.assertEqual(output.output["url"], "https://example.com/page")
+        self.assertEqual(
+            exa.fetch_calls,
+            [
+                (
+                    "https://example.com/page",
+                    {
+                        "result_type": "highlights",
+                        "highlight_query": "key evidence",
+                        "max_length": 4000,
+                    },
                 )
             ],
         )

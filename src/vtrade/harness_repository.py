@@ -12,6 +12,7 @@ from typing import Protocol, cast
 from vtrade.harness import BeliefRecord, HarnessResult, PlanRecord
 from vtrade.providers import (
     EXA_MAX_CREDITS_PER_SEARCH,
+    EXA_RESEARCH_TOOL_NAMES,
     BudgetExceeded,
     BudgetReservation,
     ProviderTelemetry,
@@ -431,7 +432,7 @@ class PostgresHarnessRepository:
             raise ValueError("harness artifacts must be retained beyond completion")
         run_id = uuid.uuid5(uuid.NAMESPACE_URL, f"vtrade:harness:{agent_cycle_id}")
         key = f"harness:{agent_cycle_id}"
-        web_searches = sum(1 for call in result.tool_calls if call.name == "web_search")
+        web_searches = sum(1 for call in result.tool_calls if call.name in EXA_RESEARCH_TOOL_NAMES)
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
             cursor.execute(
                 "SELECT id, transcript_sha256 FROM harness_runs WHERE idempotency_key = %s",

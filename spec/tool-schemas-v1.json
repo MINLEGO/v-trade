@@ -261,6 +261,87 @@
       }
     },
     {
+      "name": "fetch_webpage",
+      "classification": "inferred",
+      "observed_name": true,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "type": "string",
+            "minLength": 1
+          },
+          "result_type": {
+            "type": "string",
+            "enum": [
+              "full_text",
+              "highlights"
+            ]
+          },
+          "highlight_query": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "default": null,
+            "description": "Query guiding highlight selection. It is invalid when result_type is full_text."
+          },
+          "max_length": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 12000,
+            "default": 4000,
+            "description": "Maximum characters returned from the webpage content."
+          }
+        },
+        "required": [
+          "url",
+          "result_type"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "published_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "full_text": {
+            "type": "string"
+          },
+          "highlights": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "title",
+          "url",
+          "published_at",
+          "author"
+        ]
+      }
+    },
+    {
       "name": "get_orderbook",
       "classification": "inferred",
       "observed_name": true,

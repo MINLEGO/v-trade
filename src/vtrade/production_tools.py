@@ -109,7 +109,7 @@ _PAGINATED_DISCOVERY_TOOLS = frozenset(
 
 
 class ProductionToolRegistry:
-    """Exact 27-name registry backed only by frozen DB state and real providers."""
+    """Exact 28-name registry backed only by frozen DB state and real providers."""
 
     def __init__(
         self,
@@ -140,8 +140,8 @@ class ProductionToolRegistry:
                 },
             }
         expected = set(self._handlers())
-        if set(self._schemas) != expected or len(expected) != 27:
-            raise ValueError("production handlers must exactly match all 27 frozen tool names")
+        if set(self._schemas) != expected or len(expected) != 28:
+            raise ValueError("production handlers must exactly match all 28 frozen tool names")
 
     def tool_specs(self) -> tuple[ToolSpec, ...]:
         handlers = self._handlers()
@@ -201,6 +201,7 @@ class ProductionToolRegistry:
         return {
             **discovery,
             "web_search": self._web_search,
+            "fetch_webpage": self._fetch_webpage,
             "get_orderbook": self._get_orderbook,
             "get_balance": self._get_balance,
             "get_portfolio": self._context.portfolio,
@@ -451,6 +452,13 @@ class ProductionToolRegistry:
             _required_string(arguments, "query"),
             {key: value for key, value in arguments.items() if key != "query"},
             now=self._context.now(),
+        )
+        return ToolExecution(response.output, (response.telemetry,))
+
+    def _fetch_webpage(self, arguments: JsonObject) -> ToolExecution:
+        response = self._context.exa.fetch(
+            _required_string(arguments, "url"),
+            {key: value for key, value in arguments.items() if key != "url"},
         )
         return ToolExecution(response.output, (response.telemetry,))
 
@@ -925,7 +933,7 @@ class ProductionToolRegistry:
 
     @staticmethod
     def _category(name: str) -> str:
-        if name == "web_search":
+        if name in {"web_search", "fetch_webpage"}:
             return "research"
         if name == "place_market_order":
             return "financial"

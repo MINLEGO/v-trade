@@ -7,11 +7,11 @@ from pathlib import Path
 
 
 class SpecificationTests(unittest.TestCase):
-    def test_exactly_27_unique_tool_schemas(self) -> None:
+    def test_exactly_28_unique_tool_schemas(self) -> None:
         document = json.loads(Path("spec/tool-schemas-v1.json").read_text(encoding="utf-8"))
         names = [tool["name"] for tool in document["tools"]]
-        self.assertEqual(len(names), 27)
-        self.assertEqual(len(set(names)), 27)
+        self.assertEqual(len(names), 28)
+        self.assertEqual(len(set(names)), 28)
 
     def test_paginated_tools_expose_their_cursor_contract(self) -> None:
         document = json.loads(Path("spec/tool-schemas-v1.json").read_text(encoding="utf-8"))
@@ -68,6 +68,24 @@ class SpecificationTests(unittest.TestCase):
         output = tool["output_schema"]
         self.assertFalse(output["additionalProperties"])
         self.assertFalse(output["properties"]["results"]["items"]["additionalProperties"])
+
+    def test_fetch_webpage_exposes_bounded_content_modes(self) -> None:
+        document = json.loads(Path("spec/tool-schemas-v1.json").read_text(encoding="utf-8"))
+        tool = next(row for row in document["tools"] if row["name"] == "fetch_webpage")
+        properties = tool["input_schema"]["properties"]
+        self.assertEqual(
+            set(properties), {"url", "result_type", "highlight_query", "max_length"}
+        )
+        self.assertEqual(tool["input_schema"]["required"], ["url", "result_type"])
+        self.assertEqual(properties["result_type"]["enum"], ["full_text", "highlights"])
+        self.assertEqual(properties["highlight_query"]["default"], None)
+        self.assertEqual(properties["max_length"]["default"], 4000)
+        self.assertEqual(properties["max_length"]["maximum"], 12000)
+        output = tool["output_schema"]
+        self.assertFalse(output["additionalProperties"])
+        self.assertEqual(
+            set(output["required"]), {"title", "url", "published_at", "author"}
+        )
 
     def test_prompt_has_no_unresolved_placeholder(self) -> None:
         body = Path("spec/prompt/predictionarena-polymarket-v1.md").read_text(encoding="utf-8")

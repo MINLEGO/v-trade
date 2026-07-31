@@ -78,7 +78,7 @@ class RecordingConnection:
         return self.cursor_instance
 
 
-def harness_result() -> HarnessResult:
+def harness_result(tool_name: str = "web_search") -> HarnessResult:
     telemetry = ProviderTelemetry(
         provider="openrouter",
         usage_kind="model",
@@ -97,7 +97,7 @@ def harness_result() -> HarnessResult:
     )
     call = ToolCallRecord(
         id="call-1",
-        name="web_search",
+        name=tool_name,
         arguments={"query": "forecast"},
         success=True,
         output={"results": []},
@@ -186,6 +186,22 @@ class PostgresHarnessRepositoryTests(unittest.TestCase):
             if query.startswith("INSERT INTO harness_runs")
         )
         self.assertEqual(insert[3], 1)
+
+    def test_fetch_webpage_counts_as_an_exa_search(self) -> None:
+        self.repository.persist_run(
+            agent_cycle_id=CYCLE_ID,
+            result=harness_result("fetch_webpage"),
+            transcript_uri="supabase://private/transcript.json.gz",
+            transcript_sha256="b" * 64,
+            completed_at=NOW,
+            retain_until=NOW + timedelta(days=183),
+        )
+        insert = next(
+            params
+            for query, params in self.connection.cursor_instance.queries
+            if query.startswith("INSERT INTO harness_runs")
+        )
+        self.assertEqual(insert[5], 1)
 
     def test_run_idempotency_conflict_and_invalid_retention_fail_closed(self) -> None:
         result = harness_result()

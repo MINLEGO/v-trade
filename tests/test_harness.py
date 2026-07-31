@@ -189,6 +189,60 @@ class HarnessTests(unittest.TestCase):
         self.assertTrue(all(record.success for record in result.tool_calls))
         self.assertEqual(seen, [{"keyword": "alpha"}, {"keyword": ["alpha", "beta"]}])
 
+    def test_null_union_argument_is_accepted_for_optional_fetch_query(self) -> None:
+        seen: list[dict[str, object]] = []
+
+        def handler(arguments: dict[str, object]) -> dict[str, object]:
+            seen.append(arguments)
+            return {"ok": True}
+
+        schema = {
+            "type": "function",
+            "function": {
+                "name": "fetch_webpage",
+                "parameters": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["url", "result_type"],
+                    "properties": {
+                        "url": {"type": "string"},
+                        "result_type": {"type": "string", "enum": ["full_text", "highlights"]},
+                        "highlight_query": {"type": ["string", "null"]},
+                    },
+                },
+            },
+        }
+        call = {
+            "id": "fetch-null-query",
+            "function": {
+                "name": "fetch_webpage",
+                "arguments": json.dumps(
+                    {
+                        "url": "https://example.com",
+                        "result_type": "highlights",
+                        "highlight_query": None,
+                    }
+                ),
+            },
+        }
+        harness = BoundedToolHarness(
+            RecordedModelGateway(
+                (
+                    response({"role": "assistant", "tool_calls": [call]}),
+                    response({"role": "assistant", "content": "done"}),
+                ),
+                self.store,
+            ),
+            (ToolSpec(schema, handler, "research"),),
+            limits(),
+            monotonic=lambda: 0,
+        )
+
+        result = harness.run([], model_config=config())
+
+        self.assertTrue(result.tool_calls[0].success)
+        self.assertEqual(seen[0]["highlight_query"], None)
+
     def test_expected_handler_error_is_recorded_but_system_error_propagates(self) -> None:
         schema = {
             "type": "function",
@@ -274,7 +328,7 @@ class HarnessTests(unittest.TestCase):
             all("duplicate" in str(record.output) for record in result.tool_calls)
         )
 
-    def test_web_search_batch_above_strict_fifty_is_rejected_before_execution(self) -> None:
+    def test_exa_research_batch_above_strict_fifty_is_rejected_before_execution(self) -> None:
         called = 0
 
         def search(_arguments):
@@ -282,7 +336,7 @@ class HarnessTests(unittest.TestCase):
             called += 1
             return {"results": []}
 
-        schema = {
+        web_schema = {
             "type": "function",
             "function": {
                 "name": "web_search",
@@ -293,10 +347,31 @@ class HarnessTests(unittest.TestCase):
                 },
             },
         }
+        fetch_schema = {
+            "type": "function",
+            "function": {
+                "name": "fetch_webpage",
+                "parameters": {
+                    "type": "object",
+                    "required": ["url", "result_type"],
+                    "properties": {
+                        "url": {"type": "string"},
+                        "result_type": {"type": "string"},
+                    },
+                },
+            },
+        }
         calls = [
             {
                 "id": str(index),
-                "function": {"name": "web_search", "arguments": '{"query":"x"}'},
+                "function": {
+                    "name": "web_search" if index < 26 else "fetch_webpage",
+                    "arguments": (
+                        '{"query":"x"}'
+                        if index < 26
+                        else '{"url":"https://example.com","result_type":"highlights"}'
+                    ),
+                },
             }
             for index in range(51)
         ]
@@ -305,7 +380,10 @@ class HarnessTests(unittest.TestCase):
         )
         harness = BoundedToolHarness(
             gateway,
-            (ToolSpec(schema, search, "research"),),
+            (
+                ToolSpec(web_schema, search, "research"),
+                ToolSpec(fetch_schema, search, "research"),
+            ),
             limits(),
             monotonic=lambda: 0,
         )

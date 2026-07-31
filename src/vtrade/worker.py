@@ -63,6 +63,7 @@ from vtrade.polymarket import PolymarketVenue
 from vtrade.postgres_runtime import PostgresRuntimeRepository
 from vtrade.production_tools import ProductionToolRegistry, production_tool_context
 from vtrade.providers import (
+    EXA_RESEARCH_TOOL_NAMES,
     ExaResearchProvider,
     OpenRouterModelGateway,
     ProviderTelemetry,
@@ -308,7 +309,7 @@ class ProductionPromptPort:
 
 
 class ProductionHarnessPort:
-    """Execute all 27 tools through the bounded real model/provider harness."""
+    """Execute all 28 tools through the bounded real model/provider harness."""
 
     def __init__(
         self,
@@ -394,7 +395,7 @@ class ProductionHarnessPort:
             artifacts=registrations,
         )
         self._persist_detailed_audit(claim, result, retained, completed)
-        searches = sum(1 for item in result.tool_calls if item.name == "web_search")
+        searches = sum(1 for item in result.tool_calls if item.name in EXA_RESEARCH_TOOL_NAMES)
         intent_ids = self._cycle_intent_ids(claim.cycle_id)
         return HarnessExecutionResult(
             {
@@ -561,11 +562,11 @@ class ProductionHarnessPort:
                                 retained,
                             ),
                         )
-                        if record.name == "web_search" and record.success:
+                        if record.name in EXA_RESEARCH_TOOL_NAMES and record.success:
                             telemetry = next(search_telemetry, None)
                             if telemetry is None:
                                 raise ProductionCompositionUnavailable(
-                                    "successful web search lacks provider telemetry"
+                                    "successful Exa research call lacks provider telemetry"
                                 )
                             self._persist_research(
                                 cursor,
@@ -589,16 +590,29 @@ class ProductionHarnessPort:
         telemetry: ProviderTelemetry,
         completed: datetime,
     ) -> None:
-        raw_results = output.get("results", [])
+        if "results" in output:
+            raw_results = output.get("results")
+        elif "url" in output:
+            raw_results = [output]
+        else:
+            raise ProductionCompositionUnavailable("Exa research result is malformed")
         if not isinstance(raw_results, list):
-            raise ProductionCompositionUnavailable("web search result list is malformed")
+            raise ProductionCompositionUnavailable("Exa research result list is malformed")
         for row in raw_results:
             if not isinstance(row, Mapping):
-                raise ProductionCompositionUnavailable("web search result is malformed")
+                raise ProductionCompositionUnavailable("Exa research result is malformed")
             url = row.get("url")
             if not isinstance(url, str) or not url:
-                raise ProductionCompositionUnavailable("web search result URL is missing")
-            content = str(row.get("content") or "")
+                raise ProductionCompositionUnavailable("Exa research result URL is missing")
+            raw_content = row.get("content")
+            if isinstance(raw_content, str):
+                content = raw_content
+            elif isinstance(row.get("full_text"), str):
+                content = str(row["full_text"])
+            elif isinstance(row.get("highlights"), list):
+                content = "\n".join(str(value) for value in row["highlights"])
+            else:
+                content = ""
             digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
             document_id = uuid.uuid5(uuid.NAMESPACE_URL, f"vtrade:research-document:{url}:{digest}")
             published = _optional_research_timestamp(row.get("published_at"))
@@ -638,7 +652,7 @@ class ProductionHarnessPort:
                     tool_call_id,
                     document_id,
                     telemetry.provider,
-                    str(arguments.get("query") or ""),
+                    str(arguments.get("query") or arguments.get("highlight_query") or ""),
                     telemetry.artifact_uri,
                     telemetry.raw_sha256,
                     _cutoff(claim),

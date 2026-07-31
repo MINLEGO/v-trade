@@ -12,6 +12,7 @@ import httpx
 from vtrade.artifacts import ContentAddressedArtifactStore
 from vtrade.budget import MonthlyBudgetCircuitBreaker
 from vtrade.providers import (
+    EXA_CONTENTS_URL,
     EXA_MAX_CREDITS_PER_SEARCH,
     EXA_MAX_SEARCH_COST_MICROS,
     EXA_SEARCH_URL,
@@ -366,6 +367,165 @@ class ProviderTests(unittest.TestCase):
         )
         self.assertEqual(requests[-1]["startPublishedDate"], "2026-07-01")
         self.assertEqual(requests[-1]["endPublishedDate"], "2026-07-24")
+
+    def test_exa_fetch_full_text_uses_contents_and_filters_metadata(self) -> None:
+        clocks = iter((NOW, NOW + timedelta(milliseconds=125)))
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            self.assertEqual(request.url, EXA_CONTENTS_URL)
+            self.assertEqual(request.headers["Authorization"], "Bearer exa-key")
+            self.assertEqual(
+                json.loads(request.content),
+                {
+                    "urls": ["https://example.com/page"],
+                    "text": {"maxCharacters": 4000},
+                },
+            )
+            return httpx.Response(
+                200,
+                json={
+                    "requestId": "request-id",
+                    "results": [
+                        {
+                            "title": "Page Title",
+                            "url": "https://example.com/page",
+                            "id": "https://example.com/page",
+                            "publishedDate": "2024-01-15T00:00:00.000Z",
+                            "author": "Author Name",
+                            "image": "https://example.com/image.png",
+                            "favicon": "https://example.com/favicon.ico",
+                            "text": "Full page content",
+                            "highlights": ["ignored in full text mode"],
+                            "highlightScores": [0.46],
+                        }
+                    ],
+                    "statuses": [
+                        {"id": "https://example.com/page", "status": "success"}
+                    ],
+                    "costDollars": {"total": 0.003},
+                    "requestCredits": 1,
+                },
+            )
+
+        provider = ExaResearchProvider(
+            "exa-key",
+            self.store,
+            self.budget,
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+            clock=lambda: next(clocks),
+        )
+        response = provider.fetch(
+            "https://example.com/page",
+            {"result_type": "full_text"},
+        )
+
+        self.assertEqual(
+            response.output,
+            {
+                "title": "Page Title",
+                "url": "https://example.com/page",
+                "published_at": "2024-01-15T00:00:00.000Z",
+                "author": "Author Name",
+                "full_text": "Full page content",
+            },
+        )
+        self.assertEqual(response.telemetry.usage_kind, "web_search")
+        self.assertEqual(response.telemetry.latency_ms, 125)
+
+    def test_exa_fetch_highlights_forwards_guiding_query_and_length(self) -> None:
+        requests: list[dict] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(json.loads(request.content))
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "title": "Page Title",
+                            "url": "https://example.com/page",
+                            "publishedDate": None,
+                            "author": None,
+                            "highlights": ["Relevant excerpt"],
+                        }
+                    ],
+                    "statuses": [
+                        {"id": "https://example.com/page", "status": "success"}
+                    ],
+                },
+            )
+
+        provider = ExaResearchProvider(
+            "exa-key",
+            self.store,
+            self.budget,
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        response = provider.fetch(
+            "https://example.com/page",
+            {
+                "result_type": "highlights",
+                "highlight_query": "relevant evidence",
+                "max_length": 12_000,
+            },
+        )
+
+        self.assertEqual(
+            requests,
+            [
+                {
+                    "urls": ["https://example.com/page"],
+                    "highlights": {
+                        "query": "relevant evidence",
+                        "maxCharacters": 12_000,
+                    },
+                }
+            ],
+        )
+        self.assertEqual(response.output["highlights"], ["Relevant excerpt"])
+
+    def test_exa_fetch_rejects_invalid_mode_options_and_content_status(self) -> None:
+        requests = 0
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            nonlocal requests
+            requests += 1
+            return httpx.Response(
+                200,
+                json={
+                    "results": [],
+                    "statuses": [
+                        {
+                            "id": "https://example.com/page",
+                            "status": "error",
+                            "error": {"tag": "SOURCE_NOT_AVAILABLE"},
+                        }
+                    ],
+                },
+            )
+
+        provider = ExaResearchProvider(
+            "exa-key",
+            self.store,
+            self.budget,
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        with self.assertRaisesRegex(ProviderConfigurationError, "invalid"):
+            provider.fetch(
+                "https://example.com/page",
+                {"result_type": "full_text", "highlight_query": "not allowed"},
+            )
+        with self.assertRaisesRegex(ProviderConfigurationError, "12000"):
+            provider.fetch(
+                "https://example.com/page",
+                {"result_type": "highlights", "max_length": 12_001},
+            )
+        with self.assertRaisesRegex(ProviderPayloadError, "SOURCE_NOT_AVAILABLE"):
+            provider.fetch(
+                "https://example.com/page",
+                {"result_type": "highlights"},
+            )
+        self.assertEqual(requests, 1)
 
     def test_exa_search_rejects_invalid_published_date_ranges_before_request(self) -> None:
         requests = 0
