@@ -22,7 +22,7 @@ For the dashboard, run `npm ci`, then `npm run dev`, `npm run lint`, or `npm run
 
 ## Coding Style & Naming Conventions
 
-Python uses four-space indentation, a 100-character Ruff line limit, strict mypy, and Ruff rules `E`, `F`, `I`, `UP`, `B`, `SIM`, and `RUF`. Use `snake_case` for modules/functions, `PascalCase` for classes and React components, `useX` for React hooks, and `UPPER_SNAKE_CASE` for constants. Keep financial values, audit records, idempotency, and fail-closed behavior intact.
+Python uses four-space indentation, a 100-character Ruff line limit, strict mypy, and Ruff rules `E`, `F`, `I`, `UP`, `B`, `SIM`, and `RUF`. Use `snake_case` for modules/functions, `PascalCase` for classes and React components, `useX` for React hooks, and `UPPER_SNAKE_CASE` for constants. Keep financial values, audit records, idempotency, and fail-closed behavior intact. Avoid files longer than 1000 lines ; 300-500 lines is ideal. 
 
 Tool schemas, experiment definitions, migrations, tests, and documentation are coupled contracts. When changing `spec/tool-schemas-v1.json`, refresh the `tool_schemas.sha256` values in both experiment JSON files and update the corresponding tests and compatibility documentation.
 
