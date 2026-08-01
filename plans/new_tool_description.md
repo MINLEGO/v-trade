@@ -102,9 +102,9 @@ Search-result snippets may be incomplete or misleading. Do not treat a snippet a
 
 **Proposed description**
 
-Fetch one specific webpage from the external web for precise evidence. Set `result_type` to `full_text` for the page text or `highlights` for focused excerpts. When using `highlights`, `highlight_query` can guide which parts of the page Exa selects; it must be omitted or set to `null` for `full_text`. `max_length` defaults to 4000 characters and cannot exceed 12000.
+Retrieve the readable content of a specific public webpage URL. Use this tool when a search result, market rule, official announcement, report, dataset page or primary source must be inspected directly. Prefer the original or authoritative source when a search result points to one.
 
-The result keeps only the page title, URL, publication date, author, and the requested full text or highlights. Verify that the page was available before the cycle's data cutoff, and prefer the original or authoritative source when a search result points to one.
+Optionally set `result_type` to `full_text` for the full page text or `highlights` for focused excerpts; it defaults to `highlights`. When using `highlights`, `highlight_query` can guide the snippet selection; it must be omitted or set to `null` for `full_text`. `max_length` defaults to 4000 characters and cannot exceed 12000.
 
 ---
 

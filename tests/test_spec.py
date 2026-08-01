@@ -76,8 +76,9 @@ class SpecificationTests(unittest.TestCase):
         self.assertEqual(
             set(properties), {"url", "result_type", "highlight_query", "max_length"}
         )
-        self.assertEqual(tool["input_schema"]["required"], ["url", "result_type"])
+        self.assertEqual(tool["input_schema"]["required"], ["url"])
         self.assertEqual(properties["result_type"]["enum"], ["full_text", "highlights"])
+        self.assertEqual(properties["result_type"]["default"], "highlights")
         self.assertEqual(properties["highlight_query"]["default"], None)
         self.assertEqual(properties["max_length"]["default"], 4000)
         self.assertEqual(properties["max_length"]["maximum"], 12000)

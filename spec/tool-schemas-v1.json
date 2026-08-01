@@ -277,7 +277,8 @@
             "enum": [
               "full_text",
               "highlights"
-            ]
+            ],
+            "default": "highlights"
           },
           "highlight_query": {
             "type": [
@@ -297,8 +298,7 @@
           }
         },
         "required": [
-          "url",
-          "result_type"
+          "url"
         ]
       },
       "output_schema": {

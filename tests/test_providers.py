@@ -463,11 +463,7 @@ class ProviderTests(unittest.TestCase):
         )
         response = provider.fetch(
             "https://example.com/page",
-            {
-                "result_type": "highlights",
-                "highlight_query": "relevant evidence",
-                "max_length": 12_000,
-            },
+            {"highlight_query": "relevant evidence", "max_length": 12_000},
         )
 
         self.assertEqual(

@@ -28,6 +28,7 @@ DEFAULT_WEB_SEARCH_START_DAYS_AGO = 30
 DEFAULT_WEB_SEARCH_END_DAYS_AGO = 0
 DEFAULT_FETCH_WEBPAGE_MAX_LENGTH = 4_000
 MAX_FETCH_WEBPAGE_LENGTH = 12_000
+DEFAULT_FETCH_WEBPAGE_RESULT_TYPE = "highlights"
 
 WEB_SEARCH_TOOL_SCHEMA: JsonObject = {
     "type": "function",
@@ -97,12 +98,13 @@ FETCH_WEBPAGE_TOOL_SCHEMA: JsonObject = {
         "parameters": {
             "type": "object",
             "additionalProperties": False,
-            "required": ["url", "result_type"],
+            "required": ["url"],
             "properties": {
                 "url": {"type": "string", "minLength": 1},
                 "result_type": {
                     "type": "string",
                     "enum": ["full_text", "highlights"],
+                    "default": DEFAULT_FETCH_WEBPAGE_RESULT_TYPE,
                 },
                 "highlight_query": {
                     "type": ["string", "null"],
@@ -764,7 +766,7 @@ def _fetch_options(url: str, options: JsonObject) -> JsonObject:
     unknown = set(options) - allowed
     if unknown:
         raise ProviderConfigurationError(f"unsupported webpage options: {sorted(unknown)}")
-    result_type = options.get("result_type")
+    result_type = options.get("result_type", DEFAULT_FETCH_WEBPAGE_RESULT_TYPE)
     if result_type not in {"full_text", "highlights"}:
         raise ProviderConfigurationError("result_type must be full_text or highlights")
     highlight_query = options.get("highlight_query")

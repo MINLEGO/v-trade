@@ -203,7 +203,7 @@ class HarnessTests(unittest.TestCase):
                 "parameters": {
                     "type": "object",
                     "additionalProperties": False,
-                    "required": ["url", "result_type"],
+                    "required": ["url"],
                     "properties": {
                         "url": {"type": "string"},
                         "result_type": {"type": "string", "enum": ["full_text", "highlights"]},
@@ -219,7 +219,6 @@ class HarnessTests(unittest.TestCase):
                 "arguments": json.dumps(
                     {
                         "url": "https://example.com",
-                        "result_type": "highlights",
                         "highlight_query": None,
                     }
                 ),
@@ -353,7 +352,7 @@ class HarnessTests(unittest.TestCase):
                 "name": "fetch_webpage",
                 "parameters": {
                     "type": "object",
-                    "required": ["url", "result_type"],
+                    "required": ["url"],
                     "properties": {
                         "url": {"type": "string"},
                         "result_type": {"type": "string"},
