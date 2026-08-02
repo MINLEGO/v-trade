@@ -181,12 +181,12 @@
         "properties": {
           "cursor": {
             "type": "string",
-            "minLength": 1,
-            "description": "Opaque cursor returned by the preceding discovery page."
+            "minLength": 1
           },
           "hours_back": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "default": 24
           },
           "limit": {
             "type": "integer",
@@ -219,8 +219,7 @@
         "properties": {
           "cursor": {
             "type": "string",
-            "minLength": 1,
-            "description": "Opaque cursor returned by the preceding discovery page."
+            "minLength": 1
           },
           "hours_min": {
             "type": "number",
@@ -257,15 +256,13 @@
         "properties": {
           "cursor": {
             "type": "string",
-            "minLength": 1,
-            "description": "Opaque cursor returned by the preceding discovery page."
+            "minLength": 1
           },
           "keyword": {
             "type": [
               "string",
               "array"
             ],
-            "description": "Optional keyword or non-empty tuple of keywords; matches events containing any keyword.",
             "items": {
               "type": "string",
               "minLength": 1
@@ -303,8 +300,7 @@
         "properties": {
           "cursor": {
             "type": "string",
-            "minLength": 1,
-            "description": "Opaque cursor returned by the preceding discovery page."
+            "minLength": 1
           },
           "limit": {
             "type": "integer",
@@ -406,12 +402,12 @@
             "type": "string",
             "minLength": 1
           },
-          "max_highlight_length": {
+          "": {
             "type": "integer",
             "minimum": 1,
             "maximum": 15000,
             "default": 1500,
-            "description": "Maximum characters returned in highlights per result. The product with num_results must not exceed 15000."
+            "description": "Maximum characters returned in highlights per result. Num_results × max_highlight_length must not exceed 15000."
           },
           "num_results": {
             "type": "integer",
@@ -631,8 +627,7 @@
         "properties": {
           "cursor": {
             "type": "string",
-            "minLength": 1,
-            "description": "Opaque cursor returned by the preceding discovery page."
+            "minLength": 1
           },
           "limit": {
             "type": "integer",
@@ -669,8 +664,7 @@
           },
           "cursor": {
             "type": "string",
-            "minLength": 1,
-            "description": "Opaque cursor returned by the preceding discovery page."
+            "minLength": 1
           },
           "limit": {
             "type": "integer",
@@ -697,8 +691,7 @@
         "properties": {
           "cursor": {
             "type": "string",
-            "minLength": 1,
-            "description": "Opaque cursor returned by the preceding discovery page."
+            "minLength": 1
           },
           "limit": {
             "type": "integer",
@@ -727,8 +720,7 @@
         "properties": {
           "cursor": {
             "type": "string",
-            "minLength": 1,
-            "description": "Opaque cursor returned by the preceding discovery page."
+            "minLength": 1
           },
           "limit": {
             "type": "integer",
@@ -761,8 +753,7 @@
         "properties": {
           "cursor": {
             "type": "string",
-            "minLength": 1,
-            "description": "Opaque cursor returned by the preceding discovery page."
+            "minLength": 1
           },
           "limit": {
             "type": "integer",
@@ -776,7 +767,8 @@
           },
           "trend": {
             "type": "string",
-            "enum": ["increasing", "decreasing"]
+            "enum": ["increasing", "decreasing"],
+            "default": "increasing"
           }
         },
         "required": []
@@ -795,8 +787,7 @@
         "properties": {
           "cursor": {
             "type": "string",
-            "minLength": 1,
-            "description": "Opaque cursor returned by the preceding discovery page."
+            "minLength": 1
           },
           "limit": {
             "type": "integer",
@@ -829,8 +820,7 @@
         "properties": {
           "cursor": {
             "type": "string",
-            "minLength": 1,
-            "description": "Opaque cursor returned by the preceding discovery page."
+            "minLength": 1
           },
           "start_date": {
             "type": "string",
@@ -867,8 +857,7 @@
         "properties": {
           "cursor": {
             "type": "string",
-            "minLength": 1,
-            "description": "Opaque cursor returned by the preceding discovery page."
+            "minLength": 1
           },
           "query": {
             "type": [
@@ -876,7 +865,6 @@
               "array"
             ],
             "minLength": 1,
-            "description": "Keyword or non-empty tuple of keywords; matches tags containing any keyword.",
             "items": {
               "type": "string",
               "minLength": 1
@@ -929,8 +917,7 @@
           "cursor": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 64,
-            "description": "Opaque cursor returned by the preceding page; valid only for the calling agent and agent-cycle snapshot."
+            "maxLength": 64
           },
           "limit": {
             "type": "integer",
@@ -1098,8 +1085,7 @@
         "properties": {
           "cursor": {
             "type": "string",
-            "minLength": 1,
-            "description": "Opaque cursor returned by the preceding belief page."
+            "minLength": 1
           },
           "limit": {
             "type": "integer",
@@ -1137,8 +1123,7 @@
         "properties": {
           "cursor": {
             "type": "string",
-            "minLength": 1,
-            "description": "Opaque cursor returned by the preceding belief search page."
+            "minLength": 1
           },
           "keyword": {
             "type": [
@@ -1146,7 +1131,6 @@
               "array"
             ],
             "minLength": 1,
-            "description": "Optional keyword or non-empty tuple of keywords; matches beliefs containing any keyword.",
             "items": {
               "type": "string",
               "minLength": 1
@@ -1356,7 +1340,8 @@
             },
             "time_in_force": {
               "type": "string",
-              "enum": ["IOC", "FOK"]
+              "enum": ["IOC", "FOK"],
+              "default": "IOC"
             },
             "limit_price": {
               "type": "number",
@@ -1366,7 +1351,8 @@
             "conviction": {
             "type": "number",
             "minimum": 0,
-            "maximum": 1
+            "maximum": 1,
+            "default": 0.5
           }
         },
         "required": [

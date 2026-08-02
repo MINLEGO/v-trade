@@ -4,18 +4,19 @@
 
 Discovery tools inspect only the open and tradeable markets included in the current cycle’s frozen market universe. Their results are reproducible as of the returned `as_of` cutoff and are not live market data.
 
-Discovery cards contain indicative prices, not guaranteed executable quotes. Before trading, retrieve the full market with `get_market_details` and the relevant executable book with `get_orderbook`. Filters help identify candidates, but do not guarantee positive expected value. Validate the thesis with current evidence, official resolution rules, and executable liquidity.
+Discovery cards contain indicative prices, not guaranteed executable quotes. Before trading, retrieve the full market with `get_market_details` and the relevant executable book with `get_orderbook`. You can also retrieve full event details with `get_event_details`. Filters help identify candidates, but do not guarantee positive expected value. Validate your thesis with current evidence, official resolution rules, and executable liquidity.
 
 Paginated discovery results may contain:
 
 * `next_cursor`: opaque cursor for the next page;
 * `has_more`: whether another page exists;
-* `payload_truncated`: whether the result had to be shortened to fit the tool-result limit.
+* `payload_truncated`: whether the result had to be shortened to fit the tool-result limit, which is usually 4000 tokens.
 
 When following a cursor, reuse the same tool and the same filtering arguments. The `limit` may be changed, but filters must remain unchanged.
 
 Monetary discovery filters such as `min_liquidity` and `min_volume_24hr` use dollar-denominated values, using these filters can help exclude inactive or shallow markets. Output fields ending in `_micros` use millionths of a dollar.
 
+A market’s closing time is not necessarily its resolution or payout time — always inspect the full resolution rules before relying on it for trading decisions.
 ---
 
 # Market discovery tools
@@ -24,14 +25,11 @@ Monetary discovery filters such as `min_liquidity` and `min_volume_24hr` use dol
 
 **Proposed description**
 
-List open, tradeable markets created within the last `hours_back` hours
-of the current cycle cutoff. The default lookback is 24 hours.
+List open, tradeable markets created within the last `hours_back` hours of the current cycle cutoff.
 
-Use this tool to identify newly listed individual markets that may not yet
-have been widely researched or efficiently priced.
+Use this tool to identify newly listed individual markets that may not yet have been widely researched or efficiently priced.
 
-Results should be ordered primarily by creation time from newest to oldest,
-with volume and liquidity used only as secondary tie-breakers.
+Results will be ordered primarily by creation time from newest to oldest, with market ID as a secondary tie-breaker.
 
 ---
 
@@ -43,8 +41,6 @@ Find open, tradeable markets whose `closes_at` time is between `hours_min` and `
 
 Results are ordered by remaining time ascending, with the soonest-closing markets first.
 
-A market’s closing time is not necessarily its resolution or payout time; always inspect the full resolution rules
-
 ---
 
 ## `discover_events`
@@ -53,8 +49,6 @@ A market’s closing time is not necessarily its resolution or payout time; alwa
 
 Search for groups of related markets by event. The optional(s) `keyword` are matched case-insensitively against market questions and market metadata. Markets are grouped by `event_id`, and event groups are ordered by their aggregated 24-hour volume.
 
-Each event contains compact discovery cards for its associated markets. Use `get_event_markets` to inspect an event more systematically.
-
 ---
 
 ## `list_top_events`
@@ -62,8 +56,6 @@ Each event contains compact discovery cards for its associated markets. Use `get
 **Proposed description**
 
 List groups of related markets ordered by their aggregated total historical volume. Use this tool to identify the largest or most established events in the frozen market universe.
-
-Each event contains compact discovery cards for its associated markets. Use additional tools to inspect exact resolution conditions.
 
 ---
 
@@ -85,11 +77,11 @@ Prices contained in market metadata or outcomes are indicative snapshots, not ex
 
 Search the external web for current evidence relevant to an event, market thesis, probability estimate, resolution rule, forecast, or catalyst. The tool returns up to ten search results with available titles, snippets, URLs and publication timestamps.
 
-You can balance the number of result and their quality using `num_results` and `max_highlight_length`. Note that to avoid truncated results, the total number of characters in highlights must not exceed 15000 character and will return an error otherwise. For example, tha max lenght per highlight for 10 results would be 1500 characters. The optional `start_published_date` and `end_published_date` arguments define the publication-date range. Each accepts a non-negative number of days back from now or a `YYYY-MM-DD` date; they default to 30 and 0 respectively.
+You can balance the number of result and their quality using `num_results` and `max_highlight_length`. Note that to avoid truncated results, max_highlight_length × num_results must not exceed 15000 character and will return an error otherwise. The optional `start_published_date` and `end_published_date` arguments define the publication-date range. Each accepts a non-negative number of days back from now or a `YYYY-MM-DD` date; they default to 30 and 0 respectively.
 
 Check the publication date and ensure that evidence was available before the cycle’s data cutoff. Prefer primary or authoritative sources, distinguish independent sources from repeated reporting, and actively search for evidence that could disconfirm the thesis.
 
-Search-result snippets may be incomplete or misleading. Do not treat a snippet as sufficient evidence when the underlying claim is material to the trade, and never let external reporting override the market’s official resolution rules.
+Search-result snippets may be incomplete or misleading. When the information is critical, try using `fetch_webpage` to retrieve more details and never let external reporting override the market’s official resolution rules.
 
 ---
 
@@ -99,7 +91,7 @@ Search-result snippets may be incomplete or misleading. Do not treat a snippet a
 
 Retrieve the readable content of a specific public webpage URL. Use this tool when a search result, market rule, official announcement, report, dataset page or primary source must be inspected directly. Prefer the original or authoritative source when a search result points to one.
 
-Optionally set `result_type` to `full_text` for the full page text or `highlights` for focused excerpts; it defaults to `highlights`. When using `highlights`, `highlight_query` can guide the snippet selection; it must be omitted or set to `null` for `full_text`. `max_length` defaults to 4000 characters and cannot exceed 12000.
+Optionally set `result_type` to `full_text` for the full page text or `highlights` for focused excerpts; When using `highlights`, `highlight_query` can guide the snippet selection; it must be omitted or set to `null` for `full_text`. `max_length` defaults to 4000 characters and cannot exceed 12000.
 
 ---
 
@@ -135,8 +127,6 @@ Retrieve the open, tradeable markets associated with one event. Supply the requi
 
 Markets are ordered primarily by total historical volume. Use this tool after `discover_events`, `list_top_events` or `get_newest_events` to compare related outcomes and identify mutually related or correlated positions.
 
-The returned cards are summaries only. Do not assume that similarly worded markets resolve under identical conditions.
-
 ---
 
 ## `get_newest_events`
@@ -144,8 +134,6 @@ The returned cards are summaries only. Do not assume that similarly worded marke
 **Proposed description**
 
 List event groups ordered by the creation time of their newest associated market. Use this tool to identify newly added events that may not yet have been widely researched or efficiently priced.
-
-Each event contains compact discovery cards for its associated markets. Newness does not imply positive expected value and may coincide with low liquidity or unclear resolution conditions.
 
 ---
 
@@ -155,9 +143,7 @@ Each event contains compact discovery cards for its associated markets. Newness 
 
 List all open and tradeable markets included in the current cycle’s frozen universe.
 
-Results are ordered primarily by total historical volume and liquidity. Use this tool for exhaustive or broad discovery when narrower discovery tools are not appropriate. If needed, you can follow pagination when `has_more` is true.
-
-Returned prices are indicative only. Use `get_market_details` and `get_orderbook` before trading.
+Results are ordered primarily by total historical volume and liquidity. Use this tool for exhaustive or broad discovery when narrower discovery tools are not appropriate.
 
 ---
 
@@ -169,8 +155,6 @@ Find open, tradeable markets whose volume trend is classified as `increasing` or
 
 A market is classified as increasing when its latest 24-hour volume is at least its average daily volume over the recorded week; otherwise it is classified as decreasing.
 
-Results are ordered by trend strength. Use volume changes as an opportunity-discovery signal, not as sufficient evidence for a directional trade.
-
 ---
 
 ## `discover_by_competitive_score`
@@ -181,8 +165,6 @@ Find open, tradeable markets whose metadata `competitive` score is at least `min
 
 The competitive score is supplied by the market-data source and should be treated as a discovery heuristic rather than a probability or expected-value estimate. Results are ordered by competitive score descending, then by total market volume.
 
-Inspect the market rules, outcome prices and order-book depth before deciding whether a competitive market offers a tradeable edge.
-
 ---
 
 ## `discover_by_date_range`
@@ -190,8 +172,6 @@ Inspect the market rules, outcome prices and order-book depth before deciding wh
 **Proposed description**
 
 Find open, tradeable markets whose `closes_at` calendar date falls within the inclusive `start_date` and `end_date` range. Dates use the `YYYY-MM-DD` format. Either boundary may be omitted.
-
-This tool filters by the stated market closing date, not necessarily by the final resolution, settlement or payout date. Inspect the resolution rules before relying on the date for trading decisions.
 
 ---
 
@@ -225,8 +205,6 @@ After calling `place_market_order`, prefer the `portfolio_after` state returned 
 
 Retrieve the calling agent’s positive-share positions from an immutable portfolio snapshot associated with the current agent cycle and portfolio version. Each position includes market and outcome identifiers, the market question, share quantity, average cost, cost basis, realized P&L and last update time.
 
-Results are ordered deterministically and may be paginated. When `has_more` is true, you may continue calling this tool with `next_cursor` until every page has been reviewed if needed.
-
 The result does not provide a current executable exit price or unrealized P&L. Use the position’s venue token identifier with `get_orderbook` to estimate liquidation value and exit liquidity.
 
 ---
@@ -245,7 +223,7 @@ Partially sold positions are not included until their remaining shares reach zer
 
 **Proposed description**
 
-Return the calling agent’s most recent settled position records, ordered from newest to oldest. Each record includes the settled share quantity, payout, realized P&L, settlement time, market question, winning outcome and the outcome choosen by the agent.
+Return the calling agent’s most recent settled position records, ordered from newest to oldest. Each record includes the settled share quantity, payout, realized P&L, settlement time, market question, winning outcome (nullable) and the outcome chosen by the agent.
 
 Use this tool to verify that an outcome has been settled and to distinguish realized settlement results from unrealized position value. Settlement P&L is authoritative for completed positions.
 
@@ -261,8 +239,6 @@ Retrieve stored beliefs belonging to the calling agent. By default, only active 
 
 Beliefs may concern a specific event, general trading strategy, market sentiment, market structure or risk management. Treat them as fallible historical conclusions rather than current facts. Verify time-sensitive beliefs against current evidence before using them.
 
-Results are ordered newest first and may be paginated. When `has_more` is true, call the tool again with the returned `next_cursor` to retrieve the next page. The cursor is opaque; keep the filtering arguments unchanged when continuing.
-
 Use this tool periodically to identify stale, duplicated or conflicting beliefs. Delete beliefs that are no longer supported rather than allowing contradictory memory to accumulate.
 
 ---
@@ -277,7 +253,7 @@ Use this tool when only a subset of memory is relevant to the current market or 
 
 When `include_inactive` is true, the search also covers inactive history. It does not search evidence contents or semantic similarity, and a missing result does not prove that the agent has never stored a related belief.
 
-Results are ordered newest first and may be paginated. When `has_more` is true, you may call the tool again with the returned `next_cursor`, keeping `keyword`, `category` and `include_inactive` unchanged.
+Results are ordered newest first and may be paginated. If so, make sure to keep `keyword`, `category` and `include_inactive` unchanged when following pagination.
 
 ---
 
@@ -313,7 +289,7 @@ This tool does not provide a way to reactivate a deactivated belief, and deactiv
 
 **Proposed description**
 
-Create or replace the calling agent’s active long-term trading plan. Use the plan to store durable portfolio objectives, research priorities, strategic constraints, risk-management intentions and lessons that should guide multiple future cycles.
+Replace the calling agent’s active long-term trading plan. Use the plan to store durable portfolio objectives, research priorities, strategic constraints, risk-management intentions and the most important lessons that should guide multiple future cycles.
 
 Creating a new long-term plan supersedes the previous active long-term plan. Write a coherent replacement rather than an incremental fragment, because only the latest active plan should be treated as current.
 
@@ -321,27 +297,19 @@ Do not include current balances, prices or position quantities unless they are c
 
 ---
 
-## `get_next_cycle_plan`
-
-**Proposed description**
-
-Retrieve the calling agent’s active next-cycle plan or plans. Use this tool to recover concrete follow-up tasks, events to monitor, pending thesis checks and conditions that were intentionally deferred from a previous cycle.
-
-A next-cycle plan is a fallible historical instruction, not current state. Verify all referenced positions, prices, deadlines and events against current tools before acting.
-
-This tool returns only next-cycle plans. It does not retrieve the active long-term plan.
-
----
-
 ## `create_next_cycle_plan`
 
 **Proposed description**
 
-Create or replace the calling agent’s active plan for a later cycle. The plan should record specific follow-up actions, catalysts, deadlines, invalidation conditions, positions to reassess and research that remains incomplete.
+Replace the plan that will be supplied to the agent at the beginning of its next cycle.
 
-Creating a new next-cycle plan supersedes the previous active next-cycle plan. Write the complete intended replacement rather than a partial addition.
+Use this tool near the end of the current cycle to preserve concrete follow-up actions, catalysts to monitor, positions to reassess, unresolved research, deadlines and explicit invalidation conditions. If the next cycle plan is not replaced, the agent will receive the same plan as this cycle.
 
-The optional `cycle_date` uses the `YYYY-MM-DD` format and is stored as midnight UTC metadata. It does not schedule the agent or guarantee execution on that date.
+Only one next-cycle plan exists. Calling this tool again during the same cycle replaces the previously created next-cycle plan; it does not append another plan.
+
+Write the complete replacement plan rather than an incremental update. Do not repeat information already stored as durable general beliefs or long-term strategy unless it is directly relevant to the next cycle.
+
+The optional cycle_date is descriptive scheduling metadata. It does not schedule the agent or guarantee execution on that date.Except for maintenance or other exceptional circumstances, the period between each cycle is 1 hour.
 
 ---
 
@@ -360,7 +328,7 @@ For BUY orders, `amount_type` defaults to `CASH`, meaning `amount` is a dollar b
 * `IOC` executes available eligible liquidity immediately and cancels any unfilled remainder.
 * `FOK` executes only if the complete requested quantity can be filled under the order constraints; otherwise it is rejected.
 
-The optional `limit_price` restricts execution to acceptable displayed prices between 0 and 1. The optional `conviction` value is a 0-to-1 audit value and defaults to 0.5; it does not replace an explicit probability, expected-value or risk analysis.
+The optional `limit_price` restricts execution to acceptable displayed prices between 0 and 1. The optional `conviction` value is a 0-to-1 audit value; it does not replace an explicit probability, expected-value or risk analysis.
 
 Before calling this tool:
 
@@ -371,17 +339,7 @@ Before calling this tool:
 5. confirm available cash or shares;
 6. check existing exposure and risk limits.
 
-The tool may return a rejection, a complete fill or a partial IOC fill. Always inspect the returned:
-
-* `status`;
-* `rejection_code` and message;
-* `filled_shares`;
-* `cancelled_shares`;
-* `average_price`;
-* `fee_micros`;
-* `cash_delta_micros`;
-* `portfolio_after`;
-* affected position.
+The result status is `rejected`, `filled`, `partial`, or `pending_broker_validation`. A pending result records the order intent but does not establish that any execution occurred; do not treat it as filled. For `rejected`, inspect `rejection_code`, `message`, and `portfolio_after`. For `filled` or `partial`, inspect `execution.filled_shares`, `execution.cancelled_shares`, `execution.average_price`, `execution.gross_micros`, `execution.fee_micros`, `execution.cash_delta_micros`, `execution.remainder_status`, and `portfolio_after.affected_position`.
 
 Never assume that submitting an order means it executed. After a rejection or partial fill, recalculate cash, exposure, remaining edge and liquidity before deciding whether to submit another order. Do not retry unchanged orders repeatedly.
 
