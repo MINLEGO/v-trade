@@ -4,7 +4,7 @@
 
 Discovery tools inspect only the open and tradeable markets included in the current cycle’s frozen market universe. Their results are reproducible as of the returned `as_of` cutoff and are not live market data.
 
-Discovery cards contain indicative prices, not guaranteed executable quotes. Before trading, retrieve the full market with `get_market_details` and the relevant executable book with `get_orderbook`.
+Discovery cards contain indicative prices, not guaranteed executable quotes. Before trading, retrieve the full market with `get_market_details` and the relevant executable book with `get_orderbook`. Filters help identify candidates, but do not guarantee positive expected value. Validate the thesis with current evidence, official resolution rules, and executable liquidity.
 
 Paginated discovery results may contain:
 
@@ -14,14 +14,9 @@ Paginated discovery results may contain:
 
 When following a cursor, reuse the same tool and the same filtering arguments. The `limit` may be changed, but filters must remain unchanged.
 
-Monetary discovery filters such as `min_liquidity` and `min_volume_24hr` use dollar-denominated values. Output fields ending in `_micros` use millionths of a dollar.
+Monetary discovery filters such as `min_liquidity` and `min_volume_24hr` use dollar-denominated values, using these filters can help exclude inactive or shallow markets. Output fields ending in `_micros` use millionths of a dollar.
 
 ---
-
-# Redundant info which can be generalized in the shared part :
-- Optional `min_liquidity` and `min_volume_24hr` filters can exclude inactive or shallow markets.
-- Retrieve the full resolution rules with `get_market_details` and executable liquidity with `get_orderbook` before trading.
-- Discovery filters identify candidates, not positive expected value. Validate the thesis with current evidence, official resolution rules, and executable liquidity.
 
 # Market discovery tools
 
