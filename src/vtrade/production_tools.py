@@ -120,25 +120,35 @@ class ProductionToolRegistry:
         self._context = context
         self._mutation_sequence = 0
         raw = json.loads(Path(schema_path).read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError("tool schema artifact must be an object")
         rows = raw.get("tools")
         if not isinstance(rows, list):
             raise ValueError("tool schema artifact lacks tools")
+        shared_defs = raw.get("$defs", {})
+        if not isinstance(shared_defs, dict):
+            raise ValueError("tool schema artifact $defs must be an object")
         self._schemas: dict[str, JsonObject] = {}
+        self._output_schemas: dict[str, JsonObject] = {}
         for row in rows:
             if not isinstance(row, dict) or not isinstance(row.get("name"), str):
                 raise ValueError("tool schema row is malformed")
             name = str(row["name"])
-            parameters = row.get("input_schema")
-            if not isinstance(parameters, dict):
+            input_schema = row.get("input_schema")
+            output_schema = row.get("output_schema")
+            if not isinstance(input_schema, dict):
                 raise ValueError(f"tool {name} lacks input schema")
+            if not isinstance(output_schema, dict):
+                raise ValueError(f"tool {name} lacks output schema")
             self._schemas[name] = {
                 "type": "function",
                 "function": {
                     "name": name,
                     "description": f"V-Trade frozen provider-neutral {name} tool.",
-                    "parameters": parameters,
+                    "parameters": input_schema,
                 },
             }
+            self._output_schemas[name] = _attach_defs(output_schema, shared_defs)
         expected = set(self._handlers())
         if set(self._schemas) != expected or len(expected) != 28:
             raise ValueError("production handlers must exactly match all 28 frozen tool names")
@@ -147,10 +157,11 @@ class ProductionToolRegistry:
         handlers = self._handlers()
         return tuple(
             ToolSpec(
-                self._schemas[name],
-                self._bounded_handler(name, handlers[name]),
-                self._category(name),
+                schema=self._schemas[name],
+                handler=self._bounded_handler(name, handlers[name]),
+                category=self._category(name),
                 mutates_financial_state=name == "place_market_order",
+                output_schema=self._output_schemas[name],
             )
             for name in self._schemas
         )
@@ -947,6 +958,15 @@ class ProductionToolRegistry:
         }:
             return "account"
         return "market"
+
+
+def _attach_defs(schema: JsonObject, shared_defs: JsonObject) -> JsonObject:
+    result = dict(schema)
+    local_defs = result.get("$defs", {})
+    if not isinstance(local_defs, dict):
+        raise ValueError("tool schema $defs must be an object")
+    result["$defs"] = {**shared_defs, **local_defs}
+    return result
 
 
 _MARKET_SELECT = (

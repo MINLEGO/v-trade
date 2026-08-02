@@ -19,7 +19,9 @@ from vtrade.harness import (
     PlanType,
     PrivateAgentMemory,
     PromptBuilder,
+    ToolExecution,
     ToolHandlerError,
+    ToolOutputContractError,
     ToolSpec,
     deterministic_critical_learning,
 )
@@ -134,6 +136,206 @@ class HarnessTests(unittest.TestCase):
         result = harness.run([{"role": "user", "content": "go"}], model_config=config())
         self.assertEqual(called, 0)
         self.assertFalse(result.tool_calls[0].success)
+
+    def test_schema_valid_input_and_output_are_recorded_unchanged(self) -> None:
+        called: list[dict[str, object]] = []
+        schema = {
+            "type": "function",
+            "function": {
+                "name": "inspect",
+                "parameters": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["value"],
+                    "properties": {"value": {"type": "integer", "minimum": 1}},
+                },
+            },
+        }
+        output_schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"ok": {"type": "boolean"}},
+            "required": ["ok"],
+        }
+
+        def handler(arguments: dict[str, object]) -> dict[str, object]:
+            called.append(arguments)
+            return {"ok": True}
+
+        call = {
+            "id": "inspect-valid",
+            "function": {"name": "inspect", "arguments": '{"value": 2}'},
+        }
+        gateway = RecordedModelGateway(
+            (response({"role": "assistant", "tool_calls": [call]}),
+             response({"role": "assistant", "content": "done"})),
+            self.store,
+        )
+        harness = BoundedToolHarness(
+            gateway,
+            (ToolSpec(schema, handler, "market", output_schema=output_schema),),
+            limits(),
+            monotonic=lambda: 0,
+        )
+
+        result = harness.run([], model_config=config())
+
+        self.assertEqual(called, [{"value": 2}])
+        self.assertTrue(result.tool_calls[0].success)
+        self.assertEqual(result.tool_calls[0].output, {"ok": True})
+
+    def test_invalid_output_is_fatal_and_does_not_continue_the_cycle(self) -> None:
+        schema = {
+            "type": "function",
+            "function": {
+                "name": "inspect",
+                "parameters": {"type": "object", "additionalProperties": False},
+            },
+        }
+        output_schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"ok": {"type": "boolean"}},
+            "required": ["ok"],
+        }
+        call = {
+            "id": "inspect-invalid-output",
+            "function": {"name": "inspect", "arguments": "{}"},
+        }
+        gateway = RecordedModelGateway(
+            (response({"role": "assistant", "tool_calls": [call]}),
+             response({"role": "assistant", "content": "must not run"})),
+            self.store,
+        )
+        harness = BoundedToolHarness(
+            gateway,
+            (
+                ToolSpec(
+                    schema,
+                    lambda _arguments: {"ok": "wrong"},
+                    "market",
+                    output_schema=output_schema,
+                ),
+            ),
+            limits(),
+            monotonic=lambda: 0,
+        )
+
+        with self.assertRaisesRegex(ToolOutputContractError, "inspect returned invalid output: ok"):
+            harness.run([], model_config=config())
+        self.assertEqual(gateway.remaining, 1)
+
+    def test_tool_execution_output_uses_the_same_contract_validation(self) -> None:
+        schema = {
+            "type": "function",
+            "function": {
+                "name": "inspect",
+                "parameters": {"type": "object", "additionalProperties": False},
+            },
+        }
+        output_schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"ok": {"type": "boolean"}},
+            "required": ["ok"],
+        }
+        call = {
+            "id": "inspect-tool-execution",
+            "function": {"name": "inspect", "arguments": "{}"},
+        }
+        harness = BoundedToolHarness(
+            RecordedModelGateway(
+                (response({"role": "assistant", "tool_calls": [call]}),), self.store
+            ),
+            (
+                ToolSpec(
+                    schema,
+                    lambda _arguments: ToolExecution({"ok": "wrong"}),
+                    "market",
+                    output_schema=output_schema,
+                ),
+            ),
+            limits(),
+            monotonic=lambda: 0,
+        )
+
+        with self.assertRaises(ToolOutputContractError):
+            harness.run([], model_config=config())
+
+    def test_invalid_schema_fails_before_gateway_use(self) -> None:
+        schema = {
+            "type": "function",
+            "function": {
+                "name": "inspect",
+                "parameters": {"type": "not-a-json-schema-type"},
+            },
+        }
+        gateway = RecordedModelGateway(
+            (response({"role": "assistant", "content": "not reached"}),), self.store
+        )
+
+        with self.assertRaisesRegex(ValueError, "invalid schema for tool inspect"):
+            BoundedToolHarness(
+                gateway,
+                (ToolSpec(schema, lambda _arguments: {}, "market"),),
+                limits(),
+                monotonic=lambda: 0,
+            )
+        self.assertEqual(gateway.remaining, 1)
+
+    def test_format_checker_rejects_invalid_dates_datetimes_and_uuids(self) -> None:
+        seen: list[dict[str, object]] = []
+        schema = {
+            "type": "function",
+            "function": {
+                "name": "dated",
+                "parameters": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["date", "timestamp", "identifier"],
+                    "properties": {
+                        "date": {"type": "string", "format": "date"},
+                        "timestamp": {"type": "string", "format": "date-time"},
+                        "identifier": {"type": "string", "format": "uuid"},
+                    },
+                },
+            },
+        }
+        valid = {
+            "date": "2026-07-16",
+            "timestamp": "2026-07-16T15:00:00Z",
+            "identifier": str(uuid.uuid4()),
+        }
+        invalid = {
+            "date": "2026-02-30",
+            "timestamp": "not-a-date-time",
+            "identifier": "not-a-uuid",
+        }
+        calls = [
+            {"id": "dated-valid", "function": {"name": "dated", "arguments": json.dumps(valid)}},
+            {
+                "id": "dated-invalid",
+                "function": {"name": "dated", "arguments": json.dumps(invalid)},
+            },
+        ]
+        harness = BoundedToolHarness(
+            RecordedModelGateway(
+                (
+                    response({"role": "assistant", "tool_calls": calls}),
+                    response({"role": "assistant", "content": "done"}),
+                ),
+                self.store,
+            ),
+            (ToolSpec(schema, lambda arguments: seen.append(arguments) or {"ok": True}, "market"),),
+            limits(),
+            monotonic=lambda: 0,
+        )
+
+        result = harness.run([], model_config=config())
+
+        self.assertEqual(seen, [valid])
+        self.assertTrue(result.tool_calls[0].success)
+        self.assertFalse(result.tool_calls[1].success)
 
     def test_union_type_argument_schema_accepts_string_and_array(self) -> None:
         seen: list[dict[str, object]] = []

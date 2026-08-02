@@ -199,6 +199,17 @@ class ProductionToolRegistryTests(unittest.TestCase):
         self.assertEqual(len(names), 28)
         self.assertEqual(names, expected)
 
+    def test_registry_retains_output_contracts_without_exposing_them_to_model(self) -> None:
+        tools = {
+            tool.name: tool for tool in ProductionToolRegistry(_context(_Cursor())).tool_specs()
+        }
+
+        self.assertIn("$defs", tools["get_all_active_markets"].output_schema)
+        self.assertNotIn("output_schema", tools["get_all_active_markets"].schema["function"])
+        self.assertEqual(
+            tools["get_balance"].schema["function"]["parameters"]["type"], "object"
+        )
+
     def test_web_search_forwards_all_public_options_to_exa(self) -> None:
         exa = _Exa()
         tools = {

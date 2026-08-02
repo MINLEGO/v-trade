@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Protocol, cast
+
+from jsonschema import Draft202012Validator, FormatChecker  # type: ignore[import-untyped]
+from jsonschema.exceptions import SchemaError, ValidationError  # type: ignore[import-untyped]
 
 from vtrade.domain.ports import JsonObject
 from vtrade.providers import EXA_RESEARCH_TOOL_NAMES, ModelResponse, ProviderTelemetry
@@ -19,6 +22,10 @@ class HarnessLimitExceeded(RuntimeError):
 
 class ToolValidationError(ValueError):
     pass
+
+
+class ToolOutputContractError(RuntimeError):
+    """A tool handler returned data that violates its declared output contract."""
 
 
 class ToolHandlerError(RuntimeError):
@@ -79,6 +86,12 @@ class ToolSpec:
     handler: Callable[[JsonObject], JsonObject | ToolExecution]
     category: str
     mutates_financial_state: bool = False
+    output_schema: JsonObject = field(
+        default_factory=lambda: {
+            "type": "object",
+            "additionalProperties": True,
+        }
+    )
 
     @property
     def name(self) -> str:
@@ -127,6 +140,24 @@ class BoundedToolHarness:
         self._tools = {tool.name: tool for tool in tools}
         if len(self._tools) != len(tools):
             raise ValueError("tool names must be unique")
+        self._input_validators: dict[str, Draft202012Validator] = {}
+        self._output_validators: dict[str, Draft202012Validator] = {}
+        for tool in tools:
+            name = tool.name
+            try:
+                input_schema = _tool_parameter_schema(tool.schema)
+                Draft202012Validator.check_schema(input_schema)
+                Draft202012Validator.check_schema(tool.output_schema)
+            except SchemaError as exc:
+                raise ValueError(f"invalid schema for tool {name}: {exc.message}") from exc
+            self._input_validators[name] = Draft202012Validator(
+                input_schema,
+                format_checker=FormatChecker(),
+            )
+            self._output_validators[name] = Draft202012Validator(
+                tool.output_schema,
+                format_checker=FormatChecker(),
+            )
         self._limits = limits
         self._monotonic = monotonic
         self._token_counter = token_counter or _conservative_token_upper_bound
@@ -276,7 +307,7 @@ class BoundedToolHarness:
                 maximum_tokens=self._limits.maximum_tool_call_arguments_tokens,
                 token_counter=self._token_counter,
             )
-            _validate_arguments(tool.schema, arguments)
+            _validate_tool_input(name, self._input_validators[name], arguments)
             executed = tool.handler(arguments)
             if isinstance(executed, ToolExecution):
                 output = executed.output
@@ -285,7 +316,12 @@ class BoundedToolHarness:
                 output = executed
                 tool_telemetry = ()
             if not isinstance(output, dict):
-                raise ToolValidationError("tool output must be an object")
+                raise ToolOutputContractError(f"{name} returned a non-object output")
+            error = _first_validation_error(self._output_validators[name], output)
+            if error is not None:
+                raise ToolOutputContractError(
+                    f"{name} returned invalid output: {_format_validation_error(error)}"
+                )
             maximum_result_tokens = (
                 self._limits.maximum_get_portfolio_result_tokens
                 if name == "get_portfolio"
@@ -547,91 +583,56 @@ def _tool_arguments(
     return value
 
 
-def _validate_arguments(schema: JsonObject, arguments: JsonObject) -> None:
+def _tool_parameter_schema(schema: JsonObject) -> JsonObject:
     function = schema.get("function")
     if not isinstance(function, dict) or not isinstance(function.get("parameters"), dict):
         raise ToolValidationError("tool schema lacks parameters")
-    parameters = function["parameters"]
-    required = parameters.get("required", [])
-    properties = parameters.get("properties", {})
-    if not isinstance(required, list) or not isinstance(properties, dict):
-        raise ToolValidationError("tool schema required/properties are malformed")
-    missing = [key for key in required if key not in arguments]
-    if missing:
-        raise ToolValidationError(f"missing required arguments: {missing}")
-    if parameters.get("additionalProperties") is False:
-        unknown = set(arguments) - set(properties)
-        if unknown:
-            raise ToolValidationError(f"unknown arguments: {sorted(unknown)}")
-    for key, value in arguments.items():
-        definition = properties.get(key, {})
-        if not isinstance(definition, dict):
-            raise ToolValidationError(f"schema for {key} must be an object")
-        _validate_schema_value(value, definition, path=key)
+    return cast(JsonObject, function["parameters"])
 
 
-def _validate_schema_value(value: Any, schema: Mapping[str, Any], *, path: str) -> None:
-    if "enum" in schema:
-        enum = schema["enum"]
-        if not isinstance(enum, list) or value not in enum:
-            raise ToolValidationError(f"argument {path} is outside its enum")
-    expected = schema.get("type")
-    valid = {
-        "string": isinstance(value, str),
-        "integer": isinstance(value, int) and not isinstance(value, bool),
-        "number": isinstance(value, (int, float)) and not isinstance(value, bool),
-        "boolean": isinstance(value, bool),
-        "array": isinstance(value, list),
-        "object": isinstance(value, dict),
-        "null": value is None,
-        None: True,
-    }
-    expected_types = expected if isinstance(expected, list) else [expected]
-    if not expected_types or not all(
-        type_name is None
-        or (isinstance(type_name, str) and type_name in valid)
-        for type_name in expected_types
-    ):
-        raise ToolValidationError(f"argument {path} has an invalid type schema")
-    if not any(valid[type_name] for type_name in expected_types):
-        raise ToolValidationError(f"argument {path} must be {expected}")
-    if isinstance(value, str):
-        if len(value) < int(schema.get("minLength", 0)):
-            raise ToolValidationError(f"argument {path} is too short")
-        if "maxLength" in schema and len(value) > int(schema["maxLength"]):
-            raise ToolValidationError(f"argument {path} is too long")
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        if "minimum" in schema and value < schema["minimum"]:
-            raise ToolValidationError(f"argument {path} is below minimum")
-        if "maximum" in schema and value > schema["maximum"]:
-            raise ToolValidationError(f"argument {path} is above maximum")
-    if isinstance(value, list):
-        if "minItems" in schema and len(value) < int(schema["minItems"]):
-            raise ToolValidationError(f"argument {path} has too few items")
-        if "maxItems" in schema and len(value) > int(schema["maxItems"]):
-            raise ToolValidationError(f"argument {path} has too many items")
-        items = schema.get("items", {})
-        if not isinstance(items, dict):
-            raise ToolValidationError(f"argument {path} items schema is malformed")
-        for index, item in enumerate(value):
-            _validate_schema_value(item, items, path=f"{path}[{index}]")
-    if isinstance(value, dict):
-        properties = schema.get("properties", {})
-        required = schema.get("required", [])
-        if not isinstance(properties, dict) or not isinstance(required, list):
-            raise ToolValidationError(f"argument {path} object schema is malformed")
-        missing = [key for key in required if key not in value]
-        if missing:
-            raise ToolValidationError(f"argument {path} misses {missing}")
-        if schema.get("additionalProperties") is False:
-            unknown = set(value) - set(properties)
-            if unknown:
-                raise ToolValidationError(f"argument {path} has unknown keys {sorted(unknown)}")
-        for key, item in value.items():
-            child = properties.get(key, {})
-            if not isinstance(child, dict):
-                raise ToolValidationError(f"argument {path}.{key} schema is malformed")
-            _validate_schema_value(item, child, path=f"{path}.{key}")
+def _validate_tool_input(
+    tool_name: str,
+    validator: Draft202012Validator,
+    arguments: JsonObject,
+) -> None:
+    error = _first_validation_error(validator, arguments)
+    if error is not None:
+        raise ToolValidationError(
+            f"invalid arguments for {tool_name}: {_format_validation_error(error)}"
+        )
+
+
+def _first_validation_error(
+    validator: Draft202012Validator, value: object
+) -> ValidationError | None:
+    errors = list(validator.iter_errors(value))
+    if not errors:
+        return None
+    return max(
+        (_most_specific_error(error) for error in errors),
+        key=lambda error: len(error.absolute_path),
+    )
+
+
+def _most_specific_error(error: ValidationError) -> ValidationError:
+    if not error.context:
+        return error
+    return max(
+        (_most_specific_error(child) for child in error.context),
+        key=lambda child: len(child.absolute_path),
+    )
+
+
+def _format_validation_error(error: ValidationError) -> str:
+    path = ""
+    for component in error.absolute_path:
+        if isinstance(component, int):
+            path += f"[{component}]"
+        elif not path:
+            path = str(component)
+        else:
+            path += f".{component}"
+    return f"{path or '$'}: {error.message}"
 
 
 def _conservative_token_upper_bound(raw: str) -> int:

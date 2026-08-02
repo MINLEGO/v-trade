@@ -2,6 +2,174 @@
   "schema_version": "predictionarena-tools-v1",
   "evidence_cutoff": "2026-07-13",
   "notice": "Names and observed argument keys come from public traces. Types, required fields, bounds and outputs are inferred V-Trade contracts.",
+  "$defs": {
+    "market_discovery_card": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "market_ref": {"type": "string", "minLength": 1},
+        "question": {"type": "string"},
+        "closes_at": {"type": ["string", "null"]},
+        "volume_24h_micros": {"type": "integer"},
+        "liquidity_micros": {"type": "integer"},
+        "status": {"type": "string"},
+        "tradeable": {"type": "boolean"},
+        "competitive": {"type": "number"},
+        "tag_names": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "outcomes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "name": {"type": "string"},
+              "indicative_price": {"type": "string"}
+            },
+            "required": ["name", "indicative_price"]
+          }
+        }
+      },
+      "required": [
+        "market_ref", "question", "closes_at", "volume_24h_micros",
+        "liquidity_micros", "status", "tradeable", "competitive", "tag_names", "outcomes"
+      ]
+    },
+    "market_discovery_page": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "as_of": {"type": "string", "format": "date-time"},
+        "markets": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/market_discovery_card"}
+        },
+        "next_cursor": {"type": ["string", "null"]},
+        "has_more": {"type": "boolean"},
+        "payload_truncated": {"type": "boolean"}
+      },
+      "required": ["as_of", "markets", "next_cursor", "has_more", "payload_truncated"]
+    },
+    "event_group": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "event_id": {"type": "string", "minLength": 1},
+        "markets": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/market_discovery_card"}
+        },
+        "volume_24hr_micros": {"type": "integer"},
+        "total_volume_micros": {"type": "integer"},
+        "newest_market_created_at": {"type": ["string", "null"]}
+      },
+      "required": [
+        "event_id", "markets", "volume_24hr_micros",
+        "total_volume_micros", "newest_market_created_at"
+      ]
+    },
+    "event_discovery_page": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "as_of": {"type": "string", "format": "date-time"},
+        "events": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/event_group"}
+        },
+        "next_cursor": {"type": ["string", "null"]},
+        "has_more": {"type": "boolean"},
+        "payload_truncated": {"type": "boolean"}
+      },
+      "required": ["as_of", "events", "next_cursor", "has_more", "payload_truncated"]
+    },
+    "orderbook_level": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "price": {"type": "string"},
+        "size": {"type": "string"}
+      },
+      "required": ["price", "size"]
+    },
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "position_id": {"type": "string", "format": "uuid"},
+        "market_id": {"type": "string", "format": "uuid"},
+        "market_question": {"type": "string"},
+        "outcome_id": {"type": "string", "format": "uuid"},
+        "venue_token_id": {"type": "string", "minLength": 1},
+        "outcome": {"type": "string"},
+        "shares": {"type": "string"},
+        "average_cost": {"type": "string"},
+        "cost_basis_micros": {"type": "integer"},
+        "realized_pnl_micros": {"type": "integer"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      },
+      "required": [
+        "position_id", "market_id", "market_question", "outcome_id", "venue_token_id",
+        "outcome", "shares", "average_cost", "cost_basis_micros",
+        "realized_pnl_micros", "updated_at"
+      ]
+    },
+    "portfolio_after": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {"type": "integer", "minimum": 0},
+        "cash_micros": {"type": "integer"},
+        "affected_position": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "outcome_id": {"type": "string"},
+            "shares": {"type": "string"},
+            "average_cost": {"type": "string"},
+            "cost_basis_micros": {"type": "integer"}
+          },
+          "required": ["outcome_id", "shares", "average_cost", "cost_basis_micros"]
+        }
+      },
+      "required": ["version", "cash_micros", "affected_position"]
+    },
+    "belief": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "format": "uuid"},
+        "active": {"type": "boolean"},
+        "confidence": {"type": "string"},
+        "content": {"type": "string"},
+        "category": {
+          "type": "string",
+          "enum": [
+            "event_analysis", "trading_strategy", "market_sentiment",
+            "market_structure", "risk_assessment"
+          ]
+        },
+        "evidence": {"type": "array", "items": {"type": "string"}},
+        "created_at": {"type": "string", "format": "date-time"}
+      },
+      "required": ["id", "confidence", "content", "category", "evidence", "created_at"]
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "format": "uuid"},
+        "plan_type": {"type": "string", "enum": ["long_term", "next_cycle"]},
+        "status": {"type": "string", "enum": ["active", "completed", "cancelled"]},
+        "due_at": {"type": ["string", "null"], "format": "date-time"},
+        "content": {"type": "string"},
+        "created_at": {"type": "string", "format": "date-time"}
+      },
+      "required": ["id", "plan_type", "status", "due_at", "content", "created_at"]
+    }
+  },
   "tools": [
     {
       "name": "get_newest_markets",
@@ -17,23 +185,28 @@
             "description": "Opaque cursor returned by the preceding discovery page."
           },
           "hours_back": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 0
           },
           "limit": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20
           },
           "min_liquidity": {
-            "type": "number"
+            "type": "number",
+            "minimum": 0
           },
           "min_volume_24hr": {
-            "type": "number"
+            "type": "number",
+            "minimum": 0
           }
         },
         "required": []
       },
       "output_schema": {
-        "type": "object",
-        "additionalProperties": true
+        "$ref": "#/$defs/market_discovery_page"
       }
     },
     {
@@ -50,23 +223,28 @@
             "description": "Opaque cursor returned by the preceding discovery page."
           },
           "hours_min": {
-            "type": "number"
+            "type": "number",
+            "minimum": 0
           },
           "hours_max": {
-            "type": "number"
+            "type": "number",
+            "minimum": 0
           },
           "limit": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20
           },
           "min_liquidity": {
-            "type": "number"
+            "type": "number",
+            "minimum": 0
           }
         },
         "required": []
       },
       "output_schema": {
-        "type": "object",
-        "additionalProperties": true
+        "$ref": "#/$defs/market_discovery_page"
       }
     },
     {
@@ -95,20 +273,24 @@
             "minItems": 1
           },
           "limit": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20
           },
           "min_liquidity": {
-            "type": "number"
+            "type": "number",
+            "minimum": 0
           },
           "min_volume_24hr": {
-            "type": "number"
+            "type": "number",
+            "minimum": 0
           }
         },
         "required": []
       },
       "output_schema": {
-        "type": "object",
-        "additionalProperties": true
+        "$ref": "#/$defs/event_discovery_page"
       }
     },
     {
@@ -125,20 +307,24 @@
             "description": "Opaque cursor returned by the preceding discovery page."
           },
           "limit": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20
           },
           "min_liquidity": {
-            "type": "number"
+            "type": "number",
+            "minimum": 0
           },
           "min_volume_24hr": {
-            "type": "number"
+            "type": "number",
+            "minimum": 0
           }
         },
         "required": []
       },
       "output_schema": {
-        "type": "object",
-        "additionalProperties": true
+        "$ref": "#/$defs/event_discovery_page"
       }
     },
     {
@@ -150,20 +336,62 @@
         "additionalProperties": false,
         "properties": {
           "market_ref": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           },
           "market_id": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           },
           "slug": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           }
         },
-        "required": []
+        "required": [],
+        "oneOf": [
+          {"required": ["market_ref"]},
+          {"required": ["market_id"]},
+          {"required": ["slug"]}
+        ]
       },
       "output_schema": {
         "type": "object",
-        "additionalProperties": true
+        "additionalProperties": false,
+        "properties": {
+          "as_of": {"type": "string", "format": "date-time"},
+          "market": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {"type": "string"},
+              "venue_market_id": {"type": "string"},
+              "market_ref": {"type": "string", "minLength": 1},
+              "slug": {"type": "string"},
+              "canonical_slug": {"type": "string"},
+              "event_id": {"type": "string"},
+              "question": {"type": "string"},
+              "resolution_rules": {"type": "string"},
+              "opens_at": {"type": ["string", "null"]},
+              "closes_at": {"type": ["string", "null"]},
+              "volume_micros": {"type": "integer"},
+              "liquidity_micros": {"type": "integer"},
+              "status": {"type": "string"},
+              "tradeable": {"type": "boolean"},
+              "metadata": {"type": "object", "additionalProperties": true},
+              "outcomes": {
+                "type": "array",
+                "items": {"type": "object", "additionalProperties": true}
+              }
+            },
+            "required": [
+              "id", "venue_market_id", "market_ref", "slug", "canonical_slug", "event_id",
+              "question", "resolution_rules", "opens_at", "closes_at", "volume_micros",
+              "liquidity_micros", "status", "tradeable", "metadata", "outcomes"
+            ]
+          }
+        },
+        "required": ["as_of", "market"]
       }
     },
     {
@@ -197,7 +425,7 @@
               "string"
             ],
             "minimum": 0,
-            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "format": "date",
             "default": 30,
             "description": "Range start as non-negative days back from now or YYYY-MM-DD."
           },
@@ -207,7 +435,7 @@
               "string"
             ],
             "minimum": 0,
-            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "format": "date",
             "default": 0,
             "description": "Range end as non-negative days back from now or YYYY-MM-DD."
           }
@@ -302,42 +530,31 @@
         ]
       },
       "output_schema": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "title": {
-            "type": "string"
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "title": {"type": "string"},
+              "url": {"type": "string"},
+              "published_at": {"type": ["string", "null"]},
+              "author": {"type": ["string", "null"]},
+              "full_text": {"type": "string"}
+            },
+            "required": ["title", "url", "published_at", "author", "full_text"]
           },
-          "url": {
-            "type": "string"
-          },
-          "published_at": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "author": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "full_text": {
-            "type": "string"
-          },
-          "highlights": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "title": {"type": "string"},
+              "url": {"type": "string"},
+              "published_at": {"type": ["string", "null"]},
+              "author": {"type": ["string", "null"]},
+              "highlights": {"type": "array", "items": {"type": "string"}}
+            },
+            "required": ["title", "url", "published_at", "author", "highlights"]
           }
-        },
-        "required": [
-          "title",
-          "url",
-          "published_at",
-          "author"
         ]
       }
     },
@@ -350,20 +567,58 @@
         "additionalProperties": false,
         "properties": {
           "venue_token_id": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           },
           "outcome_id": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           },
           "token_id": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           }
         },
-        "required": []
+        "required": [],
+        "oneOf": [
+          {"required": ["venue_token_id"]},
+          {"required": ["outcome_id"]},
+          {"required": ["token_id"]}
+        ]
       },
       "output_schema": {
         "type": "object",
-        "additionalProperties": true
+        "additionalProperties": false,
+        "properties": {
+          "as_of": {"type": "string", "format": "date-time"},
+          "snapshot_id": {"type": "string"},
+          "observed_at": {"type": "string", "format": "date-time"},
+          "source_created_at": {"type": ["string", "null"], "format": "date-time"},
+          "lookup": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "venue_token_id": {"type": "string", "minLength": 1},
+              "outcome_id": {"type": "string", "minLength": 1},
+              "token_id": {"type": "string", "minLength": 1}
+            },
+            "oneOf": [
+              {"required": ["venue_token_id"]},
+              {"required": ["outcome_id"]},
+              {"required": ["token_id"]}
+            ]
+          },
+          "bids": {"type": "array", "items": {"$ref": "#/$defs/orderbook_level"}},
+          "asks": {"type": "array", "items": {"$ref": "#/$defs/orderbook_level"}},
+          "best_bid": {"type": ["string", "null"]},
+          "best_ask": {"type": ["string", "null"]},
+          "raw_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "depth": {"const": 5}
+        },
+        "required": [
+          "as_of", "snapshot_id", "observed_at", "source_created_at", "lookup",
+          "bids", "asks", "best_bid", "best_ask", "raw_sha256", "depth"
+        ]
       }
     },
     {
@@ -380,20 +635,24 @@
             "description": "Opaque cursor returned by the preceding discovery page."
           },
           "limit": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20
           },
           "min_liquidity": {
-            "type": "number"
+            "type": "number",
+            "minimum": 0
           },
           "min_volatility": {
-            "type": "number"
+            "type": "number",
+            "minimum": 0
           }
         },
         "required": []
       },
       "output_schema": {
-        "type": "object",
-        "additionalProperties": true
+        "$ref": "#/$defs/market_discovery_page"
       }
     },
     {
@@ -405,7 +664,8 @@
         "additionalProperties": false,
         "properties": {
           "event_id": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           },
           "cursor": {
             "type": "string",
@@ -413,7 +673,10 @@
             "description": "Opaque cursor returned by the preceding discovery page."
           },
           "limit": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20
           }
         },
         "required": [
@@ -421,8 +684,7 @@
         ]
       },
       "output_schema": {
-        "type": "object",
-        "additionalProperties": true
+        "$ref": "#/$defs/market_discovery_page"
       }
     },
     {
@@ -439,17 +701,20 @@
             "description": "Opaque cursor returned by the preceding discovery page."
           },
           "limit": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20
           },
           "min_liquidity": {
-            "type": "number"
+            "type": "number",
+            "minimum": 0
           }
         },
         "required": []
       },
       "output_schema": {
-        "type": "object",
-        "additionalProperties": true
+        "$ref": "#/$defs/event_discovery_page"
       }
     },
     {
@@ -466,20 +731,24 @@
             "description": "Opaque cursor returned by the preceding discovery page."
           },
           "limit": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20
           },
           "min_liquidity": {
-            "type": "number"
+            "type": "number",
+            "minimum": 0
           },
           "min_volume_24hr": {
-            "type": "number"
+            "type": "number",
+            "minimum": 0
           }
         },
         "required": []
       },
       "output_schema": {
-        "type": "object",
-        "additionalProperties": true
+        "$ref": "#/$defs/market_discovery_page"
       }
     },
     {
@@ -496,20 +765,24 @@
             "description": "Opaque cursor returned by the preceding discovery page."
           },
           "limit": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20
           },
           "min_liquidity": {
-            "type": "number"
+            "type": "number",
+            "minimum": 0
           },
           "trend": {
-            "type": "string"
+            "type": "string",
+            "enum": ["increasing", "decreasing"]
           }
         },
         "required": []
       },
       "output_schema": {
-        "type": "object",
-        "additionalProperties": true
+        "$ref": "#/$defs/market_discovery_page"
       }
     },
     {
@@ -526,20 +799,24 @@
             "description": "Opaque cursor returned by the preceding discovery page."
           },
           "limit": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20
           },
           "min_liquidity": {
-            "type": "number"
+            "type": "number",
+            "minimum": 0
           },
           "min_score": {
-            "type": "number"
+            "type": "number",
+            "minimum": 0
           }
         },
         "required": []
       },
       "output_schema": {
-        "type": "object",
-        "additionalProperties": true
+        "$ref": "#/$defs/market_discovery_page"
       }
     },
     {
@@ -564,17 +841,20 @@
             "format": "date"
           },
           "limit": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20
           },
           "min_liquidity": {
-            "type": "number"
+            "type": "number",
+            "minimum": 0
           }
         },
         "required": []
       },
       "output_schema": {
-        "type": "object",
-        "additionalProperties": true
+        "$ref": "#/$defs/market_discovery_page"
       }
     },
     {
@@ -595,6 +875,7 @@
               "string",
               "array"
             ],
+            "minLength": 1,
             "description": "Keyword or non-empty tuple of keywords; matches tags containing any keyword.",
             "items": {
               "type": "string",
@@ -603,7 +884,10 @@
             "minItems": 1
           },
           "limit": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20
           }
         },
         "required": [
@@ -611,8 +895,7 @@
         ]
       },
       "output_schema": {
-        "type": "object",
-        "additionalProperties": true
+        "$ref": "#/$defs/market_discovery_page"
       }
     },
     {
@@ -627,7 +910,12 @@
       },
       "output_schema": {
         "type": "object",
-        "additionalProperties": true
+        "additionalProperties": false,
+        "properties": {
+          "cash_micros": {"type": "integer"},
+          "portfolio_version": {"type": "integer", "minimum": 0}
+        },
+        "required": ["cash_micros", "portfolio_version"]
       }
     },
     {
@@ -701,7 +989,10 @@
         "additionalProperties": false,
         "properties": {
           "limit": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 100
           }
         },
         "required": []
@@ -756,7 +1047,10 @@
         "additionalProperties": false,
         "properties": {
           "limit": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 100
           }
         },
         "required": []
@@ -822,7 +1116,15 @@
       },
       "output_schema": {
         "type": "object",
-        "additionalProperties": true
+        "additionalProperties": false,
+        "properties": {
+          "as_of": {"type": "string", "format": "date-time"},
+          "beliefs": {"type": "array", "items": {"$ref": "#/$defs/belief"}},
+          "next_cursor": {"type": ["string", "null"]},
+          "has_more": {"type": "boolean"},
+          "payload_truncated": {"type": "boolean"}
+        },
+        "required": ["as_of", "beliefs", "next_cursor", "has_more", "payload_truncated"]
       }
     },
     {
@@ -843,6 +1145,7 @@
               "string",
               "array"
             ],
+            "minLength": 1,
             "description": "Optional keyword or non-empty tuple of keywords; matches beliefs containing any keyword.",
             "items": {
               "type": "string",
@@ -875,7 +1178,15 @@
       },
       "output_schema": {
         "type": "object",
-        "additionalProperties": true
+        "additionalProperties": false,
+        "properties": {
+          "as_of": {"type": "string", "format": "date-time"},
+          "beliefs": {"type": "array", "items": {"$ref": "#/$defs/belief"}},
+          "next_cursor": {"type": ["string", "null"]},
+          "has_more": {"type": "boolean"},
+          "payload_truncated": {"type": "boolean"}
+        },
+        "required": ["as_of", "beliefs", "next_cursor", "has_more", "payload_truncated"]
       }
     },
     {
@@ -887,7 +1198,8 @@
         "additionalProperties": false,
         "properties": {
           "belief_content": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           },
           "category": {
             "type": "string",
@@ -907,7 +1219,8 @@
           "evidence": {
             "type": "array",
             "items": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1
             },
             "default": []
           }
@@ -920,7 +1233,12 @@
       },
       "output_schema": {
         "type": "object",
-        "additionalProperties": true
+        "additionalProperties": false,
+        "properties": {
+          "belief_id": {"type": "string", "format": "uuid"},
+          "created_at": {"type": "string", "format": "date-time"}
+        },
+        "required": ["belief_id", "created_at"]
       }
     },
     {
@@ -932,7 +1250,8 @@
         "additionalProperties": false,
         "properties": {
           "belief_id": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           }
         },
         "required": [
@@ -941,7 +1260,13 @@
       },
       "output_schema": {
         "type": "object",
-        "additionalProperties": true
+        "additionalProperties": false,
+        "properties": {
+          "belief_id": {"type": "string", "format": "uuid"},
+          "deleted": {"const": true},
+          "already_inactive": {"type": "boolean"}
+        },
+        "required": ["belief_id", "deleted", "already_inactive"]
       }
     },
     {
@@ -953,7 +1278,8 @@
         "additionalProperties": false,
         "properties": {
           "plan_content": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           }
         },
         "required": [
@@ -962,7 +1288,12 @@
       },
       "output_schema": {
         "type": "object",
-        "additionalProperties": true
+        "additionalProperties": false,
+        "properties": {
+          "plan_id": {"type": "string", "format": "uuid"},
+          "created_at": {"type": "string", "format": "date-time"}
+        },
+        "required": ["plan_id", "created_at"]
       }
     },
     {
@@ -977,7 +1308,11 @@
       },
       "output_schema": {
         "type": "object",
-        "additionalProperties": true
+        "additionalProperties": false,
+        "properties": {
+          "plans": {"type": "array", "items": {"$ref": "#/$defs/plan"}}
+        },
+        "required": ["plans"]
       }
     },
     {
@@ -989,7 +1324,8 @@
         "additionalProperties": false,
         "properties": {
           "plan_content": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           },
           "cycle_date": {
             "type": "string",
@@ -1002,7 +1338,12 @@
       },
       "output_schema": {
         "type": "object",
-        "additionalProperties": true
+        "additionalProperties": false,
+        "properties": {
+          "plan_id": {"type": "string", "format": "uuid"},
+          "created_at": {"type": "string", "format": "date-time"}
+        },
+        "required": ["plan_id", "created_at"]
       }
     },
     {
@@ -1014,7 +1355,8 @@
         "additionalProperties": false,
         "properties": {
           "token_id": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           },
           "side": {
             "type": "string",
@@ -1024,7 +1366,8 @@
             ]
           },
             "amount": {
-              "type": "number"
+              "type": "number",
+              "exclusiveMinimum": 0
             },
             "amount_type": {
               "type": "string",
@@ -1035,10 +1378,14 @@
               "enum": ["IOC", "FOK"]
             },
             "limit_price": {
-              "type": "number"
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
             },
             "conviction": {
-            "type": "number"
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
           }
         },
         "required": [
@@ -1048,8 +1395,120 @@
         ]
       },
       "output_schema": {
-        "type": "object",
-        "additionalProperties": true
+        "$defs": {
+          "order_request": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "amount": {"type": "string"},
+              "amount_type": {"type": "string", "enum": ["CASH", "SHARES"]},
+              "requested_shares": {"type": "string"}
+            },
+            "required": ["amount", "amount_type", "requested_shares"]
+          },
+          "order_snapshot": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "snapshot_id": {"type": "string"},
+              "observed_at": {"type": "string", "format": "date-time"}
+            },
+            "required": ["snapshot_id", "observed_at"]
+          },
+          "execution": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "filled_shares": {"type": "string"},
+              "cancelled_shares": {"type": "string"},
+              "average_price": {"type": "string"},
+              "gross_micros": {"type": "integer"},
+              "fee_micros": {"type": "integer"},
+              "cash_delta_micros": {"type": "integer"},
+              "remainder_status": {"type": "string", "enum": ["cancelled", "none"]}
+            },
+            "required": [
+              "filled_shares", "cancelled_shares", "average_price", "gross_micros",
+              "fee_micros", "cash_delta_micros", "remainder_status"
+            ]
+          }
+        },
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "status": {"const": "rejected"},
+              "intent_id": {"type": "string"},
+              "order_id": {"type": "string"},
+              "side": {"type": "string", "enum": ["BUY", "SELL"]},
+              "requested": {"$ref": "#/$defs/order_request"},
+              "portfolio_after": {"$ref": "#/$defs/portfolio_after"},
+              "snapshot": {"$ref": "#/$defs/order_snapshot"},
+              "rejection_code": {
+                "type": "string",
+                "enum": [
+                  "agent_mismatch", "market_not_open", "market_not_tradeable",
+                  "outcome_not_tradeable", "token_mismatch", "look_ahead", "stale_book",
+                  "crossed_book", "required_quote_absent", "invalid_price", "invalid_tick",
+                  "below_minimum_size", "insufficient_cash", "insufficient_shares",
+                  "concentration_limit", "no_liquidity", "fok_not_filled",
+                  "price_limit_not_market"
+                ]
+              },
+              "message": {"type": "string"}
+            },
+            "required": [
+              "status", "intent_id", "order_id", "side", "requested", "portfolio_after",
+              "snapshot", "rejection_code", "message"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "status": {"const": "filled"},
+              "intent_id": {"type": "string"},
+              "order_id": {"type": "string"},
+              "side": {"type": "string", "enum": ["BUY", "SELL"]},
+              "requested": {"$ref": "#/$defs/order_request"},
+              "portfolio_after": {"$ref": "#/$defs/portfolio_after"},
+              "snapshot": {"$ref": "#/$defs/order_snapshot"},
+              "execution": {"$ref": "#/$defs/execution"}
+            },
+            "required": [
+              "status", "intent_id", "order_id", "side", "requested", "portfolio_after",
+              "snapshot", "execution"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "status": {"const": "partial"},
+              "intent_id": {"type": "string"},
+              "order_id": {"type": "string"},
+              "side": {"type": "string", "enum": ["BUY", "SELL"]},
+              "requested": {"$ref": "#/$defs/order_request"},
+              "portfolio_after": {"$ref": "#/$defs/portfolio_after"},
+              "snapshot": {"$ref": "#/$defs/order_snapshot"},
+              "execution": {"$ref": "#/$defs/execution"}
+            },
+            "required": [
+              "status", "intent_id", "order_id", "side", "requested", "portfolio_after",
+              "snapshot", "execution"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "status": {"const": "pending_broker_validation"},
+              "intent_id": {"type": "string"}
+            },
+            "required": ["intent_id", "status"]
+          }
+        ]
       }
     }
   ]

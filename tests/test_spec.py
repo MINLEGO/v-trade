@@ -5,8 +5,31 @@ import re
 import unittest
 from pathlib import Path
 
+from jsonschema import Draft202012Validator
+
 
 class SpecificationTests(unittest.TestCase):
+    def test_all_tool_schemas_compile_and_have_output_contracts(self) -> None:
+        document = json.loads(Path("spec/tool-schemas-v1.json").read_text(encoding="utf-8"))
+        shared_defs = document["$defs"]
+        self.assertEqual(document["schema_version"], "predictionarena-tools-v1")
+        self.assertEqual(len(document["tools"]), 28)
+        for tool in document["tools"]:
+            with self.subTest(name=tool["name"]):
+                self.assertIn("input_schema", tool)
+                self.assertIn("output_schema", tool)
+                for schema_name in ("input_schema", "output_schema"):
+                    schema = dict(tool[schema_name])
+                    schema["$defs"] = {
+                        **shared_defs,
+                        **schema.get("$defs", {}),
+                    }
+                    Draft202012Validator.check_schema(schema)
+                self.assertNotEqual(
+                    tool["output_schema"],
+                    {"type": "object", "additionalProperties": True},
+                )
+
     def test_exactly_28_unique_tool_schemas(self) -> None:
         document = json.loads(Path("spec/tool-schemas-v1.json").read_text(encoding="utf-8"))
         names = [tool["name"] for tool in document["tools"]]
@@ -83,10 +106,10 @@ class SpecificationTests(unittest.TestCase):
         self.assertEqual(properties["max_length"]["default"], 4000)
         self.assertEqual(properties["max_length"]["maximum"], 12000)
         output = tool["output_schema"]
-        self.assertFalse(output["additionalProperties"])
-        self.assertEqual(
-            set(output["required"]), {"title", "url", "published_at", "author"}
-        )
+        self.assertEqual(len(output["oneOf"]), 2)
+        self.assertTrue(all(not branch["additionalProperties"] for branch in output["oneOf"]))
+        self.assertIn("full_text", output["oneOf"][0]["required"])
+        self.assertIn("highlights", output["oneOf"][1]["required"])
 
     def test_prompt_has_no_unresolved_placeholder(self) -> None:
         body = Path("spec/prompt/predictionarena-polymarket-v1.md").read_text(encoding="utf-8")
