@@ -13,7 +13,7 @@ class SpecificationTests(unittest.TestCase):
         document = json.loads(Path("spec/tool-schemas-v1.json").read_text(encoding="utf-8"))
         shared_defs = document["$defs"]
         self.assertEqual(document["schema_version"], "predictionarena-tools-v1")
-        self.assertEqual(len(document["tools"]), 28)
+        self.assertEqual(len(document["tools"]), 27)
         for tool in document["tools"]:
             with self.subTest(name=tool["name"]):
                 self.assertIn("input_schema", tool)
@@ -30,11 +30,11 @@ class SpecificationTests(unittest.TestCase):
                     {"type": "object", "additionalProperties": True},
                 )
 
-    def test_exactly_28_unique_tool_schemas(self) -> None:
+    def test_exactly_27_unique_tool_schemas(self) -> None:
         document = json.loads(Path("spec/tool-schemas-v1.json").read_text(encoding="utf-8"))
         names = [tool["name"] for tool in document["tools"]]
-        self.assertEqual(len(names), 28)
-        self.assertEqual(len(set(names)), 28)
+        self.assertEqual(len(names), 27)
+        self.assertEqual(len(set(names)), 27)
 
     def test_paginated_tools_expose_their_cursor_contract(self) -> None:
         document = json.loads(Path("spec/tool-schemas-v1.json").read_text(encoding="utf-8"))

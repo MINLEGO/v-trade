@@ -1297,25 +1297,6 @@
       }
     },
     {
-      "name": "get_next_cycle_plan",
-      "classification": "inferred",
-      "observed_name": true,
-      "input_schema": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {},
-        "required": []
-      },
-      "output_schema": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "plans": {"type": "array", "items": {"$ref": "#/$defs/plan"}}
-        },
-        "required": ["plans"]
-      }
-    },
-    {
       "name": "create_next_cycle_plan",
       "classification": "inferred",
       "observed_name": true,

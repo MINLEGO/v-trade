@@ -1,6 +1,6 @@
 # PredictionArena tool compatibility matrix
 
-All 28 names below are preserved exactly at the AI-facing boundary. Argument keys are
+All 27 names below are preserved exactly at the AI-facing boundary. Argument keys are
 trace evidence from the 50-cycle sample; types, optionality, defaults, bounds, response
 envelopes and authorization are V-Trade `inferred` contracts unless a later primary
 source establishes them.
@@ -32,7 +32,6 @@ source establishes them.
 | `create_general_belief` | knowledge | belief_content, category, confidence, evidence | calling agent only |
 | `delete_general_belief` | knowledge | belief_id | calling agent only; deactivate, never erase |
 | `create_long_term_plan` | knowledge | plan_content | calling agent only |
-| `get_next_cycle_plan` | knowledge | none | calling agent only |
 | `create_next_cycle_plan` | knowledge | plan_content, cycle_date | calling agent only |
 | `place_market_order` | trading | token_id, side, amount, conviction | calling agent, frozen snapshot, deterministic validation |
 

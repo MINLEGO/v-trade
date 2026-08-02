@@ -150,8 +150,8 @@ class ProductionToolRegistry:
             }
             self._output_schemas[name] = _attach_defs(output_schema, shared_defs)
         expected = set(self._handlers())
-        if set(self._schemas) != expected or len(expected) != 28:
-            raise ValueError("production handlers must exactly match all 28 frozen tool names")
+        if set(self._schemas) != expected or len(expected) != 27:
+            raise ValueError("production handlers must exactly match all 27 frozen tool names")
 
     def tool_specs(self) -> tuple[ToolSpec, ...]:
         handlers = self._handlers()
@@ -223,7 +223,6 @@ class ProductionToolRegistry:
             "create_general_belief": self._create_belief,
             "delete_general_belief": self._delete_belief,
             "create_long_term_plan": self._create_long_term_plan,
-            "get_next_cycle_plan": self._get_next_cycle_plan,
             "create_next_cycle_plan": self._create_next_cycle_plan,
             "place_market_order": self._place_market_order,
         }
@@ -779,12 +778,6 @@ class ProductionToolRegistry:
 
     def _create_long_term_plan(self, arguments: JsonObject) -> JsonObject:
         return self._create_plan(PlanType.LONG_TERM, arguments, None)
-
-    def _get_next_cycle_plan(self, _arguments: JsonObject) -> JsonObject:
-        rows = self._context.memory.read_plans(
-            actor_id=self._context.claim.agent_id, target_agent_id=self._context.claim.agent_id
-        )
-        return {"plans": [row for row in rows if row.get("plan_type") == PlanType.NEXT_CYCLE.value]}
 
     def _create_next_cycle_plan(self, arguments: JsonObject) -> JsonObject:
         due = arguments.get("cycle_date")
