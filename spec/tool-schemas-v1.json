@@ -173,6 +173,7 @@
   "tools": [
     {
       "name": "get_newest_markets",
+      "description": "List open, tradeable markets created within the last `hours_back` hours of the current cycle cutoff.\n\nUse this tool to identify newly listed individual markets that may not yet have been widely researched or efficiently priced.\n\nResults will be ordered primarily by creation time from newest to oldest, with market ID as a secondary tie-breaker.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -211,6 +212,7 @@
     },
     {
       "name": "discover_by_time_remaining",
+      "description": "Find open, tradeable markets whose `closes_at` time is between `hours_min` and `hours_max` hours after the current cycle cutoff. Use this tool to locate markets approaching closure or markets within a specific trading horizon.\n\nResults are ordered by remaining time ascending, with the soonest-closing markets first.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -248,6 +250,7 @@
     },
     {
       "name": "discover_events",
+      "description": "Search for groups of related markets by event. The optional(s) `keyword` are matched case-insensitively against market questions and market metadata. Markets are grouped by `event_id`, and event groups are ordered by their aggregated 24-hour volume.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -292,6 +295,7 @@
     },
     {
       "name": "list_top_events",
+      "description": "List groups of related markets ordered by their aggregated total historical volume. Use this tool to identify the largest or most established events in the frozen market universe.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -325,6 +329,7 @@
     },
     {
       "name": "get_market_details",
+      "description": "Retrieve the complete frozen record for one market as of the current cycle cutoff. Supply exactly one of `market_ref`, `market_id`, or `slug`. Prefer the `market_ref` returned by discovery tools when available.\n\nThe result includes the market question, official resolution rules, opening and closing times, status, tradeability, volume, liquidity, metadata, and all outcomes with their venue token identifiers. Treat the resolution rules and outcome mapping as authoritative for side selection.\n\nPrices contained in market metadata or outcomes are indicative snapshots, not executable quotes. Call `get_orderbook` before trading.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -392,6 +397,7 @@
     },
     {
       "name": "web_search",
+      "description": "Search the external web for current evidence relevant to an event, market thesis, probability estimate, resolution rule, forecast, or catalyst. The tool returns up to ten search results with available titles, snippets, URLs and publication timestamps.\n\nYou can balance the number of result and their quality using `num_results` and `max_highlight_length`. Note that to avoid truncated results, max_highlight_length × num_results must not exceed 15000 character and will return an error otherwise. The optional `start_published_date` and `end_published_date` arguments define the publication-date range. Each accepts a non-negative number of days back from now or a `YYYY-MM-DD` date; they default to 30 and 0 respectively.\n\nCheck the publication date and ensure that evidence was available before the cycle’s data cutoff. Prefer primary or authoritative sources, distinguish independent sources from repeated reporting, and actively search for evidence that could disconfirm the thesis.\n\nSearch-result snippets may be incomplete or misleading. When the information is critical, try using `fetch_webpage` to retrieve more details and never let external reporting override the market’s official resolution rules.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -402,7 +408,7 @@
             "type": "string",
             "minLength": 1
           },
-          "": {
+          "max_highlight_length": {
             "type": "integer",
             "minimum": 1,
             "maximum": 15000,
@@ -486,6 +492,7 @@
     },
     {
       "name": "fetch_webpage",
+      "description": "Retrieve the readable content of a specific public webpage URL. Use this tool when a search result, market rule, official announcement, report, dataset page or primary source must be inspected directly. Prefer the original or authoritative source when a search result points to one.\n\nOptionally set `result_type` to `full_text` for the full page text or `highlights` for focused excerpts; When using `highlights`, `highlight_query` can guide the snippet selection; it must be omitted or set to `null` for `full_text`. `max_length` defaults to 4000 characters and cannot exceed 12000.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -556,6 +563,7 @@
     },
     {
       "name": "get_orderbook",
+      "description": "Retrieve the latest valid frozen order-book snapshot for one outcome as of the current cycle cutoff. Supply exactly one of `venue_token_id`, `token_id`, or `outcome_id`.\n\nThe result contains up to five bid and ask levels, the best bid, the best ask, observation timestamps and the snapshot identifier. Use asks to evaluate a BUY and bids to evaluate a SELL. Inspect the displayed depth rather than assuming the full requested size can execute at the best price.\n\nThe tool rejects missing, causally invalid or stale books. A missing or rejected result means that executable liquidity cannot currently be verified and the outcome should not be traded unless a later valid book is obtained.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -619,6 +627,7 @@
     },
     {
       "name": "discover_by_price_volatility",
+      "description": "Find open, tradeable markets whose recorded price volatility is at least `min_volatility`. Volatility is currently defined as the larger absolute value of the recorded one-hour and one-day price changes.\n\nResults are ordered by volatility magnitude descending, then by total market volume.\n\nUse this tool to identify markets with recent repricing or potential catalysts.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -652,6 +661,7 @@
     },
     {
       "name": "get_event_markets",
+      "description": "Retrieve the open, tradeable markets associated with one event. Supply the required `event_id`, which may match the internal event identifier or the venue event identifier.\n\nMarkets are ordered primarily by total historical volume. Use this tool after `discover_events`, `list_top_events` or `get_newest_events` to compare related outcomes and identify mutually related or correlated positions.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -683,6 +693,7 @@
     },
     {
       "name": "get_newest_events",
+      "description": "List event groups ordered by the creation time of their newest associated market. Use this tool to identify newly added events that may not yet have been widely researched or efficiently priced.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -712,6 +723,7 @@
     },
     {
       "name": "get_all_active_markets",
+      "description": "List all open and tradeable markets included in the current cycle’s frozen universe.\n\nResults are ordered primarily by total historical volume and liquidity. Use this tool for exhaustive or broad discovery when narrower discovery tools are not appropriate.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -745,6 +757,7 @@
     },
     {
       "name": "discover_by_volume_trend",
+      "description": "Find open, tradeable markets whose volume trend is classified as `increasing` or `decreasing`. The current classification compares the market’s 24-hour volume with one seventh of its recorded one-week volume.\n\nA market is classified as increasing when its latest 24-hour volume is at least its average daily volume over the recorded week; otherwise it is classified as decreasing.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -779,6 +792,7 @@
     },
     {
       "name": "discover_by_competitive_score",
+      "description": "Find open, tradeable markets whose metadata `competitive` score is at least `min_score`.\n\nThe competitive score is supplied by the market-data source and should be treated as a discovery heuristic rather than a probability or expected-value estimate. Results are ordered by competitive score descending, then by total market volume.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -812,6 +826,7 @@
     },
     {
       "name": "discover_by_date_range",
+      "description": "Find open, tradeable markets whose `closes_at` calendar date falls within the inclusive `start_date` and `end_date` range. Dates use the `YYYY-MM-DD` format. Either boundary may be omitted.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -849,6 +864,7 @@
     },
     {
       "name": "search_tags",
+      "description": "Search open, tradeable markets using a case-insensitive text query over their associated tags. Use this tool to locate markets associated with a topic, category, label or tag that may not be easy to find through event names alone.\n\nResults are ordered primarily by total market volume. Returned cards are summaries and must be followed by `get_market_details` and, when trading, `get_orderbook`.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -888,6 +904,7 @@
     },
     {
       "name": "get_balance",
+      "description": "Return the calling agent’s current cash ledger balance and portfolio version. `cash_micros` is expressed in millionths of a dollar.\n\nThis result does not include the market value of open positions, total account value, unrealized profit or loss, or portfolio concentration. Use `get_portfolio` to inspect positions.\n\nAfter calling `place_market_order`, prefer the `portfolio_after` state returned by that order result because it reflects the immediate post-execution state.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -908,6 +925,7 @@
     },
     {
       "name": "get_portfolio",
+      "description": "Retrieve the calling agent’s positive-share positions from an immutable portfolio snapshot associated with the current agent cycle and portfolio version. Each position includes market and outcome identifiers, the market question, share quantity, average cost, cost basis, realized P&L and last update time.\n\nThe result does not provide a current executable exit price or unrealized P&L. Use the position’s venue token identifier with `get_orderbook` to estimate liquidation value and exit liquidity.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -969,6 +987,7 @@
     },
     {
       "name": "get_closed_trades",
+      "description": "Return positions that were fully closed through SELL executions, ordered from newest to oldest. Each record aggregates the complete position lifecycle, including entry and exit quantities, average prices, fees, realized P&L, and opening and closing times.\n\nPartially sold positions are not included until their remaining shares reach zero. Positions closed through market settlement are returned separately by get_settlements.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -1027,6 +1046,7 @@
     },
     {
       "name": "get_settlements",
+      "description": "Return the calling agent’s most recent settled position records, ordered from newest to oldest. Each record includes the settled share quantity, payout, realized P&L, settlement time, market question, winning outcome (nullable) and the outcome chosen by the agent.\n\nUse this tool to verify that an outcome has been settled and to distinguish realized settlement results from unrealized position value. Settlement P&L is authoritative for completed positions.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -1077,6 +1097,7 @@
     },
     {
       "name": "get_general_beliefs",
+      "description": "Retrieve stored beliefs belonging to the calling agent. By default, only active beliefs are returned. Set `include_inactive` to true when reviewing historical, superseded or deleted beliefs.\n\nBeliefs may concern a specific event, general trading strategy, market sentiment, market structure or risk management. Treat them as fallible historical conclusions rather than current facts. Verify time-sensitive beliefs against current evidence before using them.\n\nUse this tool periodically to identify stale, duplicated or conflicting beliefs. Delete beliefs that are no longer supported rather than allowing contradictory memory to accumulate.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -1115,6 +1136,7 @@
     },
     {
       "name": "search_general_beliefs",
+      "description": "Search the calling agent’s beliefs using optionals case-insensitive `keyword` substrings and an optional exact `category`. Categories are `event_analysis`, `trading_strategy`, `market_sentiment`, `market_structure` and `risk_assessment`.\n\nUse this tool when only a subset of memory is relevant to the current market or decision. An empty keyword and category return the available beliefs up to the selected limit, restricted to active beliefs by default.\n\nWhen `include_inactive` is true, the search also covers inactive history. It does not search evidence contents or semantic similarity, and a missing result does not prove that the agent has never stored a related belief.\n\nResults are ordered newest first and may be paginated. If so, make sure to keep `keyword`, `category` and `include_inactive` unchanged when following pagination.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -1175,6 +1197,7 @@
     },
     {
       "name": "create_general_belief",
+      "description": "Store a durable belief or learned conclusion for use in later cycles. Supply concise `belief_content`, one valid category and a `confidence` value from 0 to 1 representing confidence in the claim. You may also provide an optional `evidence` list containing concise source references or supporting observations.\n\nUse this tool for information expected to remain useful beyond the current cycle, including event analysis, strategy lessons, market-structure observations and risk-management conclusions. Do not store temporary prices, balances, execution status or facts that will quickly become stale.\n\nThis tool creates a new belief rather than updating an existing one. Before creating a belief, check for duplicates or conflicts. Delete a superseded belief and create a corrected replacement when necessary.\n\nEvidence is stored with the belief for later review; it is not searched by `search_general_beliefs`. The tool does not accept sample size, expiration date, probability range or explicit invalidation conditions.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -1227,6 +1250,7 @@
     },
     {
       "name": "delete_general_belief",
+      "description": "Deactivate one belief belonging to the calling agent by its `belief_id`. Use this tool when a belief is stale, duplicated, contradicted by stronger evidence or replaced by a more accurate formulation.\n\nDeletion is a soft deactivation for audit purposes; the historical record is retained and may still be retrieved with `get_general_beliefs` or `search_general_beliefs` using `include_inactive: true`.\n\nThis tool does not provide a way to reactivate a deactivated belief, and deactivated beliefs may be completely deleted in the future. Create a new corrected belief when the underlying conclusion changes.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -1255,6 +1279,7 @@
     },
     {
       "name": "create_long_term_plan",
+      "description": "Replace the calling agent’s active long-term trading plan. Use the plan to store durable portfolio objectives, research priorities, strategic constraints, risk-management intentions and the most important lessons that should guide multiple future cycles.\n\nCreating a new long-term plan supersedes the previous active long-term plan. Write a coherent replacement rather than an incremental fragment, because only the latest active plan should be treated as current.\n\nDo not include current balances, prices or position quantities unless they are clearly timestamped and necessary for context. Current account and tool results remain authoritative over plan text.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -1282,6 +1307,7 @@
     },
     {
       "name": "create_next_cycle_plan",
+      "description": "Replace the plan that will be supplied to the agent at the beginning of its next cycle.\n\nUse this tool near the end of the current cycle to preserve concrete follow-up actions, catalysts to monitor, positions to reassess, unresolved research, deadlines and explicit invalidation conditions. If the next cycle plan is not replaced, the agent will receive the same plan as this cycle.\n\nOnly one next-cycle plan exists. Calling this tool again during the same cycle replaces the previously created next-cycle plan; it does not append another plan.\n\nWrite the complete replacement plan rather than an incremental update. Do not repeat information already stored as durable general beliefs or long-term strategy unless it is directly relevant to the next cycle.\n\nThe optional cycle_date is descriptive scheduling metadata. It does not schedule the agent or guarantee execution on that date.Except for maintenance or other exceptional circumstances, the period between each cycle is 1 hour.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -1313,6 +1339,7 @@
     },
     {
       "name": "place_market_order",
+      "description": "Submit and immediately evaluate a paper-market order against the current cycle’s frozen order book. `token_id` must be the venue token identifier for the exact outcome being bought or sold.\n\nFor BUY orders, `amount_type` defaults to `CASH`, meaning `amount` is a dollar budget. BUY orders may instead use `SHARES`. For SELL orders, `amount_type` defaults to `SHARES`; SELL with `CASH` is not supported.\n\n`time_in_force` defaults to `IOC`:\n\n* `IOC` executes available eligible liquidity immediately and cancels any unfilled remainder.\n* `FOK` executes only if the complete requested quantity can be filled under the order constraints; otherwise it is rejected.\n\nThe optional `limit_price` restricts execution to acceptable displayed prices between 0 and 1. The optional `conviction` value is a 0-to-1 audit value; it does not replace an explicit probability, expected-value or risk analysis.\n\nBefore calling this tool:\n\n1. retrieve the complete market details and resolution rules;\n2. verify the exact YES/NO outcome and token;\n3. retrieve the current frozen order book;\n4. calculate edge and expected P&L using executable depth;\n5. confirm available cash or shares;\n6. check existing exposure and risk limits.\n\nThe result status is `rejected`, `filled`, `partial`, or `pending_broker_validation`. A pending result records the order intent but does not establish that any execution occurred; do not treat it as filled. For `rejected`, inspect `rejection_code`, `message`, and `portfolio_after`. For `filled` or `partial`, inspect `execution.filled_shares`, `execution.cancelled_shares`, `execution.average_price`, `execution.gross_micros`, `execution.fee_micros`, `execution.cash_delta_micros`, `execution.remainder_status`, and `portfolio_after.affected_position`.\n\nNever assume that submitting an order means it executed. After a rejection or partial fill, recalculate cash, exposure, remaining edge and liquidity before deciding whether to submit another order. Do not retry unchanged orders repeatedly.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {

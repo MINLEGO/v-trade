@@ -210,6 +210,15 @@ class ProductionToolRegistryTests(unittest.TestCase):
             tools["get_balance"].schema["function"]["parameters"]["type"], "object"
         )
 
+    def test_registry_uses_descriptions_from_schema_artifact(self) -> None:
+        document = json.loads(Path("spec/tool-schemas-v1.json").read_text(encoding="utf-8"))
+        expected = {row["name"]: row["description"] for row in document["tools"]}
+        actual = {
+            tool.name: tool.schema["function"]["description"]
+            for tool in ProductionToolRegistry(_context(_Cursor())).tool_specs()
+        }
+        self.assertEqual(actual, expected)
+
     def test_web_search_forwards_all_public_options_to_exa(self) -> None:
         exa = _Exa()
         tools = {

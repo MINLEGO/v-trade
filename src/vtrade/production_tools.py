@@ -134,6 +134,9 @@ class ProductionToolRegistry:
             if not isinstance(row, dict) or not isinstance(row.get("name"), str):
                 raise ValueError("tool schema row is malformed")
             name = str(row["name"])
+            description = row.get("description")
+            if not isinstance(description, str) or not description.strip():
+                raise ValueError(f"tool {name} lacks description")
             input_schema = row.get("input_schema")
             output_schema = row.get("output_schema")
             if not isinstance(input_schema, dict):
@@ -144,7 +147,7 @@ class ProductionToolRegistry:
                 "type": "function",
                 "function": {
                     "name": name,
-                    "description": f"V-Trade frozen provider-neutral {name} tool.",
+                    "description": description,
                     "parameters": input_schema,
                 },
             }
