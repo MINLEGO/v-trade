@@ -159,6 +159,8 @@ def _context(
     *,
     cutoff=NOW,
     maximum_default_result_tokens: int = 4_000,
+    maximum_book_age: timedelta = timedelta(minutes=5),
+    maximum_order_book_depth: int = 5,
     memory: _Memory | None = None,
     exa: _Exa | None = None,
 ) -> ToolContext:
@@ -184,6 +186,8 @@ def _context(
         (market_snapshot_id,),
         (book_snapshot_id,),
         maximum_default_result_tokens=maximum_default_result_tokens,
+        maximum_book_age=maximum_book_age,
+        maximum_order_book_depth=maximum_order_book_depth,
     )
 
 
@@ -297,6 +301,21 @@ class ProductionToolRegistryTests(unittest.TestCase):
         self.assertEqual(len(params[1]), 1)
         self.assertEqual(params[2], NOW)
         self.assertIn("obs.id = ANY(%s::uuid[])", query)
+
+    def test_orderbook_uses_configured_depth(self) -> None:
+        cursor = _Cursor()
+        tools = {
+            tool.name: tool
+            for tool in ProductionToolRegistry(
+                _context(cursor, maximum_order_book_depth=1)
+            ).tool_specs()
+        }
+
+        output = tools["get_orderbook"].handler({"token_id": "token"})
+
+        self.assertEqual(output["depth"], 1)
+        self.assertEqual(len(output["bids"]), 1)
+        self.assertEqual(len(output["asks"]), 1)
 
     def test_closed_trades_aggregate_a_sell_to_zero(self) -> None:
         position_id, market_id, outcome_id = (uuid.uuid4() for _ in range(3))

@@ -41,10 +41,12 @@ from vtrade.worker import (
     ProductionCompositionUnavailable,
     ProductionHarnessPort,
     ProductionWorker,
-    _positive_integer,
     _harness_artifact_registrations,
     _liquidity_time_in_force,
+    _maximum_order_book_age,
+    _order_book_depth,
     _paper_policy,
+    _positive_integer,
     _PostgresTradingState,
     run_worker,
 )
@@ -115,6 +117,16 @@ class WorkerFailClosedTests(unittest.TestCase):
             _liquidity_time_in_force({"execution": {"liquidity_time_in_force": "IOC"}}),
             LiquidityTimeInForce.IOC,
         )
+        self.assertEqual(
+            _maximum_order_book_age(
+                {
+                    "execution": {"maximum_order_book_age_seconds": 300},
+                    "limits": {"maximum_archived_bid_age_seconds": 120},
+                }
+            ),
+            timedelta(seconds=300),
+        )
+        self.assertEqual(_order_book_depth({"execution": {"order_book_depth": 5}}), 5)
 
     def test_production_broker_port_uses_configured_policy_and_tif(self) -> None:
         port = ProductionBrokerPort(

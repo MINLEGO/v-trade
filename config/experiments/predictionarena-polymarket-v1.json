@@ -11,7 +11,7 @@
   "artifacts": {
     "prompt": {
       "path": "spec/prompt/predictionarena-polymarket-v1.md",
-        "sha256": "3c0610980977d3fee747b62d35693b00e675579f2842da05daddb732bd91b472",
+        "sha256": "6ac731802e160d02ade16e7076ebfdf28629e086d010c7cf0b3abd979efdae0a",
       "classification": "inferred"
     },
     "tool_schemas": {

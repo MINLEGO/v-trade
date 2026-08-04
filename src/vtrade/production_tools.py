@@ -61,6 +61,7 @@ class ToolContext:
     order_book_snapshot_ids: tuple[uuid.UUID, ...] = ()
     maximum_default_result_tokens: int = 4_000
     maximum_book_age: timedelta = timedelta(minutes=5)
+    maximum_order_book_depth: int = 5
     immediate_order_executor: Callable[
         [MarketOrderSubmission],
         ExecutionReceipt,
@@ -73,6 +74,12 @@ class ToolContext:
             raise ToolContextUnavailable("tool result ceiling must be positive")
         if self.maximum_book_age < timedelta(0):
             raise ToolContextUnavailable("order-book age ceiling cannot be negative")
+        if (
+            not isinstance(self.maximum_order_book_depth, int)
+            or isinstance(self.maximum_order_book_depth, bool)
+            or self.maximum_order_book_depth <= 0
+        ):
+            raise ToolContextUnavailable("order-book depth must be a positive integer")
 
     @property
     def cutoff(self) -> datetime:
@@ -509,19 +516,22 @@ class ProductionToolRegistry:
             if source_created_at > observed_at or source_created_at > self._context.cutoff:
                 raise ToolContextUnavailable("frozen order book violates cutoff causality")
         if self._context.cutoff - observed_at > self._context.maximum_book_age:
-            raise ToolContextUnavailable("frozen order book is older than 300 seconds")
+            maximum_age = int(self._context.maximum_book_age.total_seconds())
+            raise ToolContextUnavailable(
+                f"frozen order book is older than {maximum_age} seconds"
+            )
         return {
             "as_of": self._context.cutoff.isoformat(),
             "snapshot_id": str(row[0]),
             "observed_at": observed_at.isoformat(),
             "source_created_at": source_created_at.isoformat() if source_created_at else None,
             "lookup": {lookup_key: lookup_value},
-            "bids": _book_levels(row[3]),
-            "asks": _book_levels(row[4]),
+            "bids": _book_levels(row[3], self._context.maximum_order_book_depth),
+            "asks": _book_levels(row[4], self._context.maximum_order_book_depth),
             "best_bid": str(row[5]) if row[5] is not None else None,
             "best_ask": str(row[6]) if row[6] is not None else None,
             "raw_sha256": str(row[7]),
-            "depth": 5,
+            "depth": self._context.maximum_order_book_depth,
         }
 
     def _get_balance(self, _arguments: JsonObject) -> JsonObject:
@@ -1626,6 +1636,8 @@ def production_tool_context(
     frozen: Mapping[str, object],
     clock: Callable[[], datetime],
     maximum_beliefs_per_agent: int = 100,
+    maximum_book_age: timedelta = timedelta(minutes=5),
+    maximum_order_book_depth: int = 5,
     immediate_order_executor: Callable[
         [MarketOrderSubmission],
         ExecutionReceipt,
@@ -1649,6 +1661,8 @@ def production_tool_context(
         clock,
         market_snapshot_ids,
         order_book_snapshot_ids,
+        maximum_book_age=maximum_book_age,
+        maximum_order_book_depth=maximum_order_book_depth,
         immediate_order_executor=immediate_order_executor,
     )
 

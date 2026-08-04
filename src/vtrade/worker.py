@@ -324,6 +324,8 @@ class ProductionHarnessPort:
         schema_path: str | Path,
         connect: _Connect | None = None,
         maximum_beliefs_per_agent: int = 100,
+        maximum_book_age: timedelta = timedelta(minutes=5),
+        maximum_order_book_depth: int = 5,
         immediate_order_executor: MarketOrderExecutor | None = None,
     ) -> None:
         self._database_url = database_url
@@ -342,6 +344,8 @@ class ProductionHarnessPort:
         ):
             raise ValueError("maximum_beliefs_per_agent must be a positive integer")
         self._maximum_beliefs_per_agent = maximum_beliefs_per_agent
+        self._maximum_book_age = maximum_book_age
+        self._maximum_order_book_depth = maximum_order_book_depth
         self._repository = PostgresHarnessRepository(database_url, connect=connect)
         self._immediate_order_executor = immediate_order_executor
 
@@ -360,6 +364,8 @@ class ProductionHarnessPort:
             frozen=frozen,
             clock=self._clock,
             maximum_beliefs_per_agent=self._maximum_beliefs_per_agent,
+            maximum_book_age=self._maximum_book_age,
+            maximum_order_book_depth=self._maximum_order_book_depth,
             immediate_order_executor=(
                 (lambda submission: immediate_executor.submit_and_execute(
                     claim, frozen, submission
@@ -1042,6 +1048,8 @@ class ProductionBrokerPort:
         maximum_bid_age: timedelta,
         paper_policy: PaperPolicy,
         liquidity_time_in_force: LiquidityTimeInForce,
+        maximum_valuation_bid_age: timedelta | None = None,
+        maximum_book_depth: int = 5,
         connect: _Connect | None = None,
     ) -> None:
         self._database_url = database_url
@@ -1054,7 +1062,10 @@ class ProductionBrokerPort:
             policy=paper_policy,
             maximum_market_cost_basis_fraction=maximum_market_fraction,
             maximum_book_age=maximum_bid_age,
-            maximum_valuation_bid_age=maximum_bid_age,
+            maximum_book_depth=maximum_book_depth,
+            maximum_valuation_bid_age=(
+                maximum_bid_age if maximum_valuation_bid_age is None else maximum_valuation_bid_age
+            ),
         )
 
     def execute(
@@ -1427,13 +1438,15 @@ def build_production_worker(
     )
     market_repository = PostgresMarketDataRepository(database_url)
     repository = PostgresRuntimeRepository(database_url)
-    maximum_bid_age = timedelta(
+    maximum_valuation_bid_age = timedelta(
         seconds=_integer(config.raw["limits"], "maximum_archived_bid_age_seconds")
     )
+    maximum_order_book_age = _maximum_order_book_age(config.raw)
+    maximum_order_book_depth = _order_book_depth(config.raw)
     settlement_valuation = ProductionSettlementValuationPort(
         database_url,
         clock=clock,
-        maximum_bid_age=maximum_bid_age,
+        maximum_bid_age=maximum_valuation_bid_age,
     )
     immediate_order_executor = MarketOrderExecutor(
         _PostgresTradingState(database_url),
@@ -1444,8 +1457,9 @@ def build_production_worker(
             maximum_market_cost_basis_fraction=Decimal(
                 str(config.raw["limits"]["maximum_market_cost_basis_fraction"])
             ),
-            maximum_book_age=maximum_bid_age,
-            maximum_valuation_bid_age=maximum_bid_age,
+            maximum_book_age=maximum_order_book_age,
+            maximum_book_depth=maximum_order_book_depth,
+            maximum_valuation_bid_age=maximum_valuation_bid_age,
         ),
         clock=clock,
     )
@@ -1468,6 +1482,8 @@ def build_production_worker(
             monotonic=monotonic,
             schema_path=str(config.raw["artifacts"]["tool_schemas"]["path"]),
             maximum_beliefs_per_agent=maximum_beliefs_per_agent,
+            maximum_book_age=maximum_order_book_age,
+            maximum_order_book_depth=maximum_order_book_depth,
             immediate_order_executor=immediate_order_executor,
         ),
         broker=ProductionBrokerPort(
@@ -1477,14 +1493,16 @@ def build_production_worker(
             maximum_market_fraction=Decimal(
                 str(config.raw["limits"]["maximum_market_cost_basis_fraction"])
             ),
-            maximum_bid_age=maximum_bid_age,
+            maximum_bid_age=maximum_order_book_age,
+            maximum_valuation_bid_age=maximum_valuation_bid_age,
+            maximum_book_depth=maximum_order_book_depth,
             paper_policy=_paper_policy(config.raw),
             liquidity_time_in_force=_liquidity_time_in_force(config.raw),
         ),
         settlement_valuation=settlement_valuation,
         clock=clock,
         alert_policy=RuntimeAlertPolicy(
-            maximum_data_age=maximum_bid_age,
+            maximum_data_age=maximum_valuation_bid_age,
             monthly_budget_micros=_integer(
                 config.raw["limits"], "monthly_external_api_budget_micros"
             ),
@@ -1588,6 +1606,37 @@ def _liquidity_time_in_force(raw: Mapping[str, Any]) -> LiquidityTimeInForce:
         raise ProductionCompositionUnavailable(
             f"unsupported liquidity time in force: {value}"
         ) from exc
+
+
+def _maximum_order_book_age(raw: Mapping[str, Any]) -> timedelta:
+    execution = raw.get("execution")
+    limits = raw.get("limits")
+    if not isinstance(execution, Mapping) or not isinstance(limits, Mapping):
+        raise ProductionCompositionUnavailable(
+            "experiment execution and limits configuration are missing"
+        )
+    value = execution.get(
+        "maximum_order_book_age_seconds",
+        limits.get("maximum_archived_bid_age_seconds"),
+    )
+    return timedelta(
+        seconds=_positive_integer(
+            {"maximum_order_book_age_seconds": value},
+            "maximum_order_book_age_seconds",
+        )
+    )
+
+
+def _order_book_depth(raw: Mapping[str, Any]) -> int:
+    execution = raw.get("execution")
+    if not isinstance(execution, Mapping):
+        raise ProductionCompositionUnavailable(
+            "experiment execution configuration is missing"
+        )
+    return _positive_integer(
+        {"order_book_depth": execution.get("order_book_depth", 5)},
+        "order_book_depth",
+    )
 
 
 def _verify_frozen_artifact(raw: Mapping[str, object], name: str) -> None:

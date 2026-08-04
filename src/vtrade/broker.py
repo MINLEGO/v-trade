@@ -341,6 +341,7 @@ class PredictionArenaPaperBroker:
         policy: PaperPolicy = PaperPolicy.PREDICTIONARENA_UNCONDITIONAL,
         maximum_market_cost_basis_fraction: Decimal = Decimal("0.15"),
         maximum_book_age: timedelta = timedelta(minutes=5),
+        maximum_book_depth: int = 5,
         maximum_valuation_bid_age: timedelta = timedelta(minutes=5),
         no_bid_valuation_policy: NoBidValuationPolicy = NoBidValuationPolicy.LAST_KNOWN_BID,
     ) -> None:
@@ -348,11 +349,18 @@ class PredictionArenaPaperBroker:
             raise ValueError("market concentration fraction must be in (0, 1]")
         if maximum_book_age < timedelta(0):
             raise ValueError("maximum book age cannot be negative")
+        if (
+            not isinstance(maximum_book_depth, int)
+            or isinstance(maximum_book_depth, bool)
+            or maximum_book_depth <= 0
+        ):
+            raise ValueError("maximum book depth must be a positive integer")
         if maximum_valuation_bid_age < timedelta(0):
             raise ValueError("maximum valuation bid age cannot be negative")
         self.policy = policy
         self.maximum_market_cost_basis_fraction = maximum_market_cost_basis_fraction
         self.maximum_book_age = maximum_book_age
+        self.maximum_book_depth = maximum_book_depth
         self.maximum_valuation_bid_age = maximum_valuation_bid_age
         self.no_bid_valuation_policy = no_bid_valuation_policy
 
@@ -493,7 +501,7 @@ class PredictionArenaPaperBroker:
         levels = (
             required_levels[:1]
             if self.policy is PaperPolicy.PREDICTIONARENA_UNCONDITIONAL
-            else required_levels
+            else required_levels[: self.maximum_book_depth]
         )
         if any(
             not level.price.is_finite()
@@ -524,6 +532,8 @@ class PredictionArenaPaperBroker:
             return ()
         if self.policy is PaperPolicy.PREDICTIONARENA_UNCONDITIONAL:
             ordered = ordered[:1]
+        else:
+            ordered = ordered[: self.maximum_book_depth]
         remaining = order.shares
         remaining_cash = (
             int(order.cash_budget_micros) if order.cash_budget_micros is not None else None

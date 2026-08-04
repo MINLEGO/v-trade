@@ -163,6 +163,20 @@ class BrokerScenarioTests(unittest.TestCase):
         self.assertEqual(result.status, ExecutionStatus.PARTIAL)
         self.assertEqual([fill.shares for fill in result.fills], [Decimal(1), Decimal(2)])
 
+    def test_liquidity_aware_respects_configured_book_depth(self) -> None:
+        snapshot = book(
+            asks=(("0.40", "1"), ("0.41", "1"), ("0.42", "1")),
+        )
+        broker = PredictionArenaPaperBroker(
+            policy=PaperPolicy.LIQUIDITY_AWARE,
+            maximum_book_depth=2,
+        )
+
+        result = self.place(order(shares="5"), snapshot=snapshot, broker=broker)
+
+        self.assertEqual(result.status, ExecutionStatus.PARTIAL)
+        self.assertEqual([fill.shares for fill in result.fills], [Decimal(1), Decimal(1)])
+
     def test_cash_sized_buy_never_exceeds_budget_including_fees(self) -> None:
         broker = PredictionArenaPaperBroker(policy=PaperPolicy.LIQUIDITY_AWARE)
         paper_order = replace(

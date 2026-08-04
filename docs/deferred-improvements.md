@@ -46,8 +46,6 @@ must not be simulated with mocks when it is scheduled.
   provider upload and durable artifact-inventory registration. During recovery of an
   already completed harness run, also recover exact stored byte lengths instead of the
   conservative zero-byte placeholder used only for storage projections.
-- Run the `liquidity_aware` paper policy as a separately labelled experiment; never mix
-  it into the `predictionarena_unconditional` baseline ranking.
 - Replace the conservative provider-neutral byte bound with verified provider-native
   token accounting if stable tokenizer contracts become available. Evaluate `tiktoken`
   for this purpose, while first verifying that its encoding is representative enough

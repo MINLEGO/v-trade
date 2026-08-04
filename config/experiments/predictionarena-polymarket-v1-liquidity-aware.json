@@ -14,7 +14,7 @@
   "artifacts": {
     "prompt": {
       "path": "spec/prompt/predictionarena-polymarket-v1.md",
-      "sha256": "3c0610980977d3fee747b62d35693b00e675579f2842da05daddb732bd91b472",
+      "sha256": "6ac731802e160d02ade16e7076ebfdf28629e086d010c7cf0b3abd979efdae0a",
       "classification": "inferred"
     },
     "tool_schemas": {
@@ -31,6 +31,8 @@
     "venue.execution": "vtrade_deviation",
     "risk.max_market_cost_basis_fraction": "documented",
     "execution.paper_fill_rule": "vtrade_deviation",
+    "execution.order_book_depth": "vtrade_deviation",
+    "execution.maximum_order_book_age_seconds": "vtrade_deviation",
     "prompt.role_separation": "inferred",
     "discovery.policy": "inferred"
   },
@@ -60,6 +62,8 @@
     "liquidity_time_in_force": "IOC",
     "buy_fill_price": "walk_asks",
     "sell_fill_price": "walk_bids",
+    "order_book_depth": 5,
+    "maximum_order_book_age_seconds": 300,
     "counterparty_required": true,
     "absent_required_quote": "reject",
     "insufficient_depth": "partial_fill"
@@ -162,7 +166,7 @@
     "paper_fill_rule": {
       "status": "resolved",
       "required": true,
-      "policy": "walk_displayed_book_fak_partial_fill"
+      "policy": "walk_displayed_book_ioc_partial_fill"
     },
     "model_routing": {
       "status": "resolved",

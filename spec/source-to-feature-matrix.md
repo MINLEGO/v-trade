@@ -50,7 +50,8 @@ upgrades observed behavior into a claim about unpublished internals.
 | Deterministic critical learning without another LLM | inferred | Unpublished mechanism and cost control |
 | Paper fill at best quote, absent quote rejected | inferred | Owner-confirmed approximation; no counterparty required |
 | Counterparty-independent valid paper execution | documented | PredictionArena paper describes paper advantage |
-| Separate liquidity-aware comparison policy | inferred | Future experimental comparison only |
+| Historical `predictionarena_unconditional` baseline | inferred | `config/experiments/predictionarena-polymarket-v1.json`; preserved for historical reproduction and never rewritten by the conservative comparison |
+| Separate liquidity-aware comparison policy | vtrade_deviation | `config/experiments/predictionarena-polymarket-v1-liquidity-aware.json`; walks five displayed levels, rejects stale/missing books, and uses IOC with partial fills |
 | Double-entry ledger and idempotent settlement | inferred | Reproducible accounting requirement |
 | Independent hourly runs per model/agent | vtrade_deviation | Frequency and scheduling differ from PredictionArena |
 | Private authenticated admin only | vtrade_deviation | Owner UI decision |

@@ -125,6 +125,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(execution["liquidity_time_in_force"], "IOC")
         self.assertEqual(execution["buy_fill_price"], "walk_asks")
         self.assertEqual(execution["sell_fill_price"], "walk_bids")
+        self.assertEqual(execution["order_book_depth"], 5)
+        self.assertEqual(execution["maximum_order_book_age_seconds"], 300)
         self.assertTrue(execution["counterparty_required"])
         self.assertEqual(execution["insufficient_depth"], "partial_fill")
         self.assertEqual(
@@ -133,7 +135,7 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertEqual(
             config.raw["owner_decisions"]["paper_fill_rule"]["policy"],
-            "walk_displayed_book_fak_partial_fill",
+            "walk_displayed_book_ioc_partial_fill",
         )
 
     def test_fee_configuration_is_explicit_and_zeroes_optional_costs(self) -> None:
@@ -202,12 +204,32 @@ class ConfigTests(unittest.TestCase):
         )
 
     def test_versioned_artifact_hashes_match_files(self) -> None:
-        config = load_experiment_config(
+        for filename in (
+            "predictionarena-polymarket-v1.json",
+            "predictionarena-polymarket-v1-liquidity-aware.json",
+        ):
+            config = load_experiment_config(Path("config/experiments") / filename)
+            for artifact in config.raw["artifacts"].values():
+                body = Path(artifact["path"]).read_bytes()
+                self.assertEqual(hashlib.sha256(body).hexdigest(), artifact["sha256"])
+
+    def test_experiment_execution_policies_are_distinct_and_versioned(self) -> None:
+        baseline = load_experiment_config(
             Path("config/experiments/predictionarena-polymarket-v1.json")
         )
-        for artifact in config.raw["artifacts"].values():
-            body = Path(artifact["path"]).read_bytes()
-            self.assertEqual(hashlib.sha256(body).hexdigest(), artifact["sha256"])
+        conservative = load_experiment_config(
+            Path("config/experiments/predictionarena-polymarket-v1-liquidity-aware.json")
+        )
+
+        self.assertNotEqual(baseline.version, conservative.version)
+        self.assertEqual(
+            baseline.raw["execution"]["paper_policy"], "predictionarena_unconditional"
+        )
+        self.assertEqual(conservative.raw["execution"]["paper_policy"], "liquidity_aware")
+        self.assertEqual(
+            baseline.raw["artifacts"]["tool_schemas"],
+            conservative.raw["artifacts"]["tool_schemas"],
+        )
 
     def test_missing_required_fields_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
