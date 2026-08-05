@@ -18,9 +18,14 @@ from vtrade.broker import (
     ExecutionResult,
     LiquidityTimeInForce,
     OrderAmountType,
+    PaperPolicy,
     PredictionArenaPaperBroker,
 )
 from vtrade.domain.types import MicroDollars
+from vtrade.liquidity import (
+    VirtualLiquidityMetrics,
+    VirtualLiquidityReservation,
+)
 from vtrade.runtime import CycleClaim
 
 
@@ -52,7 +57,13 @@ class MarketOrderSubmission:
 
 
 class _TradingState(Protocol):
-    def pending_intents(self, claim: CycleClaim, frozen: Mapping[str, object]) -> Sequence[Any]: ...
+    def pending_intents(
+        self,
+        claim: CycleClaim,
+        frozen: Mapping[str, object],
+        *,
+        include_existing: bool = False,
+    ) -> Sequence[Any]: ...
 
     def portfolio(self, agent_id: uuid.UUID) -> Any: ...
 
@@ -63,6 +74,26 @@ class _TradingState(Protocol):
         cutoff: datetime,
         order_book_snapshot_ids: Sequence[uuid.UUID],
     ) -> Mapping[str, Any]: ...
+
+    def prepare_virtual_liquidity(
+        self,
+        cursor: Any,
+        claim: CycleClaim,
+        order: Any,
+        *,
+        snapshot_id: uuid.UUID,
+        snapshot: Any,
+        maximum_book_depth: int,
+    ) -> VirtualLiquidityReservation: ...
+
+    def finalize_virtual_liquidity(
+        self,
+        cursor: Any,
+        reservation: VirtualLiquidityReservation,
+        result: ExecutionResult,
+        *,
+        completed_at: datetime,
+    ) -> VirtualLiquidityMetrics: ...
 
 
 class _MarketRepository(Protocol):
@@ -158,7 +189,9 @@ class MarketOrderExecutor:
         book_ids = _uuid_membership(frozen, "order_book_snapshot_ids")
         if not fee_ids:
             raise OrderExecutionUnavailable("cycle has no frozen fee-rate membership")
-        pending = self._state.pending_intents(claim, frozen)
+        pending = _pending_intents(
+            self._state, claim, frozen, cursor=None, include_existing=True
+        )
         item = next((row for row in pending if row.intent_id == intent_id), None)
         if item is None:
             raise OrderExecutionUnavailable("order intent is not executable")
@@ -195,7 +228,9 @@ class MarketOrderExecutor:
         else:
             with locked_cursor(claim.agent_id) as cursor:
                 state = cast(Any, self._state)
-                locked_pending = state.pending_intents(claim, frozen, cursor=cursor)
+                locked_pending = _pending_intents(
+                    state, claim, frozen, cursor=cursor, include_existing=True
+                )
                 locked_item = next(
                     (row for row in locked_pending if row.intent_id == intent_id), None
                 )
@@ -209,7 +244,43 @@ class MarketOrderExecutor:
                     order_book_snapshot_ids=book_ids,
                     cursor=cursor,
                 )
-                result = self._place(order, item, portfolio, bids, fee)
+                reservation = self._prepare_virtual_liquidity(
+                    state, cursor, claim, order, item
+                )
+                portfolio_for_order = (
+                    reservation.retry_portfolio
+                    if reservation is not None and reservation.retry_portfolio is not None
+                    else portfolio
+                )
+                if portfolio_for_order is not portfolio:
+                    bids = state.executable_bids(
+                        portfolio_for_order,
+                        cutoff=cutoff,
+                        order_book_snapshot_ids=book_ids,
+                        cursor=cursor,
+                    )
+                execution_at = (
+                    reservation.retry_now
+                    if reservation is not None and reservation.retry_now is not None
+                    else _aware(self._clock())
+                )
+                result = self._place(
+                    order,
+                    item,
+                    portfolio_for_order,
+                    bids,
+                    fee,
+                    snapshot=reservation.snapshot if reservation is not None else None,
+                    now=execution_at,
+                )
+                if reservation is not None:
+                    metrics = state.finalize_virtual_liquidity(
+                        cursor,
+                        reservation,
+                        result,
+                        completed_at=execution_at,
+                    )
+                    result = replace(result, virtual_liquidity=metrics)
                 persisted = cast(Any, self._repository).persist_execution_locked(
                     cursor,
                     result,
@@ -231,7 +302,9 @@ class MarketOrderExecutor:
         fee_ids = _uuid_membership(frozen, "fee_rate_snapshot_ids")
         book_ids = _uuid_membership(frozen, "order_book_snapshot_ids")
         state = cast(Any, self._state)
-        pending = state.pending_intents(claim, frozen, cursor=cursor)
+        pending = _pending_intents(
+            state, claim, frozen, cursor=cursor, include_existing=True
+        )
         item = next((row for row in pending if row.intent_id == submission.intent_id), None)
         if item is None:
             raise OrderExecutionUnavailable("inserted order intent is not executable")
@@ -254,7 +327,41 @@ class MarketOrderExecutor:
             ),
             limit_price=submission.limit_price,
         )
-        result = self._place(order, item, portfolio, bids, fee)
+        reservation = self._prepare_virtual_liquidity(state, cursor, claim, order, item)
+        portfolio_for_order = (
+            reservation.retry_portfolio
+            if reservation is not None and reservation.retry_portfolio is not None
+            else portfolio
+        )
+        if portfolio_for_order is not portfolio:
+            bids = state.executable_bids(
+                portfolio_for_order,
+                cutoff=cutoff,
+                order_book_snapshot_ids=book_ids,
+                cursor=cursor,
+            )
+        execution_at = (
+            reservation.retry_now
+            if reservation is not None and reservation.retry_now is not None
+            else _aware(self._clock())
+        )
+        result = self._place(
+            order,
+            item,
+            portfolio_for_order,
+            bids,
+            fee,
+            snapshot=reservation.snapshot if reservation is not None else None,
+            now=execution_at,
+        )
+        if reservation is not None:
+            metrics = state.finalize_virtual_liquidity(
+                cursor,
+                reservation,
+                result,
+                completed_at=execution_at,
+            )
+            result = replace(result, virtual_liquidity=metrics)
         persisted = cast(Any, self._repository).persist_execution_locked(
             cursor,
             result,
@@ -266,16 +373,52 @@ class MarketOrderExecutor:
         )
         return ExecutionReceipt(result, persisted.record_id, item.book_snapshot_id)
 
-    def _place(self, order: Any, item: Any, portfolio: Any, bids: Any, fee: Any) -> ExecutionResult:
+    def _prepare_virtual_liquidity(
+        self,
+        state: Any,
+        cursor: Any,
+        claim: CycleClaim,
+        order: Any,
+        item: Any,
+    ) -> VirtualLiquidityReservation | None:
+        prepare = getattr(state, "prepare_virtual_liquidity", None)
+        if (
+            getattr(self._broker, "policy", None) is not PaperPolicy.LIQUIDITY_AWARE
+            or prepare is None
+        ):
+            return None
+        return cast(
+            VirtualLiquidityReservation,
+            prepare(
+                cursor,
+                claim,
+                order,
+                snapshot_id=item.book_snapshot_id,
+                snapshot=item.book,
+                maximum_book_depth=self._broker.maximum_book_depth_limit,
+            ),
+        )
+
+    def _place(
+        self,
+        order: Any,
+        item: Any,
+        portfolio: Any,
+        bids: Any,
+        fee: Any,
+        *,
+        snapshot: Any = None,
+        now: datetime | None = None,
+    ) -> ExecutionResult:
         return self._broker.place(
             order,
             market=item.market,
             outcome=item.outcome,
-            snapshot=item.book,
+            snapshot=item.book if snapshot is None else snapshot,
             portfolio=portfolio,
             executable_bids=bids,
             fee_policy=fee,
-            now=_aware(self._clock()),
+            now=_aware(self._clock()) if now is None else now,
         )
 
 
@@ -290,6 +433,32 @@ def _uuid_membership(value: Mapping[str, object], key: str) -> tuple[uuid.UUID, 
     if len(set(result)) != len(result):
         raise OrderExecutionUnavailable(f"cycle freeze has duplicate {key}")
     return result
+
+
+def _pending_intents(
+    state: Any,
+    claim: CycleClaim,
+    frozen: Mapping[str, object],
+    *,
+    cursor: Any | None,
+    include_existing: bool,
+) -> Sequence[Any]:
+    try:
+        kwargs: dict[str, object] = {"include_existing": include_existing}
+        if cursor is not None:
+            kwargs["cursor"] = cursor
+        return cast(Sequence[Any], state.pending_intents(claim, frozen, **kwargs))
+    except TypeError as exc:
+        if "keyword" not in str(exc) and "argument" not in str(exc):
+            raise
+        try:
+            if cursor is None:
+                return cast(Sequence[Any], state.pending_intents(claim, frozen))
+            return cast(Sequence[Any], state.pending_intents(claim, frozen, cursor=cursor))
+        except TypeError as fallback_exc:
+            if "keyword" not in str(fallback_exc) and "argument" not in str(fallback_exc):
+                raise
+            return cast(Sequence[Any], state.pending_intents(claim, frozen))
 
 
 def _cutoff(claim: CycleClaim) -> datetime:

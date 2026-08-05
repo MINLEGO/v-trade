@@ -21,6 +21,7 @@ from vtrade.broker import (
     LiquidityTimeInForce,
     PaperOrder,
     PaperPolicy,
+    PendingOrder,
     PortfolioState,
     PositionState,
     PredictionArenaPaperBroker,
@@ -57,6 +58,15 @@ from vtrade.harness import (
     deterministic_critical_learning,
 )
 from vtrade.harness_repository import PostgresBudgetGuard, PostgresHarnessRepository
+from vtrade.liquidity import (
+    VirtualLiquidityLevel,
+    VirtualLiquidityLevelMetrics,
+    VirtualLiquidityMetrics,
+    VirtualLiquidityReservation,
+    consumed_by_level,
+    metrics_for_fills,
+    private_snapshot,
+)
 from vtrade.market_data import PolymarketFreezeService, PostgresMarketDataRepository
 from vtrade.order_execution import MarketOrderExecutor
 from vtrade.polymarket import PolymarketVenue
@@ -714,7 +724,8 @@ class _PostgresTradingState:
             "strategy, thesis, estimated_probability, expected_value_micros, "
             "validation_status, idempotency_key, created_at) VALUES "
             "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, "
-            "'submitted_for_immediate_execution', %s, %s)",
+            "'submitted_for_immediate_execution', %s, %s) "
+            "ON CONFLICT (idempotency_key) DO NOTHING",
             (
                 submission.intent_id,
                 claim.cycle_id,
@@ -768,6 +779,7 @@ class _PostgresTradingState:
         frozen: Mapping[str, object],
         *,
         cursor: _Cursor | None = None,
+        include_existing: bool = False,
     ) -> tuple[_TradingContext, ...]:
         book_ids = _uuids(frozen, "order_book_snapshot_ids")
         market_snapshot_ids = _uuids(frozen, "market_snapshot_ids")
@@ -780,7 +792,13 @@ class _PostgresTradingState:
                 self._connect(self._database_url) as connection,
                 connection.cursor() as local_cursor,
             ):
-                return self.pending_intents(claim, frozen, cursor=local_cursor)
+                return self.pending_intents(
+                    claim,
+                    frozen,
+                    cursor=local_cursor,
+                    include_existing=include_existing,
+                )
+        existing_clause = "" if include_existing else "AND existing.id IS NULL"
         cursor.execute(
                 "SELECT oi.id, oi.market_id, oi.outcome_id, oi.side, oi.shares, "
                 "oi.created_at, ms.payload, ms.volume_micros, ms.liquidity_micros, "
@@ -791,7 +809,8 @@ class _PostgresTradingState:
                 "JOIN market_snapshots ms ON ms.market_id = m.id "
                 "JOIN order_book_snapshots obs ON obs.outcome_id = o.id "
                 "LEFT JOIN orders existing ON existing.intent_id = oi.id "
-                "WHERE oi.agent_cycle_id = %s AND existing.id IS NULL "
+                "WHERE oi.agent_cycle_id = %s "
+                f"{existing_clause} "
                 "AND ms.id = ANY(%s::uuid[]) AND obs.id = ANY(%s::uuid[]) "
                 "AND ms.cutoff <= %s AND obs.cutoff <= %s "
                 "AND ms.status = 'open' "
@@ -915,6 +934,290 @@ class _PostgresTradingState:
             book,
             uuid.UUID(str(row[10])),
         )
+
+    def prepare_virtual_liquidity(
+        self,
+        cursor: _Cursor,
+        claim: CycleClaim,
+        order: PaperOrder,
+        *,
+        snapshot_id: uuid.UUID,
+        snapshot: OrderBookSnapshot,
+        maximum_book_depth: int,
+    ) -> VirtualLiquidityReservation:
+        """Lock and materialize the agent-private view of one frozen book.
+
+        The context is ``agent_cycle_id + order_book_snapshot_id``.  A new
+        immutable book therefore starts a new private context; historical
+        consumption remains available for audit and is never carried into the
+        new snapshot by changing the global book.
+        """
+
+        order_id = uuid.uuid5(uuid.NAMESPACE_URL, f"vtrade:order:{order.id}")
+        agent_id = uuid.UUID(str(claim.agent_id))
+        cycle_id = uuid.UUID(str(claim.cycle_id))
+        context_version = f"agent-cycle-v1:{cycle_id}:book:{snapshot_id}"
+        cursor.execute(
+            "SELECT id, agent_id, agent_cycle_id, snapshot_id, token_id, side, "
+            "context_version, requested_shares, available_shares, consumed_shares, "
+            "cancelled_shares, remaining_shares, portfolio_before, execution_at "
+            "FROM virtual_liquidity_executions WHERE order_id = %s FOR UPDATE",
+            (order_id,),
+        )
+        existing = cursor.fetchone()
+        if existing is not None:
+            if (
+                uuid.UUID(str(existing[1])) != agent_id
+                or uuid.UUID(str(existing[2])) != cycle_id
+                or uuid.UUID(str(existing[3])) != snapshot_id
+                or str(existing[4]) != snapshot.token_id
+                or str(existing[5]) != order.side.value
+                or str(existing[6]) != context_version
+            ):
+                raise ProductionCompositionUnavailable(
+                    "virtual-liquidity execution context differs on retry"
+                )
+            cursor.execute(
+                "SELECT level_index, price, displayed_shares, available_shares, "
+                "consumed_shares, cancelled_shares, remaining_shares "
+                "FROM virtual_liquidity_execution_levels WHERE execution_id = %s "
+                "ORDER BY level_index",
+                (uuid.UUID(str(existing[0])),),
+            )
+            level_rows = cursor.fetchall()
+            existing_levels = tuple(
+                VirtualLiquidityLevel(
+                    int(str(row[0])),
+                    Decimal(str(row[1])),
+                    Decimal(str(row[2])),
+                    Decimal(str(row[3])),
+                )
+                for row in level_rows
+            )
+            metrics = _virtual_liquidity_metrics_from_rows(existing, level_rows)
+            return VirtualLiquidityReservation(
+                order_id=str(order_id),
+                context_version=context_version,
+                agent_id=str(agent_id),
+                agent_cycle_id=str(cycle_id),
+                snapshot_id=str(snapshot_id),
+                token_id=snapshot.token_id,
+                side=order.side,
+                snapshot=private_snapshot(snapshot, side=order.side, levels=existing_levels),
+                levels=existing_levels,
+                existing_metrics=metrics,
+                retry_portfolio=_portfolio_from_payload(existing[12]),
+                retry_now=_aware(cast(datetime, existing[13])),
+            )
+
+        source_levels = snapshot.asks if order.side is Side.BUY else snapshot.bids
+        ordered = sorted(
+            source_levels,
+            key=lambda level: level.price,
+            reverse=order.side is Side.SELL,
+        )[:maximum_book_depth]
+        for level_index, level in enumerate(ordered):
+            cursor.execute(
+                "INSERT INTO virtual_liquidity_levels "
+                "(agent_id, agent_cycle_id, snapshot_id, token_id, side, level_index, "
+                "price, displayed_shares, consumed_shares, cancelled_shares, created_at, "
+                "updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 0, 0, %s, %s) "
+                "ON CONFLICT (agent_id, agent_cycle_id, snapshot_id, token_id, side, "
+                "level_index, price) DO NOTHING",
+                (
+                    agent_id,
+                    cycle_id,
+                    snapshot_id,
+                    snapshot.token_id,
+                    order.side.value,
+                    level_index,
+                    level.price,
+                    level.size,
+                    order.created_at,
+                    order.created_at,
+                ),
+            )
+        cursor.execute(
+            "SELECT level_index, price, displayed_shares, consumed_shares "
+            "FROM virtual_liquidity_levels WHERE agent_id = %s AND agent_cycle_id = %s "
+            "AND snapshot_id = %s AND token_id = %s AND side = %s "
+            "ORDER BY level_index FOR UPDATE",
+            (agent_id, cycle_id, snapshot_id, snapshot.token_id, order.side.value),
+        )
+        rows = cursor.fetchall()
+        if len(rows) != len(ordered):
+            raise ProductionCompositionUnavailable(
+                "virtual-liquidity level state is incomplete"
+            )
+        parsed_levels: list[VirtualLiquidityLevel] = []
+        for expected_index, row in enumerate(rows):
+            level_index = int(str(row[0]))
+            displayed = Decimal(str(row[2]))
+            consumed = Decimal(str(row[3]))
+            if level_index != expected_index:
+                raise ProductionCompositionUnavailable(
+                    "virtual-liquidity level indexes are not contiguous"
+                )
+            source = ordered[level_index]
+            if Decimal(str(row[1])) != source.price or displayed != source.size:
+                raise ProductionCompositionUnavailable(
+                    "virtual-liquidity level differs from its immutable snapshot"
+                )
+            available = displayed - consumed
+            if available < 0:
+                raise ProductionCompositionUnavailable(
+                    "virtual-liquidity consumption exceeds displayed depth"
+                )
+            parsed_levels.append(
+                VirtualLiquidityLevel(level_index, source.price, displayed, available)
+            )
+        return VirtualLiquidityReservation(
+            order_id=str(order_id),
+            context_version=context_version,
+            agent_id=str(agent_id),
+            agent_cycle_id=str(cycle_id),
+            snapshot_id=str(snapshot_id),
+            token_id=snapshot.token_id,
+            side=order.side,
+            snapshot=private_snapshot(snapshot, side=order.side, levels=tuple(parsed_levels)),
+            levels=tuple(parsed_levels),
+        )
+
+    def finalize_virtual_liquidity(
+        self,
+        cursor: _Cursor,
+        reservation: VirtualLiquidityReservation,
+        result: Any,
+        *,
+        completed_at: datetime,
+    ) -> VirtualLiquidityMetrics:
+        metrics = metrics_for_fills(
+            reservation,
+            result.fills,
+            requested_shares=result.order.shares,
+        )
+        if reservation.existing_metrics is not None:
+            return reservation.existing_metrics
+
+        consumed = consumed_by_level(reservation, result.fills)
+        for level in reservation.levels:
+            amount = consumed[level.level_index]
+            if amount <= 0:
+                continue
+            cursor.execute(
+                "UPDATE virtual_liquidity_levels SET consumed_shares = "
+                "consumed_shares + %s, updated_at = %s WHERE agent_id = %s "
+                "AND agent_cycle_id = %s AND snapshot_id = %s AND token_id = %s "
+                "AND side = %s AND level_index = %s AND price = %s "
+                "AND displayed_shares - consumed_shares >= %s "
+                "RETURNING displayed_shares, consumed_shares",
+                (
+                    amount,
+                    completed_at,
+                    uuid.UUID(reservation.agent_id),
+                    uuid.UUID(reservation.agent_cycle_id),
+                    uuid.UUID(reservation.snapshot_id),
+                    reservation.token_id,
+                    reservation.side.value,
+                    level.level_index,
+                    level.price,
+                    amount,
+                ),
+            )
+            updated = cursor.fetchone()
+            if updated is None:
+                raise ProductionCompositionUnavailable(
+                    "virtual-liquidity decrement lost its private capacity"
+                )
+            expected_remaining = level.available_shares - amount
+            actual_remaining = Decimal(str(updated[0])) - Decimal(str(updated[1]))
+            if actual_remaining != expected_remaining:
+                raise ProductionCompositionUnavailable(
+                    "virtual-liquidity decrement is not deterministic"
+                )
+
+        execution_id = uuid.uuid5(
+            uuid.NAMESPACE_URL, f"vtrade:virtual-liquidity:{reservation.order_id}"
+        )
+        cursor.execute(
+            "INSERT INTO virtual_liquidity_executions "
+            "(id, order_id, agent_id, agent_cycle_id, snapshot_id, token_id, side, "
+            "context_version, requested_shares, available_shares, consumed_shares, "
+            "cancelled_shares, remaining_shares, portfolio_before, execution_at, "
+            "idempotency_key, "
+            "created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, "
+            "%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s) "
+            "ON CONFLICT (order_id) DO NOTHING",
+            (
+                execution_id,
+                uuid.UUID(reservation.order_id),
+                uuid.UUID(reservation.agent_id),
+                uuid.UUID(reservation.agent_cycle_id),
+                uuid.UUID(reservation.snapshot_id),
+                reservation.token_id,
+                reservation.side.value,
+                reservation.context_version,
+                metrics.requested_shares,
+                metrics.available_shares,
+                metrics.consumed_shares,
+                metrics.cancelled_shares,
+                metrics.remaining_shares,
+                json.dumps(_portfolio_payload(result.portfolio_before), sort_keys=True),
+                completed_at,
+                f"virtual-liquidity:{reservation.order_id}",
+                completed_at,
+            ),
+        )
+        for metric_level in metrics.levels:
+            cursor.execute(
+                "INSERT INTO virtual_liquidity_execution_levels "
+                "(execution_id, level_index, price, displayed_shares, available_shares, "
+                "consumed_shares, cancelled_shares, remaining_shares) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    execution_id,
+                    metric_level.level_index,
+                    metric_level.price,
+                    metric_level.displayed_shares,
+                    metric_level.available_shares,
+                    metric_level.consumed_shares,
+                    metric_level.cancelled_shares,
+                    metric_level.remaining_shares,
+                ),
+            )
+        return metrics
+
+    @staticmethod
+    def virtual_liquidity_audit(
+        cursor: _Cursor,
+        *,
+        agent_id: uuid.UUID,
+        agent_cycle_id: uuid.UUID | None = None,
+    ) -> tuple[Sequence[object], ...]:
+        """Return aggregate private-depth metrics for the read-only audit surface."""
+
+        where = "agent_id = %s"
+        params: tuple[object, ...] = (agent_id,)
+        if agent_cycle_id is not None:
+            where += " AND agent_cycle_id = %s"
+            params += (agent_cycle_id,)
+        cursor.execute(
+            "SELECT agent_id, agent_cycle_id, snapshot_id, token_id, side, "
+            "sum(displayed_shares) AS displayed_shares, "
+            "sum(consumed_shares) AS consumed_shares, "
+            "sum(displayed_shares - consumed_shares) AS remaining_shares, "
+            "COALESCE((SELECT sum(cancelled_shares) FROM virtual_liquidity_executions "
+            "vle WHERE vle.agent_id = vll.agent_id "
+            "AND vle.agent_cycle_id = vll.agent_cycle_id "
+            "AND vle.snapshot_id = vll.snapshot_id AND vle.token_id = vll.token_id "
+            "AND vle.side = vll.side), 0) AS cancelled_shares "
+            "FROM virtual_liquidity_levels vll WHERE "
+            + where
+            + " GROUP BY agent_id, agent_cycle_id, snapshot_id, token_id, side "
+            "ORDER BY agent_cycle_id, snapshot_id, token_id, side",
+            params,
+        )
+        return tuple(cursor.fetchall())
 
     def portfolio(self, agent_id: uuid.UUID, *, cursor: _Cursor | None = None) -> PortfolioState:
         if cursor is None:
@@ -1703,6 +2006,114 @@ def _uuids(value: Mapping[str, object], key: str) -> tuple[uuid.UUID, ...]:
 
 def _mapping(value: object) -> dict[str, Any]:
     return {str(key): child for key, child in value.items()} if isinstance(value, Mapping) else {}
+
+
+def _portfolio_payload(portfolio: PortfolioState) -> dict[str, object]:
+    return {
+        "agent_id": portfolio.agent_id,
+        "cash_micros": int(portfolio.cash_micros),
+        "version": portfolio.version,
+        "positions": [
+            {
+                "market_id": position.market_id,
+                "outcome_id": position.outcome_id,
+                "shares": str(position.shares),
+                "average_cost": str(position.average_cost),
+                "cost_basis_micros": int(position.cost_basis_micros),
+                "realized_pnl_micros": int(position.realized_pnl_micros),
+            }
+            for position in portfolio.positions
+        ],
+        "pending_orders": [
+            {
+                "id": pending.id,
+                "market_id": pending.market_id,
+                "outcome_id": pending.outcome_id,
+                "side": pending.side.value,
+                "reserved_cash_micros": int(pending.reserved_cash_micros),
+                "reserved_shares": str(pending.reserved_shares),
+                "reserved_cost_basis_micros": int(pending.reserved_cost_basis_micros),
+            }
+            for pending in portfolio.pending_orders
+        ],
+    }
+
+
+def _portfolio_from_payload(value: object) -> PortfolioState:
+    raw = json.loads(value) if isinstance(value, str) else value
+    payload = _mapping(raw)
+    positions_value = payload.get("positions", [])
+    pending_value = payload.get("pending_orders", [])
+    if not isinstance(positions_value, list) or not isinstance(pending_value, list):
+        raise ProductionCompositionUnavailable("virtual-liquidity portfolio payload is malformed")
+    try:
+        positions = tuple(
+            PositionState(
+                str(_mapping(row)["market_id"]),
+                str(_mapping(row)["outcome_id"]),
+                Decimal(str(_mapping(row)["shares"])),
+                Decimal(str(_mapping(row)["average_cost"])),
+                MicroDollars(int(str(_mapping(row)["cost_basis_micros"]))),
+                MicroDollars(int(str(_mapping(row).get("realized_pnl_micros", 0)))),
+            )
+            for row in positions_value
+        )
+        pending_orders = tuple(
+            PendingOrder(
+                str(_mapping(row)["id"]),
+                str(_mapping(row)["market_id"]),
+                str(_mapping(row)["outcome_id"]),
+                Side(str(_mapping(row)["side"])),
+                MicroDollars(int(str(_mapping(row).get("reserved_cash_micros", 0)))),
+                Decimal(str(_mapping(row).get("reserved_shares", 0))),
+                MicroDollars(
+                    int(str(_mapping(row).get("reserved_cost_basis_micros", 0)))
+                ),
+            )
+            for row in pending_value
+        )
+        return PortfolioState(
+            str(payload["agent_id"]),
+            MicroDollars(int(str(payload["cash_micros"]))),
+            positions=positions,
+            pending_orders=pending_orders,
+            version=int(str(payload["version"])),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ProductionCompositionUnavailable(
+            "virtual-liquidity portfolio payload is malformed"
+        ) from exc
+
+
+def _virtual_liquidity_metrics_from_rows(
+    execution_row: Sequence[object],
+    level_rows: Sequence[Sequence[object]],
+) -> VirtualLiquidityMetrics:
+    return VirtualLiquidityMetrics(
+        context_version=str(execution_row[6]),
+        agent_id=str(execution_row[1]),
+        agent_cycle_id=str(execution_row[2]),
+        snapshot_id=str(execution_row[3]),
+        token_id=str(execution_row[4]),
+        side=Side(str(execution_row[5])),
+        requested_shares=Decimal(str(execution_row[7])),
+        available_shares=Decimal(str(execution_row[8])),
+        consumed_shares=Decimal(str(execution_row[9])),
+        cancelled_shares=Decimal(str(execution_row[10])),
+        remaining_shares=Decimal(str(execution_row[11])),
+        levels=tuple(
+            VirtualLiquidityLevelMetrics(
+                level_index=int(str(row[0])),
+                price=Decimal(str(row[1])),
+                displayed_shares=Decimal(str(row[2])),
+                available_shares=Decimal(str(row[3])),
+                consumed_shares=Decimal(str(row[4])),
+                cancelled_shares=Decimal(str(row[5])),
+                remaining_shares=Decimal(str(row[6])),
+            )
+            for row in level_rows
+        ),
+    )
 
 
 def _levels(value: object) -> tuple[PriceLevel, ...]:

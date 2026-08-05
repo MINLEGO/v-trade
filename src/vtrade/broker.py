@@ -9,6 +9,7 @@ from enum import StrEnum
 
 from vtrade.domain.types import Market, MarketStatus, MicroDollars, OrderBookSnapshot, Outcome, Side
 from vtrade.ledger import AppendOnlyLedger, LedgerAccount, LedgerEntry, Posting
+from vtrade.liquidity import VirtualLiquidityMetrics
 
 _MICROS = Decimal(1_000_000)
 _FEE_QUANTUM = Decimal("0.00001")
@@ -311,6 +312,7 @@ class ExecutionResult:
     ledger_entries: tuple[LedgerEntry, ...]
     snapshot: OrderBookSnapshot
     fee_policy: FeePolicy
+    virtual_liquidity: VirtualLiquidityMetrics | None = None
 
     def __post_init__(self) -> None:
         if self.status is ExecutionStatus.REJECTED:
@@ -321,6 +323,13 @@ class ExecutionResult:
             return
         if self.rejection_code is not None or not self.fills or not self.ledger_entries:
             raise ValueError("accepted execution requires fills and ledger entries")
+        if self.virtual_liquidity is not None:
+            if self.virtual_liquidity.agent_id != self.order.agent_id:
+                raise ValueError("virtual-liquidity metrics must belong to the order agent")
+            if self.virtual_liquidity.token_id != self.snapshot.token_id:
+                raise ValueError("virtual-liquidity metrics must belong to the order token")
+            if self.virtual_liquidity.side is not self.order.side:
+                raise ValueError("virtual-liquidity metrics must belong to the order side")
         if self.portfolio.version != self.portfolio_before.version + 1:
             raise ValueError("accepted execution must advance the portfolio version once")
         filled = sum((fill.shares for fill in self.fills), start=Decimal(0))
@@ -363,6 +372,12 @@ class PredictionArenaPaperBroker:
         self.maximum_book_depth = maximum_book_depth
         self.maximum_valuation_bid_age = maximum_valuation_bid_age
         self.no_bid_valuation_policy = no_bid_valuation_policy
+
+    @property
+    def maximum_book_depth_limit(self) -> int:
+        """Maximum number of displayed levels considered by liquidity-aware fills."""
+
+        return self.maximum_book_depth
 
     def place(
         self,
