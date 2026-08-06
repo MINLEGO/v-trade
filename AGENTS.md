@@ -37,3 +37,13 @@ Recent commits use short, lowercase, behavior-focused subjects such as `fixed ge
 ## Security & Configuration Tips
 
 Never commit `.env` files or secrets. Use `.env.example`, keep admin credentials out of URLs and command history, and do not replace missing production resources with fake providers or local storage.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs for this repo live as GitHub issues; use the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+This is a single-context repo; domain documentation lives at root `CONTEXT.md` and `docs/adr/`. See `docs/agents/domain.md`.
