@@ -67,8 +67,12 @@ from vtrade.liquidity import (
     metrics_for_fills,
     private_snapshot,
 )
-from vtrade.market_data import PolymarketFreezeService, PostgresMarketDataRepository
-from vtrade.order_execution import MarketOrderExecutor
+from vtrade.market_data import (
+    PolymarketFreezeService,
+    PostgresLiveOrderContextProvider,
+    PostgresMarketDataRepository,
+)
+from vtrade.order_execution import LiveOrderContextProvider, MarketOrderExecutor
 from vtrade.polymarket import PolymarketVenue
 from vtrade.postgres_runtime import PostgresRuntimeRepository
 from vtrade.production_tools import ProductionToolRegistry, production_tool_context
@@ -337,6 +341,7 @@ class ProductionHarnessPort:
         maximum_book_age: timedelta = timedelta(minutes=5),
         maximum_order_book_depth: int = 5,
         immediate_order_executor: MarketOrderExecutor | None = None,
+        require_live_order_execution: bool = False,
     ) -> None:
         self._database_url = database_url
         self._store = artifact_store
@@ -358,6 +363,7 @@ class ProductionHarnessPort:
         self._maximum_order_book_depth = maximum_order_book_depth
         self._repository = PostgresHarnessRepository(database_url, connect=connect)
         self._immediate_order_executor = immediate_order_executor
+        self._require_live_order_execution = require_live_order_execution
 
     def run(
         self, claim: CycleClaim, frozen: JsonObject, prompt: JsonObject
@@ -377,10 +383,19 @@ class ProductionHarnessPort:
             maximum_book_age=self._maximum_book_age,
             maximum_order_book_depth=self._maximum_order_book_depth,
             immediate_order_executor=(
-                (lambda submission: immediate_executor.submit_and_execute(
-                    claim, frozen, submission
-                ))
-                if immediate_executor is not None else None
+                (
+                    lambda submission: immediate_executor.submit_and_execute(
+                        claim, frozen, submission
+                    )
+                )
+                if immediate_executor is not None
+                else None
+            ),
+            live_order_execution=(
+                immediate_executor is not None and immediate_executor.uses_live_context
+            ),
+            live_order_required=(
+                self._require_live_order_execution
             ),
         )
         registry = ProductionToolRegistry(context, schema_path=self._schema_path)
@@ -695,6 +710,7 @@ class _TradingContext:
     outcome: Outcome
     book: OrderBookSnapshot
     book_snapshot_id: uuid.UUID
+    requested_at: datetime | None = None
 
 
 class _PostgresTradingState:
@@ -717,14 +733,21 @@ class _PostgresTradingState:
             yield cursor
 
     @staticmethod
-    def insert_intent(cursor: _Cursor, claim: CycleClaim, submission: Any) -> None:
+    def insert_intent(
+        cursor: _Cursor,
+        claim: CycleClaim,
+        submission: Any,
+        *,
+        requested_at: datetime | None = None,
+    ) -> None:
+        requested_at = requested_at or submission.created_at
         cursor.execute(
             "INSERT INTO order_intents "
             "(id, agent_cycle_id, market_id, outcome_id, side, amount_micros, shares, "
             "strategy, thesis, estimated_probability, expected_value_micros, "
-            "validation_status, idempotency_key, created_at) VALUES "
+            "validation_status, idempotency_key, created_at, requested_at) VALUES "
             "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, "
-            "'submitted_for_immediate_execution', %s, %s) "
+            "'submitted_for_immediate_execution', %s, %s, %s) "
             "ON CONFLICT (idempotency_key) DO NOTHING",
             (
                 submission.intent_id,
@@ -739,6 +762,7 @@ class _PostgresTradingState:
                 submission.confidence,
                 f"intent:{submission.intent_id}",
                 submission.created_at,
+                requested_at,
             ),
         )
 
@@ -773,6 +797,38 @@ class _PostgresTradingState:
             )
         return persisted_ids
 
+    def incomplete_intents(
+        self, claim: CycleClaim, *, cursor: _Cursor | None = None
+    ) -> tuple[_TradingContext, ...]:
+        """Load restart candidates without requiring the frozen universe to be live."""
+        if cursor is None:
+            with (
+                self._connect(self._database_url) as connection,
+                connection.cursor() as local_cursor,
+            ):
+                return self.incomplete_intents(claim, cursor=local_cursor)
+        cursor.execute(
+            "SELECT oi.id, oi.market_id, oi.outcome_id, oi.side, oi.shares, "
+            "oi.created_at, ms.payload, ms.volume_micros, ms.liquidity_micros, "
+            "ms.status, obs.id, obs.cutoff, obs.source_created_at, obs.bids, obs.asks, "
+            "obs.raw_artifact_uri, obs.raw_sha256, o.venue_token_id, oi.requested_at "
+            "FROM order_intents oi JOIN markets m ON m.id = oi.market_id "
+            "JOIN outcomes o ON o.id = oi.outcome_id "
+            "JOIN LATERAL (SELECT * FROM market_snapshots snapshot "
+            "WHERE snapshot.market_id = oi.market_id "
+            "ORDER BY snapshot.cutoff DESC, snapshot.id DESC LIMIT 1) ms ON true "
+            "JOIN LATERAL (SELECT * FROM order_book_snapshots snapshot "
+            "WHERE snapshot.outcome_id = oi.outcome_id "
+            "ORDER BY snapshot.cutoff DESC, snapshot.id DESC LIMIT 1) obs ON true "
+            "WHERE oi.agent_cycle_id = %s "
+            "AND NOT EXISTS (SELECT 1 FROM orders existing "
+            "WHERE existing.intent_id = oi.id) "
+            "ORDER BY oi.created_at, oi.id",
+            (claim.cycle_id,),
+        )
+        rows = cursor.fetchall()
+        return tuple(self._trading_context(row, claim.agent_id) for row in rows)
+
     def pending_intents(
         self,
         claim: CycleClaim,
@@ -800,32 +856,32 @@ class _PostgresTradingState:
                 )
         existing_clause = "" if include_existing else "AND existing.id IS NULL"
         cursor.execute(
-                "SELECT oi.id, oi.market_id, oi.outcome_id, oi.side, oi.shares, "
-                "oi.created_at, ms.payload, ms.volume_micros, ms.liquidity_micros, "
-                "ms.status, obs.id, obs.cutoff, obs.source_created_at, obs.bids, obs.asks, "
-                "obs.raw_artifact_uri, obs.raw_sha256, o.venue_token_id "
-                "FROM order_intents oi JOIN markets m ON m.id = oi.market_id "
-                "JOIN outcomes o ON o.id = oi.outcome_id "
-                "JOIN market_snapshots ms ON ms.market_id = m.id "
-                "JOIN order_book_snapshots obs ON obs.outcome_id = o.id "
-                "LEFT JOIN orders existing ON existing.intent_id = oi.id "
-                "WHERE oi.agent_cycle_id = %s "
-                f"{existing_clause} "
-                "AND ms.id = ANY(%s::uuid[]) AND obs.id = ANY(%s::uuid[]) "
-                "AND ms.cutoff <= %s AND obs.cutoff <= %s "
-                "AND ms.status = 'open' "
-                "AND COALESCE((ms.payload->>'tradeable')::boolean, false) "
-                "AND EXISTS (SELECT 1 FROM jsonb_array_elements(ms.payload->'outcomes') frozen "
-                "WHERE frozen->>'venue_token_id' = o.venue_token_id "
-                "AND COALESCE((frozen->>'tradeable')::boolean, false)) "
-                "ORDER BY oi.created_at, oi.id",
-                (
-                    claim.cycle_id,
-                    list(market_snapshot_ids),
-                    list(book_ids),
-                    _cutoff(claim),
-                    _cutoff(claim),
-                ),
+            "SELECT oi.id, oi.market_id, oi.outcome_id, oi.side, oi.shares, "
+            "oi.created_at, ms.payload, ms.volume_micros, ms.liquidity_micros, "
+            "ms.status, obs.id, obs.cutoff, obs.source_created_at, obs.bids, obs.asks, "
+            "obs.raw_artifact_uri, obs.raw_sha256, o.venue_token_id, oi.requested_at "
+            "FROM order_intents oi JOIN markets m ON m.id = oi.market_id "
+            "JOIN outcomes o ON o.id = oi.outcome_id "
+            "JOIN market_snapshots ms ON ms.market_id = m.id "
+            "JOIN order_book_snapshots obs ON obs.outcome_id = o.id "
+            "LEFT JOIN orders existing ON existing.intent_id = oi.id "
+            "WHERE oi.agent_cycle_id = %s "
+            f"{existing_clause} "
+            "AND ms.id = ANY(%s::uuid[]) AND obs.id = ANY(%s::uuid[]) "
+            "AND ms.cutoff <= %s AND obs.cutoff <= %s "
+            "AND ms.status = 'open' "
+            "AND COALESCE((ms.payload->>'tradeable')::boolean, false) "
+            "AND EXISTS (SELECT 1 FROM jsonb_array_elements(ms.payload->'outcomes') frozen "
+            "WHERE frozen->>'venue_token_id' = o.venue_token_id "
+            "AND COALESCE((frozen->>'tradeable')::boolean, false)) "
+            "ORDER BY oi.created_at, oi.id",
+            (
+                claim.cycle_id,
+                list(market_snapshot_ids),
+                list(book_ids),
+                _cutoff(claim),
+                _cutoff(claim),
+            ),
         )
         rows = cursor.fetchall()
         return tuple(self._trading_context(row, claim.agent_id) for row in rows)
@@ -933,6 +989,7 @@ class _PostgresTradingState:
             outcome,
             book,
             uuid.UUID(str(row[10])),
+            cast(datetime | None, row[18]) if len(row) > 18 else cast(datetime, row[5]),
         )
 
     def prepare_virtual_liquidity(
@@ -1046,9 +1103,7 @@ class _PostgresTradingState:
         )
         rows = cursor.fetchall()
         if len(rows) != len(ordered):
-            raise ProductionCompositionUnavailable(
-                "virtual-liquidity level state is incomplete"
-            )
+            raise ProductionCompositionUnavailable("virtual-liquidity level state is incomplete")
         parsed_levels: list[VirtualLiquidityLevel] = []
         for expected_index, row in enumerate(rows):
             level_index = int(str(row[0]))
@@ -1227,21 +1282,21 @@ class _PostgresTradingState:
             ):
                 return self.portfolio(agent_id, cursor=local_cursor)
         cursor.execute(
-                "SELECT COALESCE(sum(lp.amount_micros) FILTER "
-                "(WHERE lp.account = 'cash'), 0), a.portfolio_version FROM agents a "
-                "LEFT JOIN ledger_entries le ON le.agent_id = a.id "
-                "LEFT JOIN ledger_postings lp ON lp.ledger_entry_id = le.id "
-                "WHERE a.id = %s GROUP BY a.id",
-                (agent_id,),
+            "SELECT COALESCE(sum(lp.amount_micros) FILTER "
+            "(WHERE lp.account = 'cash'), 0), a.portfolio_version FROM agents a "
+            "LEFT JOIN ledger_entries le ON le.agent_id = a.id "
+            "LEFT JOIN ledger_postings lp ON lp.ledger_entry_id = le.id "
+            "WHERE a.id = %s GROUP BY a.id",
+            (agent_id,),
         )
         account = cursor.fetchone()
         cursor.execute(
-                "SELECT m.id, p.outcome_id, p.shares, p.average_cost, "
-                "p.cost_basis_micros, p.realized_pnl_micros FROM positions p "
-                "JOIN outcomes o ON o.id = p.outcome_id "
-                "JOIN markets m ON m.id = o.market_id "
-                "WHERE p.agent_id = %s AND p.shares > 0 ORDER BY p.outcome_id",
-                (agent_id,),
+            "SELECT m.id, p.outcome_id, p.shares, p.average_cost, "
+            "p.cost_basis_micros, p.realized_pnl_micros FROM positions p "
+            "JOIN outcomes o ON o.id = p.outcome_id "
+            "JOIN markets m ON m.id = o.market_id "
+            "WHERE p.agent_id = %s AND p.shares > 0 ORDER BY p.outcome_id",
+            (agent_id,),
         )
         positions = cursor.fetchall()
         if account is None:
@@ -1287,11 +1342,11 @@ class _PostgresTradingState:
                     cursor=local_cursor,
                 )
         cursor.execute(
-                "SELECT DISTINCT ON (obs.outcome_id) obs.outcome_id, obs.best_bid, obs.cutoff "
-                "FROM order_book_snapshots obs WHERE obs.outcome_id = ANY(%s::uuid[]) "
-                "AND obs.id = ANY(%s::uuid[]) AND obs.cutoff <= %s "
-                "ORDER BY obs.outcome_id, obs.cutoff DESC, obs.id DESC",
-                (outcomes, list(order_book_snapshot_ids), cutoff),
+            "SELECT DISTINCT ON (obs.outcome_id) obs.outcome_id, obs.best_bid, obs.cutoff "
+            "FROM order_book_snapshots obs WHERE obs.outcome_id = ANY(%s::uuid[]) "
+            "AND obs.id = ANY(%s::uuid[]) AND obs.cutoff <= %s "
+            "ORDER BY obs.outcome_id, obs.cutoff DESC, obs.id DESC",
+            (outcomes, list(order_book_snapshot_ids), cutoff),
         )
         rows = cursor.fetchall()
         found = {
@@ -1301,6 +1356,48 @@ class _PostgresTradingState:
                 else None
             )
             for row in rows
+        }
+        return {
+            position.outcome_id: found.get(position.outcome_id) for position in portfolio.positions
+        }
+
+    def live_executable_bids(
+        self,
+        portfolio: PortfolioState,
+        *,
+        as_of: datetime,
+        maximum_bid_age: timedelta,
+        cursor: _Cursor | None = None,
+    ) -> dict[str, ArchivedBid | None]:
+        """Read only recent historical bids needed to value existing positions."""
+        if not portfolio.positions:
+            return {}
+        if maximum_bid_age < timedelta(0):
+            raise ValueError("maximum bid age cannot be negative")
+        outcomes = [uuid.UUID(row.outcome_id) for row in portfolio.positions]
+        oldest = as_of - maximum_bid_age
+        if cursor is None:
+            with (
+                self._connect(self._database_url) as connection,
+                connection.cursor() as local_cursor,
+            ):
+                return self.live_executable_bids(
+                    portfolio,
+                    as_of=as_of,
+                    maximum_bid_age=maximum_bid_age,
+                    cursor=local_cursor,
+                )
+        cursor.execute(
+            "SELECT DISTINCT ON (obs.outcome_id) obs.outcome_id, obs.best_bid, obs.cutoff "
+            "FROM order_book_snapshots obs WHERE obs.outcome_id = ANY(%s::uuid[]) "
+            "AND obs.best_bid IS NOT NULL AND obs.cutoff <= %s AND obs.cutoff >= %s "
+            "AND (obs.source_created_at IS NULL OR obs.source_created_at <= %s) "
+            "ORDER BY obs.outcome_id, obs.cutoff DESC, obs.id DESC",
+            (outcomes, as_of, oldest, as_of),
+        )
+        rows = cursor.fetchall()
+        found = {
+            str(row[0]): ArchivedBid(Decimal(str(row[1])), cast(datetime, row[2])) for row in rows
         }
         return {
             position.outcome_id: found.get(position.outcome_id) for position in portfolio.positions
@@ -1353,6 +1450,7 @@ class ProductionBrokerPort:
         liquidity_time_in_force: LiquidityTimeInForce,
         maximum_valuation_bid_age: timedelta | None = None,
         maximum_book_depth: int = 5,
+        live_context_provider: LiveOrderContextProvider | None = None,
         connect: _Connect | None = None,
     ) -> None:
         self._database_url = database_url
@@ -1361,6 +1459,8 @@ class ProductionBrokerPort:
         self._state = _PostgresTradingState(database_url, connect=connect)
         self._repository = PostgresBrokerRepository(database_url, connect=connect)
         self._liquidity_time_in_force = liquidity_time_in_force
+        self._live_context_provider = live_context_provider
+        self._maximum_live_observation_age = maximum_bid_age
         self._broker = PredictionArenaPaperBroker(
             policy=paper_policy,
             maximum_market_cost_basis_fraction=maximum_market_fraction,
@@ -1374,19 +1474,54 @@ class ProductionBrokerPort:
     def execute(
         self, claim: CycleClaim, frozen: JsonObject, harness: JsonObject
     ) -> BrokerExecutionResult:
-        allowed_intents = self._state.persisted_harness_intents(claim, harness)
-        if not allowed_intents:
-            return BrokerExecutionResult({"order_ids": [], "rejections": []}, (), 0)
-        created: list[str] = []
-        rejected: list[JsonObject] = []
-        accepted = 0
+        live_provider = getattr(self, "_live_context_provider", None)
+        if (
+            getattr(self._broker, "policy", None) is PaperPolicy.LIQUIDITY_AWARE
+            and live_provider is None
+        ):
+            raise ProductionCompositionUnavailable(
+                "liquidity-aware broker requires a live order-context provider"
+            )
         executor = MarketOrderExecutor(
             self._state,
             self._market_repository,
             self._repository,
             broker=self._broker,
             clock=self._clock,
+            live_context_provider=live_provider,
+            maximum_live_observation_age=getattr(
+                self,
+                "_maximum_live_observation_age",
+                getattr(self._broker, "maximum_book_age", timedelta(minutes=5)),
+            ),
         )
+        if (
+            claim.recovery
+            and getattr(self._broker, "policy", None) is PaperPolicy.LIQUIDITY_AWARE
+        ):
+            cancelled = executor.cancel_incomplete_on_restart(claim, frozen)
+            return BrokerExecutionResult(
+                {
+                    "order_ids": [str(receipt.order_id) for receipt in cancelled],
+                    "rejections": [
+                        {
+                            "intent_id": str(receipt.result.order.id),
+                            "code": receipt.result.rejection_code.value
+                            if receipt.result.rejection_code
+                            else None,
+                        }
+                        for receipt in cancelled
+                    ],
+                },
+                (),
+                0,
+            )
+        allowed_intents = self._state.persisted_harness_intents(claim, harness)
+        if not allowed_intents:
+            return BrokerExecutionResult({"order_ids": [], "rejections": []}, (), 0)
+        created: list[str] = []
+        rejected: list[JsonObject] = []
+        accepted = 0
         for item in self._state.pending_intents(claim, frozen):
             if item.intent_id not in allowed_intents:
                 raise ProductionCompositionUnavailable("broker encountered a foreign cycle intent")
@@ -1717,9 +1852,7 @@ def build_production_worker(
         values["VTRADE_SUPABASE_SERVICE_ROLE_KEY"],
     )
     limits = _harness_limits(config.raw)
-    maximum_beliefs_per_agent = _positive_integer(
-        config.raw["limits"], "maximum_beliefs_per_agent"
-    )
+    maximum_beliefs_per_agent = _positive_integer(config.raw["limits"], "maximum_beliefs_per_agent")
     budget = PostgresBudgetGuard(
         database_url,
         limit_micros=_integer(config.raw["limits"], "monthly_external_api_budget_micros"),
@@ -1746,6 +1879,17 @@ def build_production_worker(
     )
     maximum_order_book_age = _maximum_order_book_age(config.raw)
     maximum_order_book_depth = _order_book_depth(config.raw)
+    paper_policy = _paper_policy(config.raw)
+    live_context_provider: LiveOrderContextProvider | None = None
+    if paper_policy is PaperPolicy.LIQUIDITY_AWARE:
+        live_context_provider = PostgresLiveOrderContextProvider(
+            market_repository,
+            venue,
+            clock=clock,
+            monotonic=monotonic,
+            maximum_book_age=maximum_order_book_age,
+            maximum_source_skew=timedelta(seconds=min(source_skew, 5.0)),
+        )
     settlement_valuation = ProductionSettlementValuationPort(
         database_url,
         clock=clock,
@@ -1756,7 +1900,7 @@ def build_production_worker(
         market_repository,
         PostgresBrokerRepository(database_url),
         broker=PredictionArenaPaperBroker(
-            policy=_paper_policy(config.raw),
+            policy=paper_policy,
             maximum_market_cost_basis_fraction=Decimal(
                 str(config.raw["limits"]["maximum_market_cost_basis_fraction"])
             ),
@@ -1765,6 +1909,8 @@ def build_production_worker(
             maximum_valuation_bid_age=maximum_valuation_bid_age,
         ),
         clock=clock,
+        live_context_provider=live_context_provider,
+        maximum_live_observation_age=maximum_order_book_age,
     )
     orchestrator = CycleOrchestrator(
         repository=repository,
@@ -1788,6 +1934,7 @@ def build_production_worker(
             maximum_book_age=maximum_order_book_age,
             maximum_order_book_depth=maximum_order_book_depth,
             immediate_order_executor=immediate_order_executor,
+            require_live_order_execution=paper_policy is PaperPolicy.LIQUIDITY_AWARE,
         ),
         broker=ProductionBrokerPort(
             database_url,
@@ -1799,8 +1946,9 @@ def build_production_worker(
             maximum_bid_age=maximum_order_book_age,
             maximum_valuation_bid_age=maximum_valuation_bid_age,
             maximum_book_depth=maximum_order_book_depth,
-            paper_policy=_paper_policy(config.raw),
+            paper_policy=paper_policy,
             liquidity_time_in_force=_liquidity_time_in_force(config.raw),
+            live_context_provider=live_context_provider,
         ),
         settlement_valuation=settlement_valuation,
         clock=clock,
@@ -1855,7 +2003,8 @@ def run_worker(
 
 def main() -> None:
     config_path = os.getenv(
-        "VTRADE_EXPERIMENT_CONFIG", "config/experiments/predictionarena-polymarket-v1.json"
+        "VTRADE_EXPERIMENT_CONFIG",
+        "config/experiments/predictionarena-polymarket-v1-liquidity-aware.json",
     )
     try:
         run_worker(config_path, forever=True)
@@ -1884,24 +2033,18 @@ def _harness_limits(raw: Mapping[str, Any]) -> HarnessLimits:
 def _paper_policy(raw: Mapping[str, Any]) -> PaperPolicy:
     execution = raw.get("execution")
     if not isinstance(execution, Mapping):
-        raise ProductionCompositionUnavailable(
-            "experiment execution configuration is missing"
-        )
+        raise ProductionCompositionUnavailable("experiment execution configuration is missing")
     value = execution.get("paper_policy")
     try:
         return PaperPolicy(str(value))
     except ValueError as exc:
-        raise ProductionCompositionUnavailable(
-            f"unsupported paper policy: {value}"
-        ) from exc
+        raise ProductionCompositionUnavailable(f"unsupported paper policy: {value}") from exc
 
 
 def _liquidity_time_in_force(raw: Mapping[str, Any]) -> LiquidityTimeInForce:
     execution = raw.get("execution")
     if not isinstance(execution, Mapping):
-        raise ProductionCompositionUnavailable(
-            "experiment execution configuration is missing"
-        )
+        raise ProductionCompositionUnavailable("experiment execution configuration is missing")
     value = execution.get("liquidity_time_in_force", "IOC")
     try:
         return LiquidityTimeInForce(str(value))
@@ -1933,9 +2076,7 @@ def _maximum_order_book_age(raw: Mapping[str, Any]) -> timedelta:
 def _order_book_depth(raw: Mapping[str, Any]) -> int:
     execution = raw.get("execution")
     if not isinstance(execution, Mapping):
-        raise ProductionCompositionUnavailable(
-            "experiment execution configuration is missing"
-        )
+        raise ProductionCompositionUnavailable("experiment execution configuration is missing")
     return _positive_integer(
         {"order_book_depth": execution.get("order_book_depth", 5)},
         "order_book_depth",
@@ -1969,9 +2110,7 @@ def _integer(value: Mapping[str, object], key: str) -> int:
 def _positive_integer(value: Mapping[str, object], key: str) -> int:
     result = _integer(value, key)
     if result <= 0:
-        raise ProductionCompositionUnavailable(
-            f"configuration field {key} must be positive"
-        )
+        raise ProductionCompositionUnavailable(f"configuration field {key} must be positive")
     return result
 
 
@@ -2066,9 +2205,7 @@ def _portfolio_from_payload(value: object) -> PortfolioState:
                 Side(str(_mapping(row)["side"])),
                 MicroDollars(int(str(_mapping(row).get("reserved_cash_micros", 0)))),
                 Decimal(str(_mapping(row).get("reserved_shares", 0))),
-                MicroDollars(
-                    int(str(_mapping(row).get("reserved_cost_basis_micros", 0)))
-                ),
+                MicroDollars(int(str(_mapping(row).get("reserved_cost_basis_micros", 0)))),
             )
             for row in pending_value
         )

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -13,6 +13,7 @@ from typing import Protocol, cast
 
 from vtrade.broker import ExecutionResult, SettlementResult
 from vtrade.ledger import LedgerEntry
+from vtrade.order_execution import LiveExecutionAudit
 
 
 class _Cursor(Protocol):
@@ -58,7 +59,8 @@ class PostgresBrokerRepository:
         intent_id: uuid.UUID,
         market_id: uuid.UUID,
         outcome_id: uuid.UUID,
-        snapshot_id: uuid.UUID,
+        snapshot_id: uuid.UUID | None,
+        live_audit: LiveExecutionAudit | None = None,
     ) -> PersistenceResult:
         if str(agent_id) != result.order.agent_id:
             raise ValueError("database agent does not own the execution result")
@@ -72,6 +74,7 @@ class PostgresBrokerRepository:
                 market_id=market_id,
                 outcome_id=outcome_id,
                 snapshot_id=snapshot_id,
+                live_audit=live_audit,
             )
 
     def persist_execution_locked(
@@ -83,7 +86,8 @@ class PostgresBrokerRepository:
         intent_id: uuid.UUID,
         market_id: uuid.UUID,
         outcome_id: uuid.UUID,
-        snapshot_id: uuid.UUID,
+        snapshot_id: uuid.UUID | None,
+        live_audit: LiveExecutionAudit | None = None,
     ) -> PersistenceResult:
         """Persist using a caller-owned transaction that already holds the agent lock."""
         if str(agent_id) != result.order.agent_id:
@@ -99,63 +103,77 @@ class PostgresBrokerRepository:
             market_id=market_id,
             outcome_id=outcome_id,
             snapshot_id=snapshot_id,
+            live_audit=live_audit,
         )
+        if live_audit is not None:
+            _persist_live_audit(cursor, intent_id, live_audit)
         existing = _existing(cursor, "orders", idempotency_key)
         if existing is not None:
             _assert_same_fingerprint(existing, fingerprint)
             return PersistenceResult(existing[0], False, fingerprint)
         if result.status.value != "rejected":
             _assert_portfolio_version(cursor, agent_id, result.portfolio_before.version)
-        rejected_at = result.order.created_at if result.rejection_code is not None else None
-        accepted_at = None if rejected_at is not None else result.order.created_at
+        executed_at = result.executed_at or result.order.created_at
+        rejected_at = executed_at if result.rejection_code is not None else None
+        accepted_at = None if rejected_at is not None else executed_at
         cursor.execute(
             "INSERT INTO orders "
             "(id, intent_id, policy, status, requested_shares, accepted_at, "
             "rejected_at, rejection_code, idempotency_key, created_at, "
-            "liquidity_time_in_force, execution_fingerprint) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "liquidity_time_in_force, executed_at, execution_fingerprint) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
-                order_id, intent_id, result.policy.value, result.status.value,
-                result.order.shares, accepted_at, rejected_at,
+                order_id,
+                intent_id,
+                result.policy.value,
+                result.status.value,
+                result.order.shares,
+                accepted_at,
+                rejected_at,
                 result.rejection_code.value if result.rejection_code else None,
-                idempotency_key, result.order.created_at,
-                result.order.liquidity_time_in_force.value, fingerprint,
+                idempotency_key,
+                result.order.created_at,
+                result.order.liquidity_time_in_force.value,
+                executed_at,
+                fingerprint,
             ),
         )
         for fill in result.fills:
+            if snapshot_id is None or result.fee_policy is None:
+                raise ValueError("accepted execution requires persisted market context")
             cursor.execute(
-                    "INSERT INTO fills "
-                    "(id, order_id, fill_index, shares, price, gross_micros, fee_micros, "
-                    "snapshot_id, idempotency_key, filled_at, fee_rate, fee_exponent, "
-                    "fee_taker_only, fee_formula_version) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                    (
-                        _stable_database_uuid("fill", fill.id),
-                        order_id,
-                        fill.fill_index,
-                        fill.shares,
-                        fill.price,
-                        int(fill.gross_micros),
-                        int(fill.fee_micros),
-                        snapshot_id,
-                        f"paper-fill:{fill.id}",
-                        fill.filled_at,
-                        result.fee_policy.rate,
-                        result.fee_policy.exponent,
-                        result.fee_policy.taker_only,
-                        result.fee_policy.formula_version,
-                    ),
-                )
+                "INSERT INTO fills "
+                "(id, order_id, fill_index, shares, price, gross_micros, fee_micros, "
+                "snapshot_id, idempotency_key, filled_at, fee_rate, fee_exponent, "
+                "fee_taker_only, fee_formula_version) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    _stable_database_uuid("fill", fill.id),
+                    order_id,
+                    fill.fill_index,
+                    fill.shares,
+                    fill.price,
+                    int(fill.gross_micros),
+                    int(fill.fee_micros),
+                    snapshot_id,
+                    f"paper-fill:{fill.id}",
+                    fill.filled_at,
+                    result.fee_policy.rate,
+                    result.fee_policy.exponent,
+                    result.fee_policy.taker_only,
+                    result.fee_policy.formula_version,
+                ),
+            )
         for entry in result.ledger_entries:
             _insert_ledger(
-                    cursor,
-                    entry,
-                    agent_id=agent_id,
-                    source_table="orders",
-                    source_id=order_id,
-                    market_id=market_id,
-                    outcome_id=outcome_id,
-                )
+                cursor,
+                entry,
+                agent_id=agent_id,
+                source_table="orders",
+                source_id=order_id,
+                market_id=market_id,
+                outcome_id=outcome_id,
+            )
         if result.status.value != "rejected":
             _upsert_position(
                 cursor,
@@ -263,8 +281,33 @@ def _validate_execution_relations(
     intent_id: uuid.UUID,
     market_id: uuid.UUID,
     outcome_id: uuid.UUID,
-    snapshot_id: uuid.UUID,
+    snapshot_id: uuid.UUID | None,
+    live_audit: LiveExecutionAudit | None,
 ) -> None:
+    if snapshot_id is None:
+        if (
+            result.status.value != "rejected"
+            or result.snapshot is not None
+            or (live_audit is not None and live_audit.context is not None)
+        ):
+            raise ValueError("context-less execution must be a rejected result")
+        cursor.execute(
+            "SELECT ac.agent_id, oi.market_id, oi.outcome_id, oi.side "
+            "FROM order_intents oi JOIN agent_cycles ac ON ac.id = oi.agent_cycle_id "
+            "WHERE oi.id = %s FOR UPDATE OF oi",
+            (intent_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise ValueError("execution intent does not exist")
+        if not (
+            uuid.UUID(str(row[0])) == agent_id
+            and uuid.UUID(str(row[1])) == market_id
+            and uuid.UUID(str(row[2])) == outcome_id
+            and str(row[3]) == result.order.side.value
+        ):
+            raise ValueError("execution intent ownership or dimensions differ")
+        return
     cursor.execute(
         "SELECT ac.agent_id, oi.market_id, oi.outcome_id, oi.side, o.venue_token_id, "
         "obs.outcome_id, obs.cutoff, obs.raw_sha256 FROM order_intents oi "
@@ -277,18 +320,200 @@ def _validate_execution_relations(
     row = cursor.fetchone()
     if row is None:
         raise ValueError("execution intent or order-book snapshot does not exist")
+    snapshot = result.snapshot
+    if snapshot is None:
+        raise ValueError("execution relation validation requires a market snapshot")
     matches = (
         uuid.UUID(str(row[0])) == agent_id
         and uuid.UUID(str(row[1])) == market_id
         and uuid.UUID(str(row[2])) == outcome_id
         and str(row[3]) == result.order.side.value
-        and str(row[4]) == result.snapshot.token_id
+        and str(row[4]) == snapshot.token_id
         and uuid.UUID(str(row[5])) == outcome_id
-        and cast(datetime, row[6]) == result.snapshot.observed_at
-        and str(row[7]) == result.snapshot.artifact.sha256
+        and cast(datetime, row[6]) == snapshot.observed_at
+        and str(row[7]) == snapshot.artifact.sha256
     )
     if not matches:
         raise ValueError("execution intent/snapshot ownership or dimensions differ")
+    if live_audit is None or live_audit.context is None:
+        return
+    context = live_audit.context
+    if context.book_snapshot_id != snapshot_id:
+        raise ValueError("live audit book snapshot differs from execution snapshot")
+    if (
+        context.market.id != str(market_id)
+        or context.outcome.id != str(outcome_id)
+        or context.outcome.market_id != str(market_id)
+        or context.outcome.venue_token_id != snapshot.token_id
+        or context.book.token_id != snapshot.token_id
+        or context.book_observed_at != snapshot.observed_at
+    ):
+        raise ValueError("live context domain identifiers differ from the execution intent")
+    cursor.execute(
+        "SELECT market_id, cutoff, payload FROM market_snapshots WHERE id = %s FOR UPDATE",
+        (context.market_snapshot_id,),
+    )
+    market_row = cursor.fetchone()
+    if (
+        market_row is None
+        or uuid.UUID(str(market_row[0])) != market_id
+        or cast(datetime, market_row[1]) != context.market_observed_at
+    ):
+        raise ValueError("live market snapshot does not belong to the execution market")
+    market_payload = market_row[2]
+    if isinstance(market_payload, str):
+        market_payload = json.loads(market_payload)
+    raw_outcomes = (
+        market_payload.get("outcomes") if isinstance(market_payload, Mapping) else None
+    )
+    if not isinstance(raw_outcomes, list) or not any(
+        isinstance(outcome, Mapping)
+        and str(outcome.get("venue_token_id") or "") == snapshot.token_id
+        for outcome in raw_outcomes
+    ):
+        raise ValueError("live market snapshot does not contain the execution outcome")
+    cursor.execute(
+        "SELECT outcome_id, token_id, condition_id, fee_rate, fee_exponent, fee_taker_only, "
+        "observed_at "
+        "FROM fee_rate_snapshots WHERE id = %s FOR UPDATE",
+        (context.fee_rate_snapshot_id,),
+    )
+    fee_row = cursor.fetchone()
+    if fee_row is None or not (
+        uuid.UUID(str(fee_row[0])) == outcome_id
+        and str(fee_row[1]) == snapshot.token_id
+        and str(fee_row[2]) == snapshot.condition_id
+        and Decimal(str(fee_row[3])) == context.fee_policy.rate
+        and (
+            (fee_row[4] is None and context.fee_policy.exponent is None)
+            or (
+                fee_row[4] is not None
+                and context.fee_policy.exponent is not None
+                and Decimal(str(fee_row[4])) == context.fee_policy.exponent
+            )
+        )
+        and bool(fee_row[5]) == context.fee_policy.taker_only
+        and cast(datetime, fee_row[6]) == context.fee_observed_at
+    ):
+        raise ValueError("live fee snapshot does not belong to the execution outcome")
+
+
+def _persist_live_audit(
+    cursor: _Cursor,
+    intent_id: uuid.UUID,
+    audit: LiveExecutionAudit,
+) -> None:
+    for attempt in audit.attempts:
+        cursor.execute(
+            "SELECT intent_id, attempt, requested_at, started_at, completed_at, status, "
+            "error_code FROM order_execution_attempts WHERE intent_id = %s AND attempt = %s "
+            "FOR UPDATE",
+            (intent_id, attempt.attempt),
+        )
+        existing = cursor.fetchone()
+        expected = (
+            intent_id,
+            attempt.attempt,
+            audit.requested_at,
+            attempt.started_at,
+            attempt.completed_at,
+            attempt.status,
+            attempt.error_code,
+        )
+        if existing is not None:
+            actual = (
+                uuid.UUID(str(existing[0])),
+                int(str(existing[1])),
+                existing[2],
+                existing[3],
+                existing[4],
+                str(existing[5]),
+                existing[6],
+            )
+            if actual != expected:
+                raise ValueError("live execution attempt idempotency key was reused")
+            continue
+        cursor.execute(
+            "INSERT INTO order_execution_attempts "
+            "(id, intent_id, attempt, requested_at, started_at, completed_at, "
+            "status, error_code) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            (
+                _stable_database_uuid("execution-attempt", f"{intent_id}:{attempt.attempt}"),
+                intent_id,
+                attempt.attempt,
+                audit.requested_at,
+                attempt.started_at,
+                attempt.completed_at,
+                attempt.status,
+                attempt.error_code,
+            ),
+        )
+    if audit.context is None:
+        return
+    context = audit.context
+    artifact_hashes = dict(context.artifact_hashes)
+    cursor.execute(
+        "SELECT id, intent_id, market_snapshot_id, order_book_snapshot_id, "
+        "fee_rate_snapshot_id, requested_at, validated_at, executed_at, "
+        "market_observed_at, order_book_observed_at, fee_observed_at, artifact_hashes "
+        "FROM live_order_contexts WHERE intent_id = %s FOR UPDATE",
+        (intent_id,),
+    )
+    existing_context = cursor.fetchone()
+    if existing_context is not None:
+        stored_hashes = existing_context[11]
+        if isinstance(stored_hashes, str):
+            stored_hashes = json.loads(stored_hashes)
+        expected_context = (
+            intent_id,
+            context.market_snapshot_id,
+            context.book_snapshot_id,
+            context.fee_rate_snapshot_id,
+            audit.requested_at,
+            context.validated_at,
+            audit.executed_at,
+            context.market_observed_at,
+            context.book_observed_at,
+            context.fee_observed_at,
+            artifact_hashes,
+        )
+        actual_context = (
+            uuid.UUID(str(existing_context[1])),
+            uuid.UUID(str(existing_context[2])),
+            uuid.UUID(str(existing_context[3])),
+            uuid.UUID(str(existing_context[4])),
+            existing_context[5],
+            existing_context[6],
+            existing_context[7],
+            existing_context[8],
+            existing_context[9],
+            existing_context[10],
+            stored_hashes,
+        )
+        if actual_context != expected_context:
+            raise ValueError("live order context idempotency key was reused")
+        return
+    cursor.execute(
+        "INSERT INTO live_order_contexts "
+        "(id, intent_id, market_snapshot_id, order_book_snapshot_id, "
+        "fee_rate_snapshot_id, requested_at, validated_at, executed_at, "
+        "market_observed_at, order_book_observed_at, fee_observed_at, artifact_hashes) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
+        (
+            _stable_database_uuid("live-order-context", str(intent_id)),
+            intent_id,
+            context.market_snapshot_id,
+            context.book_snapshot_id,
+            context.fee_rate_snapshot_id,
+            audit.requested_at,
+            context.validated_at,
+            audit.executed_at,
+            context.market_observed_at,
+            context.book_observed_at,
+            context.fee_observed_at,
+            json.dumps(artifact_hashes, sort_keys=True),
+        ),
+    )
 
 
 def _validate_settlement_relations(
@@ -358,9 +583,7 @@ def _advance_portfolio_version(cursor: _Cursor, agent_id: uuid.UUID, version: in
     )
 
 
-def _existing(
-    cursor: _Cursor, table: str, idempotency_key: str
-) -> tuple[uuid.UUID, str] | None:
+def _existing(cursor: _Cursor, table: str, idempotency_key: str) -> tuple[uuid.UUID, str] | None:
     if table not in {"orders", "settlements"}:
         raise ValueError("unsupported idempotency table")
     cursor.execute(

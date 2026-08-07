@@ -554,7 +554,7 @@ class PostgresHarnessRepository:
             count = cursor.fetchone()
             if count is None:
                 raise ValueError("belief count could not be checked")
-            if int(count[0]) >= self._maximum_beliefs_per_agent:
+            if int(str(count[0])) >= self._maximum_beliefs_per_agent:
                 raise ValueError(
                     "maximum active beliefs per agent reached "
                     f"({self._maximum_beliefs_per_agent})"

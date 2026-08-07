@@ -19,7 +19,7 @@
     },
     "tool_schemas": {
       "path": "spec/tool-schemas-v1.json",
-      "sha256": "90a712cf486b01cb107afd04514a0c3c86f831b71da27626a7ef3735c319ae6d",
+      "sha256": "7bb7379ea42a10d3725d9c15a53138364ecd813b8f0e1e320f2dc58f0e195a73",
       "classification": "inferred"
     }
   },
@@ -149,7 +149,7 @@
     "general_beliefs_pagination_required_beyond_limit": true,
     "maximum_cycle_wall_clock_seconds": 3300,
     "maximum_source_clock_skew_seconds": 5,
-    "maximum_archived_bid_age_seconds": 300,
+    "maximum_archived_bid_age_seconds": 1800,
     "monthly_external_api_budget_micros": 40000000,
     "monthly_external_api_budget_excluded_providers": [
       "exa"
@@ -217,8 +217,8 @@
       "status": "resolved",
       "required": true,
       "policy": "last_known_bid",
-      "maximum_age_seconds": 300,
-      "on_missing_or_stale": "block_snapshot_and_scoring"
+      "maximum_age_seconds": 1800,
+      "on_missing_or_stale": "reject_order_financial_controls"
     },
     "model_token_limits": {
       "status": "resolved",

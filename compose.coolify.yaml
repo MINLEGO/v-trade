@@ -1,6 +1,6 @@
 x-vtrade-environment: &vtrade-environment
   VTRADE_ENVIRONMENT: ${VTRADE_ENVIRONMENT:-production}
-  VTRADE_EXPERIMENT_CONFIG: ${VTRADE_EXPERIMENT_CONFIG:-config/experiments/predictionarena-polymarket-v1.json}
+  VTRADE_EXPERIMENT_CONFIG: ${VTRADE_EXPERIMENT_CONFIG:-config/experiments/predictionarena-polymarket-v1-liquidity-aware.json}
   VTRADE_DATABASE_URL: ${VTRADE_DATABASE_URL:?required}
   VTRADE_ARTIFACT_ROOT: ${VTRADE_ARTIFACT_ROOT:-artifacts}
   VTRADE_SUPABASE_BUCKET: ${VTRADE_SUPABASE_BUCKET:?required}

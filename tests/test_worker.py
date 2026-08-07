@@ -461,7 +461,7 @@ class WorkerFailClosedTests(unittest.TestCase):
         self.assertEqual(market_repository.seen_fees, (fee_id,))
         self.assertEqual(port._broker.seen_order.liquidity_time_in_force, LiquidityTimeInForce.FAK)
 
-    def test_production_broker_port_returns_liquidity_aware_partial_fill(self) -> None:
+    def test_production_broker_port_rejects_liquidity_aware_frozen_fallback(self) -> None:
         cycle_id, agent_id = uuid.uuid4(), uuid.uuid4()
         cutoff = datetime(2026, 7, 18, 10, tzinfo=UTC)
         intent_id, market_id, outcome_id, book_id, fee_id = (
@@ -557,27 +557,15 @@ class WorkerFailClosedTests(unittest.TestCase):
         port._liquidity_time_in_force = LiquidityTimeInForce.FAK
         port._clock = lambda: cutoff
 
-        result = port.execute(
-            claim,
-            {
-                "order_book_snapshot_ids": [str(book_id)],
-                "fee_rate_snapshot_ids": [str(fee_id)],
-            },
-            {"harness_run_id": str(uuid.uuid4()), "intent_ids": [str(intent_id)]},
-        )
-
-        self.assertEqual(result.accepted_trades, 1)
-        self.assertEqual(repository.result.status, ExecutionStatus.PARTIAL)
-        self.assertEqual(repository.result.policy, PaperPolicy.LIQUIDITY_AWARE)
-        self.assertEqual(
-            repository.result.order.liquidity_time_in_force,
-            LiquidityTimeInForce.FAK,
-        )
-        self.assertEqual(
-            [(fill.shares, fill.price) for fill in repository.result.fills],
-            [(Decimal("1"), Decimal("0.40")), (Decimal("2"), Decimal("0.41"))],
-        )
-        self.assertEqual(repository.result.portfolio.position(str(outcome_id)).shares, Decimal("3"))
+        with self.assertRaises(ProductionCompositionUnavailable):
+            port.execute(
+                claim,
+                {
+                    "order_book_snapshot_ids": [str(book_id)],
+                    "fee_rate_snapshot_ids": [str(fee_id)],
+                },
+                {"harness_run_id": str(uuid.uuid4()), "intent_ids": [str(intent_id)]},
+            )
 
     def test_offline_cycle_graph_replays_completed_checkpoints_without_side_effects(self) -> None:
         now = datetime(2026, 7, 18, 10, tzinfo=UTC)

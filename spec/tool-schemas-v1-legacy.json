@@ -1339,7 +1339,7 @@
     },
     {
       "name": "place_market_order",
-      "description": "Submit and immediately evaluate a paper-market order. The agent decision uses the current cycle's frozen market data, but the active liquidity-aware path refreshes the target market metadata, order book and fee policy immediately before execution. `token_id` must be the venue token identifier for the exact outcome being bought or sold.\n\nFor BUY orders, `amount_type` defaults to `CASH`, meaning `amount` is a dollar budget. BUY orders may instead use `SHARES`. For SELL orders, `amount_type` defaults to `SHARES`; SELL with `CASH` is not supported.\n\n`time_in_force` defaults to `IOC`:\n\n* `IOC` executes available eligible liquidity immediately and cancels any unfilled remainder.\n* `FOK` executes only if the complete requested quantity can be filled under the order constraints; otherwise it is rejected.\n\nThe optional `limit_price` restricts execution to acceptable displayed prices between 0 and 1. The optional `conviction` value is a 0-to-1 audit value; it does not replace an explicit probability, expected-value or risk analysis.\n\nBefore calling this tool:\n\n1. retrieve the complete market details and resolution rules;\n2. verify the exact YES/NO outcome and token;\n3. retrieve the current frozen order book;\n4. calculate edge and expected P&L using executable depth;\n5. confirm available cash or shares;\n6. check existing exposure and risk limits.\n\nThe active live refresh is bounded by a 10-second construction window, a five-second source skew, and the configured book-age limit. A network failure is retried once with the same intent; stale, expired or inconsistent context is rejected without a frozen fallback or financial mutation. The result status is `rejected`, `filled`, `partial`, or `pending_broker_validation`. A pending result records the order intent but does not establish that any execution occurred; do not treat it as filled. For `rejected`, inspect `rejection_code`, `message`, `portfolio_after`, and `attempts` when present. A pre-context rejection omits `snapshot`. For `filled` or `partial`, inspect `execution.filled_shares`, `execution.cancelled_shares`, `execution.average_price`, `execution.gross_micros`, `execution.fee_micros`, `execution.cash_delta_micros`, `execution.remainder_status`, and `portfolio_after.affected_position`.\n\nNever assume that submitting an order means it executed. After a rejection or partial fill, recalculate cash, exposure, remaining edge and liquidity before deciding whether to submit another order. Do not retry unchanged orders repeatedly.",
+      "description": "Submit and immediately evaluate a paper-market order against the current cycle’s frozen order book. `token_id` must be the venue token identifier for the exact outcome being bought or sold.\n\nFor BUY orders, `amount_type` defaults to `CASH`, meaning `amount` is a dollar budget. BUY orders may instead use `SHARES`. For SELL orders, `amount_type` defaults to `SHARES`; SELL with `CASH` is not supported.\n\n`time_in_force` defaults to `IOC`:\n\n* `IOC` executes available eligible liquidity immediately and cancels any unfilled remainder.\n* `FOK` executes only if the complete requested quantity can be filled under the order constraints; otherwise it is rejected.\n\nThe optional `limit_price` restricts execution to acceptable displayed prices between 0 and 1. The optional `conviction` value is a 0-to-1 audit value; it does not replace an explicit probability, expected-value or risk analysis.\n\nBefore calling this tool:\n\n1. retrieve the complete market details and resolution rules;\n2. verify the exact YES/NO outcome and token;\n3. retrieve the current frozen order book;\n4. calculate edge and expected P&L using executable depth;\n5. confirm available cash or shares;\n6. check existing exposure and risk limits.\n\nThe result status is `rejected`, `filled`, `partial`, or `pending_broker_validation`. A pending result records the order intent but does not establish that any execution occurred; do not treat it as filled. For `rejected`, inspect `rejection_code`, `message`, and `portfolio_after`. For `filled` or `partial`, inspect `execution.filled_shares`, `execution.cancelled_shares`, `execution.average_price`, `execution.gross_micros`, `execution.fee_micros`, `execution.cash_delta_micros`, `execution.remainder_status`, and `portfolio_after.affected_position`.\n\nNever assume that submitting an order means it executed. After a rejection or partial fill, recalculate cash, exposure, remaining edge and liquidity before deciding whether to submit another order. Do not retry unchanged orders repeatedly.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -1426,15 +1426,6 @@
               "fee_micros", "cash_delta_micros", "remainder_status"
             ]
           },
-          "live_attempt": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "attempt": {"type": "integer", "minimum": 1},
-              "error": {"type": "string"}
-            },
-            "required": ["attempt", "error"]
-          },
           "virtual_liquidity_level": {
             "type": "object",
             "additionalProperties": false,
@@ -1456,6 +1447,10 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
+              "context_version": {"type": "string"},
+              "agent_id": {"type": "string"},
+              "agent_cycle_id": {"type": "string"},
+              "snapshot_id": {"type": "string"},
               "token_id": {"type": "string"},
               "side": {"type": "string", "enum": ["BUY", "SELL"]},
               "requested_shares": {"type": "string"},
@@ -1469,7 +1464,8 @@
               }
             },
             "required": [
-              "token_id", "side", "requested_shares", "available_shares", "consumed_shares",
+              "context_version", "agent_id", "agent_cycle_id", "snapshot_id", "token_id",
+              "side", "requested_shares", "available_shares", "consumed_shares",
               "cancelled_shares", "remaining_shares", "levels"
             ]
           }
@@ -1486,10 +1482,6 @@
               "requested": {"$ref": "#/$defs/order_request"},
               "portfolio_after": {"$ref": "#/$defs/portfolio_after"},
               "snapshot": {"$ref": "#/$defs/order_snapshot"},
-              "attempts": {
-                "type": "array",
-                "items": {"$ref": "#/$defs/live_attempt"}
-              },
               "virtual_liquidity": {"$ref": "#/$defs/virtual_liquidity"},
               "rejection_code": {
                 "type": "string",
@@ -1499,16 +1491,14 @@
                   "crossed_book", "required_quote_absent", "invalid_price", "invalid_tick",
                   "below_minimum_size", "insufficient_cash", "insufficient_shares",
                   "concentration_limit", "no_liquidity", "fok_not_filled",
-                  "price_limit_not_market", "no_bid_valuation", "network_error",
-                  "live_context_expired", "inconsistent_live_context", "stale_live_data",
-                  "cancelled_by_restart"
+                  "price_limit_not_market"
                 ]
               },
               "message": {"type": "string"}
             },
             "required": [
               "status", "intent_id", "order_id", "side", "requested", "portfolio_after",
-              "rejection_code", "message"
+              "snapshot", "rejection_code", "message"
             ]
           },
           {
@@ -1522,10 +1512,6 @@
               "requested": {"$ref": "#/$defs/order_request"},
               "portfolio_after": {"$ref": "#/$defs/portfolio_after"},
               "snapshot": {"$ref": "#/$defs/order_snapshot"},
-              "attempts": {
-                "type": "array",
-                "items": {"$ref": "#/$defs/live_attempt"}
-              },
               "virtual_liquidity": {"$ref": "#/$defs/virtual_liquidity"},
               "execution": {"$ref": "#/$defs/execution"}
             },
@@ -1545,10 +1531,6 @@
               "requested": {"$ref": "#/$defs/order_request"},
               "portfolio_after": {"$ref": "#/$defs/portfolio_after"},
               "snapshot": {"$ref": "#/$defs/order_snapshot"},
-              "attempts": {
-                "type": "array",
-                "items": {"$ref": "#/$defs/live_attempt"}
-              },
               "virtual_liquidity": {"$ref": "#/$defs/virtual_liquidity"},
               "execution": {"$ref": "#/$defs/execution"}
             },

@@ -18,9 +18,10 @@ Recorded: 2026-07-18.
 - Audit redaction: always redact secrets, tokens and authorization headers.
 - Paper fill: buy at best ask, sell at best bid, do not require a counterparty, and
   reject when the required quote is absent.
-- No-bid valuation: use the latest archived executable bid when it is no more than
-  300 seconds old at the valuation cutoff; otherwise block the account snapshot and
-  scoring. Never substitute zero.
+- No-bid valuation: for the active liquidity-aware execution, use the latest archived
+  executable bid when it is no more than 1,800 seconds old at live validation; otherwise
+  reject the financial controls. Historical experiment definitions retain their original
+  300-second valuation rule. Never substitute zero.
 - Exa: strict maximum of 50 searches per agent-cycle.
 - Research result volume: strict maximum of 10 results per search.
 - Research planning expectations supplied by the owner from PredictionArena data:

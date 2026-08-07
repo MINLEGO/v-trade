@@ -121,9 +121,7 @@ class FeePolicySnapshot:
             raise ValueError("fee policy requires a condition ID")
         if not self.rate.is_finite() or not Decimal(0) <= self.rate <= Decimal(1):
             raise ValueError("fee rate must be finite and between zero and one")
-        if self.exponent is not None and (
-            not self.exponent.is_finite() or self.exponent < 0
-        ):
+        if self.exponent is not None and (not self.exponent.is_finite() or self.exponent < 0):
             raise ValueError("fee exponent must be finite and non-negative")
         if not isinstance(self.taker_only, bool):
             raise ValueError("fee taker_only must be boolean")
@@ -132,6 +130,12 @@ class FeePolicySnapshot:
             _aware_utc(self.source_created_at)
             if self.source_created_at > self.observed_at:
                 raise ValueError("fee source timestamp cannot follow observation")
+
+
+@dataclass(frozen=True, slots=True)
+class MarketObservation:
+    market: Market
+    artifact: RawArtifact
 
 
 def _aware_utc(value: datetime) -> datetime:
@@ -209,9 +213,7 @@ def _micro_dollars(value: Any, field: str) -> MicroDollars:
     return MicroDollars(int(rounded * 1_000_000))
 
 
-def _json_string_array(
-    value: Any, field: str, *, allow_null: bool = False
-) -> tuple[Any, ...]:
+def _json_string_array(value: Any, field: str, *, allow_null: bool = False) -> tuple[Any, ...]:
     if isinstance(value, str):
         try:
             value = json.loads(value)
@@ -259,12 +261,19 @@ class PolymarketVenue:
         self._maximum_source_clock_skew_seconds = maximum_source_clock_skew_seconds
         self._resolution_history: list[Resolution] = []
 
-    def _get(self, url: str, params: list[tuple[str, str]]) -> _ArchivedResponse:
+    def _get(
+        self,
+        url: str,
+        params: list[tuple[str, str]],
+        *,
+        retry_policy: RetryPolicy | None = None,
+    ) -> _ArchivedResponse:
         last_error: Exception | None = None
+        retry = self._retry if retry_policy is None else retry_policy
         query_params = httpx.QueryParams()
         for key, value in params:
             query_params = query_params.add(key, value)
-        for attempt in range(self._retry.maximum_attempts):
+        for attempt in range(retry.maximum_attempts):
             self._rate_limiter.wait(url)
             try:
                 response = self._client.get(url, params=query_params)
@@ -287,17 +296,20 @@ class PolymarketVenue:
                 return _ArchivedResponse(payload, observed_at, _artifact(reference))
             except (httpx.HTTPError, PolymarketTransportError) as exc:
                 last_error = exc
-                if attempt + 1 >= self._retry.maximum_attempts:
+                if attempt + 1 >= retry.maximum_attempts:
                     break
                 delay = min(
-                    self._retry.initial_backoff_seconds * (2**attempt),
-                    self._retry.maximum_backoff_seconds,
+                    retry.initial_backoff_seconds * (2**attempt),
+                    retry.maximum_backoff_seconds,
                 )
                 self._sleep(delay)
         raise PolymarketTransportError("bounded Polymarket GET retries exhausted") from last_error
 
     def _parallel_get(
-        self, requests: Sequence[tuple[str, list[tuple[str, str]]]]
+        self,
+        requests: Sequence[tuple[str, list[tuple[str, str]]]],
+        *,
+        retry_policy: RetryPolicy | None = None,
     ) -> tuple[_ArchivedResponse, ...]:
         """Fetch bounded CLOB requests concurrently while preserving input order."""
         if not requests:
@@ -306,7 +318,10 @@ class PolymarketVenue:
             max_workers=min(self._maximum_parallel_clob_requests, len(requests)),
             thread_name_prefix="vtrade-polymarket",
         ) as executor:
-            futures = tuple(executor.submit(self._get, url, params) for url, params in requests)
+            futures = tuple(
+                executor.submit(self._get, url, params, retry_policy=retry_policy)
+                for url, params in requests
+            )
             return tuple(future.result() for future in futures)
 
     def sync_events(self, cursor: str | None = None, *, limit: int = 100) -> MarketDelta:
@@ -394,6 +409,35 @@ class PolymarketVenue:
             artifact=archived.artifact,
         )
 
+    def get_market(self, market_id: str, *, retry_policy: RetryPolicy | None = None) -> Market:
+        """Fetch only one market's validation metadata for a live order."""
+        return self.get_market_observation(market_id, retry_policy=retry_policy).market
+
+    def get_market_observation(
+        self, market_id: str, *, retry_policy: RetryPolicy | None = None
+    ) -> MarketObservation:
+        """Fetch live validation metadata together with its raw response artifact."""
+        venue_id = self._venue_market_id(market_id)
+        archived = self._get(
+            f"{GAMMA_BASE_URL}/markets/{quote(venue_id, safe='')}",
+            [],
+            retry_policy=retry_policy,
+        )
+        root = self._root_object(archived.payload)
+        payload = root.get("market")
+        if not isinstance(payload, Mapping):
+            payload = root
+        try:
+            event = self._event_from_market(payload, archived.observed_at)
+        except PolymarketPayloadError as exc:
+            if "event relation" not in str(exc):
+                raise
+            event = self._synthetic_event_for_market(payload, archived.observed_at)
+        return MarketObservation(
+            self._normalize_market(payload, archived.observed_at, parent_event=event),
+            archived.artifact,
+        )
+
     def sync_all_markets(
         self, cursor: str | None = None, *, maximum_pages: int = 20, page_limit: int = 100
     ) -> tuple[MarketDelta, ...]:
@@ -413,14 +457,20 @@ class PolymarketVenue:
             current = page.next_cursor
         return tuple(pages)
 
-    def get_order_book(self, outcome_ids: Sequence[str]) -> tuple[OrderBookSnapshot, ...]:
+    def get_order_book(
+        self,
+        outcome_ids: Sequence[str],
+        *,
+        retry_policy: RetryPolicy | None = None,
+    ) -> tuple[OrderBookSnapshot, ...]:
         unique = tuple(dict.fromkeys(outcome_ids))
         if not unique or len(unique) > self._maximum_order_books_per_call:
             raise ValueError("order-book request count is empty or above the configured bound")
         if any(not token_id for token_id in unique):
             raise ValueError("outcome token IDs cannot be empty")
         archived_responses = self._parallel_get(
-            tuple((f"{CLOB_BASE_URL}/book", [("token_id", token_id)]) for token_id in unique)
+            tuple((f"{CLOB_BASE_URL}/book", [("token_id", token_id)]) for token_id in unique),
+            retry_policy=retry_policy,
         )
         snapshots: list[OrderBookSnapshot] = []
         for token_id, archived in zip(unique, archived_responses, strict=True):
@@ -453,7 +503,12 @@ class PolymarketVenue:
             )
         return tuple(snapshots)
 
-    def get_fee_policies(self, condition_ids: Sequence[str]) -> tuple[FeePolicySnapshot, ...]:
+    def get_fee_policies(
+        self,
+        condition_ids: Sequence[str],
+        *,
+        retry_policy: RetryPolicy | None = None,
+    ) -> tuple[FeePolicySnapshot, ...]:
         """Archive the per-market fee curve parameters from CLOB market info."""
         unique = tuple(dict.fromkeys(condition_ids))
         if not unique or len(unique) > self._maximum_order_books_per_call:
@@ -467,7 +522,8 @@ class PolymarketVenue:
                     [],
                 )
                 for condition_id in unique
-            )
+            ),
+            retry_policy=retry_policy,
         )
         policies: list[FeePolicySnapshot] = []
         for condition_id, archived in zip(unique, archived_responses, strict=True):
@@ -480,9 +536,7 @@ class PolymarketVenue:
                 raise PolymarketPayloadError("fd.r must be between zero and one")
             raw_exponent = fee_details.get("e")
             exponent = (
-                None
-                if raw_exponent is None
-                else _decimal(raw_exponent, "fd.e", minimum=Decimal(0))
+                None if raw_exponent is None else _decimal(raw_exponent, "fd.e", minimum=Decimal(0))
             )
             taker_only = fee_details.get("to")
             if not isinstance(taker_only, bool):
@@ -523,9 +577,7 @@ class PolymarketVenue:
         self._resolution_history.extend(resolutions)
         return tuple(resolutions)
 
-    def get_resolutions(
-        self, market_ids: Sequence[str], as_of: datetime
-    ) -> tuple[Resolution, ...]:
+    def get_resolutions(self, market_ids: Sequence[str], as_of: datetime) -> tuple[Resolution, ...]:
         cutoff = _aware_utc(as_of)
         wanted = {self._canonical_market_id(self._venue_market_id(value)) for value in market_ids}
         latest: dict[str, Resolution] = {}
@@ -560,6 +612,29 @@ class PolymarketVenue:
         if not isinstance(rows, list) or not rows:
             raise PolymarketPayloadError("market must include at least one event relation")
         return self._normalize_event(self._object(rows[0], "market event"), observed_at)
+
+    def _synthetic_event_for_market(
+        self, payload: Mapping[str, Any], observed_at: datetime
+    ) -> Event:
+        market_id = _required_str(payload, "id")
+        event_id = str(payload.get("eventId") or payload.get("event_id") or market_id)
+        title = str(payload.get("question") or market_id)
+        return Event(
+            id=f"polymarket:event:{event_id}",
+            venue_id=event_id,
+            slug=str(payload.get("slug") or market_id),
+            title=title,
+            description=str(payload.get("description") or ""),
+            resolution_source=_optional_str(payload, "resolutionSource"),
+            opens_at=_parse_datetime(payload.get("startDate"), "event.startDate"),
+            closes_at=_parse_datetime(payload.get("endDate"), "event.endDate"),
+            active=payload.get("active") is True,
+            closed=payload.get("closed") is True,
+            archived=payload.get("archived") is True,
+            observed_at=observed_at,
+            source_updated_at=_parse_datetime(payload.get("updatedAt"), "event.updatedAt"),
+            venue_metadata={"ticker": payload.get("ticker"), "tags": payload.get("tags", [])},
+        )
 
     def _normalize_event(self, payload: Mapping[str, Any], observed_at: datetime) -> Event:
         venue_id = _required_str(payload, "id")
@@ -600,9 +675,7 @@ class PolymarketVenue:
             maximum_source_clock_skew_seconds=self._maximum_source_clock_skew_seconds,
         )
         names = _json_string_array(payload.get("outcomes"), "outcomes")
-        token_ids = _json_string_array(
-            payload.get("clobTokenIds"), "clobTokenIds", allow_null=True
-        )
+        token_ids = _json_string_array(payload.get("clobTokenIds"), "clobTokenIds", allow_null=True)
         if token_ids and len(names) != len(token_ids):
             raise PolymarketPayloadError("outcomes and clobTokenIds must map 1:1")
         if not names:
@@ -641,9 +714,7 @@ class PolymarketVenue:
                     "outcome names and token IDs must be non-empty strings"
                 )
             indicative = (
-                None
-                if price is None
-                else _decimal(price, "outcomePrice", minimum=Decimal(0))
+                None if price is None else _decimal(price, "outcomePrice", minimum=Decimal(0))
             )
             if indicative is not None and indicative > 1:
                 raise PolymarketPayloadError("outcomePrice must be between zero and one")
@@ -717,9 +788,7 @@ class PolymarketVenue:
         split_resolution = len(outcomes) == 2 and all(
             outcome.indicative_price == Decimal("0.5") for outcome in outcomes
         )
-        if closed and uma_status == "resolved" and (
-            singular_resolution or split_resolution
-        ):
+        if closed and uma_status == "resolved" and (singular_resolution or split_resolution):
             return MarketStatus.RESOLVED
         if closed:
             return MarketStatus.CLOSED
@@ -892,16 +961,12 @@ class MarketDiscoveryCache:
 
 
 class MarketDiscoveryTools:
-    def __init__(
-        self, cache: MarketDiscoveryCache, *, as_of: datetime
-    ) -> None:
+    def __init__(self, cache: MarketDiscoveryCache, *, as_of: datetime) -> None:
         self._cache = cache
         self._as_of = _aware_utc(as_of)
 
     def search_markets(self, query: str, *, limit: int = 20) -> dict[str, Any]:
-        markets = self._cache.discover(
-            DiscoveryQuery(text=query, limit=limit), as_of=self._as_of
-        )
+        markets = self._cache.discover(DiscoveryQuery(text=query, limit=limit), as_of=self._as_of)
         return {"as_of": self._as_of.isoformat(), "markets": [self._summary(m) for m in markets]}
 
     def browse_markets(
@@ -919,9 +984,7 @@ class MarketDiscoveryTools:
 
     def get_market_details(self, market_id: str) -> dict[str, Any]:
         matches = [
-            market
-            for market in self._cache.markets_as_of(self._as_of)
-            if market.id == market_id
+            market for market in self._cache.markets_as_of(self._as_of) if market.id == market_id
         ]
         if len(matches) != 1:
             raise KeyError(f"market {market_id!r} is not present at the tool cutoff")

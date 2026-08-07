@@ -4,21 +4,35 @@ import json
 import uuid
 from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
-from vtrade.broker import FeePolicy
+from vtrade.broker import FeePolicy, RejectionCode
 from vtrade.domain.types import (
     Event,
     Market,
     MarketDelta,
     MarketStatus,
     OrderBookSnapshot,
+    RawArtifact,
     Resolution,
 )
-from vtrade.polymarket import FeePolicySnapshot, PolymarketVenue
+from vtrade.order_execution import (
+    LiveContextError,
+    LiveContextPersistence,
+    LiveOrderContext,
+    MarketOrderSubmission,
+    ValidatedLiveOrderContextProvider,
+)
+from vtrade.polymarket import (
+    FeePolicySnapshot,
+    PolymarketError,
+    PolymarketTransportError,
+    PolymarketVenue,
+    RetryPolicy,
+)
 from vtrade.runtime import (
     ArtifactRegistration,
     CycleClaim,
@@ -26,11 +40,15 @@ from vtrade.runtime import (
     six_month_retain_until,
 )
 
+_LIVE_CONTEXT_RETRY_POLICY = RetryPolicy(maximum_attempts=1)
+
 
 class _Cursor(Protocol):
     def execute(self, query: str, params: Sequence[object] = ()) -> object: ...
 
     def fetchall(self) -> Sequence[Sequence[object]]: ...
+
+    def fetchone(self) -> Sequence[object] | None: ...
 
 
 class _Connection(Protocol):
@@ -50,6 +68,15 @@ class FrozenPersistence:
 
 class FrozenFeePolicyUnavailable(RuntimeError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class LiveMarketReference:
+    market_id: uuid.UUID
+    market_venue_id: str
+    outcome_id: uuid.UUID
+    token_id: str
+    condition_id: str
 
 
 class PostgresMarketDataRepository:
@@ -335,6 +362,149 @@ class PostgresMarketDataRepository:
             taker_only=taker_only,
         )
 
+    def live_market_reference(self, outcome_id: uuid.UUID) -> LiveMarketReference:
+        """Resolve stable venue identifiers without consulting the frozen cycle."""
+        with self._connect(self._database_url) as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT m.id, m.venue_market_id, m.condition_id, o.id, "
+                "o.venue_token_id FROM outcomes o JOIN markets m ON m.id = o.market_id "
+                "WHERE o.id = %s",
+                (outcome_id,),
+            )
+            rows = cursor.fetchall()
+        if len(rows) != 1:
+            raise FrozenFeePolicyUnavailable("live order outcome metadata is unavailable")
+        row = rows[0]
+        condition_id = str(row[2] or "")
+        token_id = str(row[4] or "")
+        if not condition_id or not token_id:
+            raise FrozenFeePolicyUnavailable("live order metadata lacks token or condition")
+        return LiveMarketReference(
+            uuid.UUID(str(row[0])),
+            str(row[1]),
+            uuid.UUID(str(row[3])),
+            token_id,
+            condition_id,
+        )
+
+    def persist_live_order_context(
+        self,
+        market: Market,
+        book: OrderBookSnapshot,
+        fee_policy: FeePolicySnapshot,
+        *,
+        market_artifact: RawArtifact | None = None,
+    ) -> FrozenPersistence:
+        """Append one live market/book/fee observation without changing old snapshots."""
+        market_artifact = market_artifact or book.artifact
+        market_cutoff = market.observed_at or book.observed_at
+        market_snapshot_id = _id(
+            "market-snapshot",
+            market.id,
+            market_cutoff.isoformat(),
+            market_artifact.sha256,
+        )
+        book_id = _id("book", book.token_id, book.observed_at.isoformat(), book.artifact.sha256)
+        fee_id = _id(
+            "fee-policy",
+            fee_policy.condition_id,
+            book.token_id,
+            fee_policy.observed_at.isoformat(),
+            fee_policy.artifact.sha256,
+        )
+        with self._connect(self._database_url) as connection, connection.cursor() as cursor:
+            self._upsert_market(cursor, market)
+            cursor.execute(
+                "INSERT INTO market_snapshots "
+                "(id, market_id, cutoff, status, volume_micros, liquidity_micros, "
+                "payload, raw_artifact_uri, raw_sha256) VALUES "
+                "(%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s) "
+                "ON CONFLICT (market_id, cutoff, raw_sha256) DO NOTHING",
+                (
+                    market_snapshot_id,
+                    _id("market", market.id),
+                    market_cutoff,
+                    market.status.value,
+                    int(market.volume_micros),
+                    int(market.liquidity_micros),
+                    json.dumps(_market_snapshot_payload(market), default=str),
+                    market_artifact.uri,
+                    market_artifact.sha256,
+                ),
+            )
+            cursor.execute(
+                "SELECT id FROM market_snapshots WHERE market_id = %s AND cutoff = %s "
+                "AND raw_sha256 = %s",
+                (_id("market", market.id), market_cutoff, market_artifact.sha256),
+            )
+            market_row = cursor.fetchone()
+            if market_row is None:
+                raise RuntimeError("live market snapshot disappeared after persistence")
+            market_snapshot_id = uuid.UUID(str(market_row[0]))
+            cursor.execute(
+                "INSERT INTO order_book_snapshots "
+                "(id, outcome_id, cutoff, source_created_at, bids, asks, best_bid, "
+                "best_ask, raw_artifact_uri, raw_sha256) VALUES "
+                "(%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s) "
+                "ON CONFLICT (outcome_id, cutoff, raw_sha256) DO NOTHING",
+                (
+                    book_id,
+                    _id("outcome", f"polymarket:outcome:{book.token_id}"),
+                    book.observed_at,
+                    book.source_created_at,
+                    json.dumps([{"price": str(x.price), "size": str(x.size)} for x in book.bids]),
+                    json.dumps([{"price": str(x.price), "size": str(x.size)} for x in book.asks]),
+                    book.best_bid,
+                    book.best_ask,
+                    book.artifact.uri,
+                    book.artifact.sha256,
+                ),
+            )
+            cursor.execute(
+                "SELECT id FROM order_book_snapshots WHERE outcome_id = %s AND cutoff = %s "
+                "AND raw_sha256 = %s",
+                (
+                    _id("outcome", f"polymarket:outcome:{book.token_id}"),
+                    book.observed_at,
+                    book.artifact.sha256,
+                ),
+            )
+            book_row = cursor.fetchone()
+            if book_row is None:
+                raise RuntimeError("live order-book snapshot disappeared after persistence")
+            book_id = uuid.UUID(str(book_row[0]))
+            cursor.execute(
+                "INSERT INTO fee_rate_snapshots "
+                "(id, outcome_id, token_id, condition_id, base_fee_bps, fee_rate, "
+                "fee_exponent, fee_taker_only, observed_at, source_created_at, "
+                "raw_artifact_uri, raw_sha256) VALUES "
+                "(%s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s) "
+                "ON CONFLICT (token_id, observed_at, raw_sha256) DO NOTHING",
+                (
+                    fee_id,
+                    _id("outcome", f"polymarket:outcome:{book.token_id}"),
+                    book.token_id,
+                    fee_policy.condition_id,
+                    fee_policy.rate,
+                    fee_policy.exponent,
+                    fee_policy.taker_only,
+                    fee_policy.observed_at,
+                    fee_policy.source_created_at,
+                    fee_policy.artifact.uri,
+                    fee_policy.artifact.sha256,
+                ),
+            )
+            cursor.execute(
+                "SELECT id FROM fee_rate_snapshots WHERE token_id = %s AND observed_at = %s "
+                "AND raw_sha256 = %s",
+                (book.token_id, fee_policy.observed_at, fee_policy.artifact.sha256),
+            )
+            fee_row = cursor.fetchone()
+            if fee_row is None:
+                raise RuntimeError("live fee snapshot disappeared after persistence")
+            fee_id = uuid.UUID(str(fee_row[0]))
+        return FrozenPersistence((market_snapshot_id,), (book_id,), (), (fee_id,))
+
     @staticmethod
     def _aware(value: datetime) -> datetime:
         if value.tzinfo is None or value.utcoffset() is None:
@@ -421,6 +591,210 @@ class PostgresMarketDataRepository:
             )
 
 
+class PostgresLiveOrderContextProvider:
+    """Refresh and archive only the market data required by one paper order."""
+
+    def __init__(
+        self,
+        repository: PostgresMarketDataRepository,
+        venue: PolymarketVenue,
+        *,
+        clock: Callable[[], datetime],
+        monotonic: Callable[[], float] | None = None,
+        maximum_book_age: timedelta = timedelta(minutes=5),
+        maximum_source_skew: timedelta = timedelta(seconds=5),
+        maximum_build_time: timedelta = timedelta(seconds=10),
+    ) -> None:
+        self._repository = repository
+        self._venue = venue
+        if monotonic is None:
+            self._validator = ValidatedLiveOrderContextProvider(
+                self._refresh,
+                clock=clock,
+                persist=self._persist_live_order_context,
+                maximum_build_time=maximum_build_time,
+                maximum_observation_age=maximum_book_age,
+                maximum_source_skew=maximum_source_skew,
+            )
+        else:
+            self._validator = ValidatedLiveOrderContextProvider(
+                self._refresh,
+                clock=clock,
+                monotonic=monotonic,
+                persist=self._persist_live_order_context,
+                maximum_build_time=maximum_build_time,
+                maximum_observation_age=maximum_book_age,
+                maximum_source_skew=maximum_source_skew,
+            )
+
+    def build(
+        self, submission: MarketOrderSubmission, *, requested_at: datetime
+    ) -> LiveOrderContext:
+        return self._validator.build(submission, requested_at=requested_at)
+
+    def _refresh(
+        self, submission: MarketOrderSubmission, requested_at: datetime
+    ) -> LiveOrderContext:
+        try:
+            reference = self._repository.live_market_reference(submission.outcome_id)
+            if (
+                reference.market_id != submission.market_id
+                or reference.outcome_id != submission.outcome_id
+            ):
+                raise LiveContextError(
+                    "live market reference does not match the order intent",
+                    code=RejectionCode.INCONSISTENT_LIVE_CONTEXT,
+                )
+            get_market_observation = getattr(self._venue, "get_market_observation", None)
+            market_observation = (
+                self._live_call(get_market_observation, reference.market_venue_id)
+                if get_market_observation is not None
+                else None
+            )
+            market = (
+                market_observation.market
+                if market_observation is not None
+                else self._venue.get_market(reference.market_venue_id)
+            )
+            market_artifact = (
+                market_observation.artifact if market_observation is not None else None
+            )
+            if (
+                market.venue_id != reference.market_venue_id
+                or str(market.venue_metadata.get("condition_id") or "")
+                != reference.condition_id
+            ):
+                raise LiveContextError(
+                    "live market metadata does not match the canonical market",
+                    code=RejectionCode.INCONSISTENT_LIVE_CONTEXT,
+                )
+            raw_outcome = next(
+                (
+                    outcome
+                    for outcome in market.outcomes
+                    if outcome.venue_token_id == reference.token_id
+                ),
+                None,
+            )
+            if raw_outcome is None:
+                raise LiveContextError(
+                    "live market metadata does not contain the requested token",
+                    code=RejectionCode.INCONSISTENT_LIVE_CONTEXT,
+                )
+            books = self._live_call(self._venue.get_order_book, [reference.token_id])
+            if len(books) != 1:
+                raise LiveContextError(
+                    "live order-book refresh returned an unexpected number of books",
+                    code=RejectionCode.INCONSISTENT_LIVE_CONTEXT,
+                )
+            book = books[0]
+            if book.token_id != reference.token_id or book.condition_id != reference.condition_id:
+                raise LiveContextError(
+                    "live order-book condition does not match market metadata",
+                    code=RejectionCode.INCONSISTENT_LIVE_CONTEXT,
+                )
+            policies = self._live_call(self._venue.get_fee_policies, [reference.condition_id])
+            if len(policies) != 1:
+                raise LiveContextError(
+                    "live fee refresh returned an unexpected number of policies",
+                    code=RejectionCode.INCONSISTENT_LIVE_CONTEXT,
+                )
+            raw_fee = policies[0]
+            if raw_fee.condition_id != book.condition_id:
+                raise LiveContextError(
+                    "live fee policy condition does not match the order-book",
+                    code=RejectionCode.INCONSISTENT_LIVE_CONTEXT,
+                )
+            live_outcome = replace(
+                raw_outcome,
+                id=str(reference.outcome_id),
+                market_id=str(reference.market_id),
+            )
+            live_market = replace(
+                market,
+                id=str(reference.market_id),
+                outcomes=(live_outcome,),
+            )
+            return LiveOrderContext(
+                market=live_market,
+                outcome=live_outcome,
+                book=book,
+                fee_policy=FeePolicy(
+                    raw_fee.rate,
+                    enabled=raw_fee.rate > 0,
+                    exponent=raw_fee.exponent,
+                    taker_only=raw_fee.taker_only,
+                ),
+                market_snapshot_id=uuid.UUID(int=0),
+                book_snapshot_id=uuid.UUID(int=0),
+                fee_rate_snapshot_id=uuid.UUID(int=0),
+                requested_at=requested_at,
+                validated_at=requested_at,
+                market_observed_at=market.observed_at or book.observed_at,
+                book_observed_at=book.observed_at,
+                fee_observed_at=raw_fee.observed_at,
+                artifact_hashes=(
+                    (
+                        "market",
+                        market_artifact.sha256
+                        if market_artifact is not None
+                        else book.artifact.sha256,
+                    ),
+                    ("order_book", book.artifact.sha256),
+                    ("fee_policy", raw_fee.artifact.sha256),
+                ),
+                persistence_payload=LiveContextPersistence(
+                    market=market,
+                    book=book,
+                    fee_policy=raw_fee,
+                    market_artifact=market_artifact,
+                ),
+            )
+        except LiveContextError:
+            raise
+        except (PolymarketTransportError, TimeoutError, ConnectionError, OSError) as exc:
+            raise LiveContextError(
+                "live market provider failed while refreshing the order context",
+                code=RejectionCode.NETWORK_ERROR,
+                retryable=True,
+            ) from exc
+        except PolymarketError as exc:
+            raise LiveContextError(
+                "live market provider returned invalid order metadata",
+                code=RejectionCode.INCONSISTENT_LIVE_CONTEXT,
+            ) from exc
+
+    def _persist_live_order_context(self, context: LiveOrderContext) -> LiveOrderContext:
+        if context.persistence_payload is None:
+            raise LiveContextError(
+                "live context lacks its immutable persistence payload",
+                code=RejectionCode.INCONSISTENT_LIVE_CONTEXT,
+            )
+        payload = context.persistence_payload
+        persisted = self._repository.persist_live_order_context(
+            payload.market,
+            payload.book,
+            payload.fee_policy,
+            market_artifact=payload.market_artifact,
+        )
+        return replace(
+            context,
+            market_snapshot_id=persisted.market_snapshot_ids[0],
+            book_snapshot_id=persisted.order_book_snapshot_ids[0],
+            fee_rate_snapshot_id=persisted.fee_rate_snapshot_ids[0],
+            persistence_payload=None,
+        )
+
+    @staticmethod
+    def _live_call(method: Callable[..., Any], *args: Any) -> Any:
+        try:
+            return method(*args, retry_policy=_LIVE_CONTEXT_RETRY_POLICY)
+        except TypeError as exc:
+            if "retry_policy" not in str(exc):
+                raise
+            return method(*args)
+
+
 class PolymarketFreezeService:
     """The only cycle component allowed to fetch venue data before cutoff finalization."""
 
@@ -433,7 +807,7 @@ class PolymarketFreezeService:
         maximum_historical_outcomes: int = 20,
         # May cause latency; decrease below 50 if needed, increase to 100+ otherwise.
         # This bounds how many markets the agent can choose from.
-        maximum_additional_markets: int = 80, 
+        maximum_additional_markets: int = 80,
         venue_batch_size: int = 20,
     ) -> None:
         if (

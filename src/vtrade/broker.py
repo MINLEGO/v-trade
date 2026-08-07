@@ -56,9 +56,15 @@ class RejectionCode(StrEnum):
     INSUFFICIENT_CASH = "insufficient_cash"
     INSUFFICIENT_SHARES = "insufficient_shares"
     CONCENTRATION_LIMIT = "concentration_limit"
+    NO_BID_VALUATION = "no_bid_valuation"
     NO_LIQUIDITY = "no_liquidity"
     FOK_NOT_FILLED = "fok_not_filled"
     PRICE_LIMIT_NOT_MARKET = "price_limit_not_market"
+    NETWORK_ERROR = "network_error"
+    LIVE_CONTEXT_EXPIRED = "live_context_expired"
+    INCONSISTENT_LIVE_CONTEXT = "inconsistent_live_context"
+    STALE_LIVE_DATA = "stale_live_data"
+    CANCELLED_BY_RESTART = "cancelled_by_restart"
 
 
 class NoBidValuationPolicy(StrEnum):
@@ -98,9 +104,7 @@ class FeePolicy:
     def __post_init__(self) -> None:
         if not self.rate.is_finite() or not Decimal(0) <= self.rate <= Decimal(1):
             raise ValueError("fee rate must be finite and between zero and one")
-        if self.exponent is not None and (
-            not self.exponent.is_finite() or self.exponent < 0
-        ):
+        if self.exponent is not None and (not self.exponent.is_finite() or self.exponent < 0):
             raise ValueError("fee exponent must be finite and non-negative")
 
     def calculate_micros(
@@ -150,9 +154,7 @@ class PendingOrder:
     side: Side
     reserved_cash_micros: MicroDollars = field(default_factory=lambda: MicroDollars(0))
     reserved_shares: Decimal = field(default_factory=lambda: Decimal(0))
-    reserved_cost_basis_micros: MicroDollars = field(
-        default_factory=lambda: MicroDollars(0)
-    )
+    reserved_cost_basis_micros: MicroDollars = field(default_factory=lambda: MicroDollars(0))
 
     def __post_init__(self) -> None:
         if int(self.reserved_cash_micros) < 0 or int(self.reserved_cost_basis_micros) < 0:
@@ -310,9 +312,10 @@ class ExecutionResult:
     portfolio_before: PortfolioState
     portfolio: PortfolioState
     ledger_entries: tuple[LedgerEntry, ...]
-    snapshot: OrderBookSnapshot
-    fee_policy: FeePolicy
+    snapshot: OrderBookSnapshot | None
+    fee_policy: FeePolicy | None
     virtual_liquidity: VirtualLiquidityMetrics | None = None
+    executed_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if self.status is ExecutionStatus.REJECTED:
@@ -320,9 +323,15 @@ class ExecutionResult:
                 raise ValueError("rejected execution must have a code and no financial events")
             if self.portfolio != self.portfolio_before:
                 raise ValueError("rejected execution cannot mutate the portfolio")
+            if self.executed_at is not None:
+                _require_aware(self.executed_at, "execution.executed_at")
             return
         if self.rejection_code is not None or not self.fills or not self.ledger_entries:
             raise ValueError("accepted execution requires fills and ledger entries")
+        if self.snapshot is None or self.fee_policy is None:
+            raise ValueError("accepted execution requires a live or frozen context")
+        if self.executed_at is not None:
+            _require_aware(self.executed_at, "execution.executed_at")
         if self.virtual_liquidity is not None:
             if self.virtual_liquidity.agent_id != self.order.agent_id:
                 raise ValueError("virtual-liquidity metrics must belong to the order agent")
@@ -390,11 +399,17 @@ class PredictionArenaPaperBroker:
         executable_bids: Mapping[str, ArchivedBid | None],
         fee_policy: FeePolicy,
         now: datetime,
+        live_context: bool = False,
+        valuation_as_of: datetime | None = None,
     ) -> ExecutionResult:
         _require_aware(now, "now")
-        rejection = self._validate_context(order, market, outcome, snapshot, portfolio, now)
+        rejection = self._validate_context(
+            order, market, outcome, snapshot, portfolio, now, live_context=live_context
+        )
         if rejection is not None:
-            return self._rejected(order, snapshot, portfolio, fee_policy, rejection)
+            return self._rejected(
+                order, snapshot, portfolio, fee_policy, rejection, executed_at=now
+            )
         if order.shares < snapshot.minimum_order_size:
             return self._rejected(
                 order,
@@ -402,10 +417,16 @@ class PredictionArenaPaperBroker:
                 portfolio,
                 fee_policy,
                 RejectionCode.BELOW_MINIMUM_SIZE,
+                executed_at=now,
             )
         if order.limit_price is not None and not self._has_eligible_level(order, snapshot):
             return self._rejected(
-                order, snapshot, portfolio, fee_policy, RejectionCode.PRICE_LIMIT_NOT_MARKET
+                order,
+                snapshot,
+                portfolio,
+                fee_policy,
+                RejectionCode.PRICE_LIMIT_NOT_MARKET,
+                executed_at=now,
             )
         planned = self._plan_fills(order, snapshot, fee_policy, now)
         if not planned:
@@ -414,7 +435,7 @@ class PredictionArenaPaperBroker:
                 if self.policy is PaperPolicy.PREDICTIONARENA_UNCONDITIONAL
                 else RejectionCode.NO_LIQUIDITY
             )
-            return self._rejected(order, snapshot, portfolio, fee_policy, code)
+            return self._rejected(order, snapshot, portfolio, fee_policy, code, executed_at=now)
         total_shares = sum((fill.shares for fill in planned), start=Decimal(0))
         fok_unfilled = total_shares != order.shares
         if order.cash_budget_micros is not None:
@@ -431,15 +452,24 @@ class PredictionArenaPaperBroker:
                 portfolio,
                 fee_policy,
                 RejectionCode.FOK_NOT_FILLED,
+                executed_at=now,
             )
         gross = MicroDollars(sum(int(fill.gross_micros) for fill in planned))
         fees = MicroDollars(sum(int(fill.fee_micros) for fill in planned))
         financial_rejection = self._validate_financials(
-            order, market, portfolio, executable_bids, total_shares, gross, fees
+            order,
+            market,
+            portfolio,
+            executable_bids,
+            total_shares,
+            gross,
+            fees,
+            as_of=now if valuation_as_of is None else valuation_as_of,
+            live_context=live_context,
         )
         if financial_rejection is not None:
             return self._rejected(
-                order, snapshot, portfolio, fee_policy, financial_rejection
+                order, snapshot, portfolio, fee_policy, financial_rejection, executed_at=now
             )
         updated, ledger_entry = self._apply(order, portfolio, total_shares, gross, fees, now)
         status = ExecutionStatus.FILLED if total_shares == order.shares else ExecutionStatus.PARTIAL
@@ -454,6 +484,7 @@ class PredictionArenaPaperBroker:
             ledger_entries=(ledger_entry,),
             snapshot=snapshot,
             fee_policy=fee_policy,
+            executed_at=now,
         )
 
     def _validate_context(
@@ -464,6 +495,8 @@ class PredictionArenaPaperBroker:
         snapshot: OrderBookSnapshot,
         portfolio: PortfolioState,
         now: datetime,
+        *,
+        live_context: bool,
     ) -> RejectionCode | None:
         _require_aware(snapshot.observed_at, "snapshot.observed_at")
         if snapshot.source_created_at is not None:
@@ -494,13 +527,13 @@ class PredictionArenaPaperBroker:
             or snapshot.token_id != outcome.venue_token_id
         ):
             return RejectionCode.TOKEN_MISMATCH
-        if (
-            order.created_at > now
-            or snapshot.observed_at > order.created_at
-            or (
-                snapshot.source_created_at is not None
-                and snapshot.source_created_at > snapshot.observed_at
-            )
+        if order.created_at > now or (
+            snapshot.source_created_at is not None
+            and snapshot.source_created_at > snapshot.observed_at
+        ):
+            return RejectionCode.LOOK_AHEAD
+        if not live_context and (
+            snapshot.observed_at > order.created_at
             or (market.observed_at is not None and market.observed_at > snapshot.observed_at)
         ):
             return RejectionCode.LOOK_AHEAD
@@ -617,8 +650,7 @@ class PredictionArenaPaperBroker:
         """Return the largest displayed quantity whose rounded gross plus fee fits cash."""
         if maximum <= 0 or budget_micros <= 0:
             return Decimal(0)
-        unit_micros = price * _MICROS * (
-            Decimal(1) + fee_policy.rate * (Decimal(1) - price))
+        unit_micros = price * _MICROS * (Decimal(1) + fee_policy.rate * (Decimal(1) - price))
         high = min(maximum, Decimal(budget_micros) / unit_micros) if unit_micros else maximum
         low = Decimal(0)
         # Decimal quantities are persisted at 12 places; enough iterations to make
@@ -643,19 +675,27 @@ class PredictionArenaPaperBroker:
         filled_shares: Decimal,
         gross: MicroDollars,
         fees: MicroDollars,
+        *,
+        as_of: datetime,
+        live_context: bool,
     ) -> RejectionCode | None:
         if order.side is Side.BUY:
             required = int(gross) + int(fees)
             if required > int(portfolio.available_cash_micros):
                 return RejectionCode.INSUFFICIENT_CASH
-            account_value = int(
-                portfolio.account_value_micros(
-                    executable_bids,
-                    as_of=order.created_at,
-                    maximum_bid_age=self.maximum_valuation_bid_age,
-                    no_bid_policy=self.no_bid_valuation_policy,
+            try:
+                account_value = int(
+                    portfolio.account_value_micros(
+                        executable_bids,
+                        as_of=as_of,
+                        maximum_bid_age=self.maximum_valuation_bid_age,
+                        no_bid_policy=self.no_bid_valuation_policy,
+                    )
                 )
-            )
+            except SnapshotValuationBlocked:
+                if live_context:
+                    return RejectionCode.NO_BID_VALUATION
+                raise
             maximum_basis = Decimal(account_value) * self.maximum_market_cost_basis_fraction
             cap = int(maximum_basis.to_integral_value(rounding=ROUND_HALF_UP))
             existing = int(portfolio.market_cost_basis_micros(market.id))
@@ -685,9 +725,7 @@ class PredictionArenaPaperBroker:
                 shares=new_shares,
                 average_cost=Decimal(new_basis) / _MICROS / new_shares,
                 cost_basis_micros=MicroDollars(new_basis),
-                realized_pnl_micros=(
-                    current.realized_pnl_micros if current else MicroDollars(0)
-                ),
+                realized_pnl_micros=(current.realized_pnl_micros if current else MicroDollars(0)),
             )
             cash_change = -(int(gross) + int(fees))
             postings = _trade_postings(
@@ -719,9 +757,7 @@ class PredictionArenaPaperBroker:
                     else Decimal(0)
                 ),
                 cost_basis_micros=MicroDollars(remaining_basis),
-                realized_pnl_micros=MicroDollars(
-                    int(current.realized_pnl_micros) + realized
-                ),
+                realized_pnl_micros=MicroDollars(int(current.realized_pnl_micros) + realized),
             )
             cash_change = int(gross) - int(fees)
             postings = _trade_postings(
@@ -758,6 +794,8 @@ class PredictionArenaPaperBroker:
         portfolio: PortfolioState,
         fee_policy: FeePolicy,
         code: RejectionCode,
+        *,
+        executed_at: datetime | None = None,
     ) -> ExecutionResult:
         return ExecutionResult(
             order=order,
@@ -770,6 +808,7 @@ class PredictionArenaPaperBroker:
             ledger_entries=(),
             snapshot=snapshot,
             fee_policy=fee_policy,
+            executed_at=order.created_at if executed_at is None else executed_at,
         )
 
 
@@ -921,9 +960,7 @@ def replay_portfolio(initial: PortfolioState, entries: Sequence[LedgerEntry]) ->
             if posting.account is LedgerAccount.CASH
         )
         position_postings = [
-            posting
-            for posting in entry.postings
-            if posting.account is LedgerAccount.POSITION_COST
+            posting for posting in entry.postings if posting.account is LedgerAccount.POSITION_COST
         ]
         for posting in position_postings:
             if (
@@ -951,8 +988,7 @@ def replay_portfolio(initial: PortfolioState, entries: Sequence[LedgerEntry]) ->
                 fees = sum(
                     int(item.amount_micros)
                     for item in entry.postings
-                    if item.account is LedgerAccount.FEES
-                    and item.outcome_id == posting.outcome_id
+                    if item.account is LedgerAccount.FEES and item.outcome_id == posting.outcome_id
                 )
                 realized += -realized_debits - fees
             if shares == 0:
@@ -977,8 +1013,7 @@ def replay_portfolio(initial: PortfolioState, entries: Sequence[LedgerEntry]) ->
         + sum(
             1
             for entry in ledger.entries
-            if entry.event_type != "initial_capital"
-            and entry.idempotency_key in seen
+            if entry.event_type != "initial_capital" and entry.idempotency_key in seen
         ),
     )
 
@@ -1055,9 +1090,7 @@ def _require_aware(value: datetime, field_name: str) -> None:
 
 
 def _nonzero_postings(
-    values: Sequence[
-        tuple[LedgerAccount, int, str | None, str | None, Decimal | None]
-    ],
+    values: Sequence[tuple[LedgerAccount, int, str | None, str | None, Decimal | None]],
 ) -> tuple[Posting, ...]:
     postings = tuple(
         Posting(

@@ -62,10 +62,15 @@ class ToolContext:
     maximum_default_result_tokens: int = 4_000
     maximum_book_age: timedelta = timedelta(minutes=5)
     maximum_order_book_depth: int = 5
-    immediate_order_executor: Callable[
-        [MarketOrderSubmission],
-        ExecutionReceipt,
-    ] | None = None
+    immediate_order_executor: (
+        Callable[
+            [MarketOrderSubmission],
+            ExecutionReceipt,
+        ]
+        | None
+    ) = None
+    live_order_execution: bool = False
+    live_order_required: bool = False
 
     def __post_init__(self) -> None:
         if not self.database_url or self.claim.data_cutoff is None:
@@ -249,8 +254,7 @@ class ProductionToolRegistry:
             else:
                 predicate = "m.id::text = %s"
             rows = self._query(
-                _MARKET_SELECT + " AND " + predicate + " "
-                "ORDER BY snapshot.cutoff DESC LIMIT 1",
+                _MARKET_SELECT + " AND " + predicate + " ORDER BY snapshot.cutoff DESC LIMIT 1",
                 (self._context.cutoff, list(self._context.market_snapshot_ids), lookup_value),
             )
             if not rows:
@@ -280,9 +284,7 @@ class ProductionToolRegistry:
                     row
                     for row in rows
                     if any(
-                        query in tag.casefold()
-                        for tag in _tag_names(row[12])
-                        for query in queries
+                        query in tag.casefold() for tag in _tag_names(row[12]) for query in queries
                     )
                 ],
                 name=name,
@@ -484,11 +486,7 @@ class ProductionToolRegistry:
 
     def _get_orderbook(self, arguments: JsonObject) -> JsonObject:
         lookup_key, lookup_value = _orderbook_lookup(arguments)
-        predicate = (
-            "o.id = %s::uuid"
-            if lookup_key == "outcome_id"
-            else "o.venue_token_id = %s"
-        )
+        predicate = "o.id = %s::uuid" if lookup_key == "outcome_id" else "o.venue_token_id = %s"
         rows = self._query(
             "SELECT obs.id, obs.cutoff, obs.source_created_at, obs.bids, obs.asks, "
             "obs.best_bid, obs.best_ask, obs.raw_sha256 FROM order_book_snapshots obs "
@@ -517,9 +515,7 @@ class ProductionToolRegistry:
                 raise ToolContextUnavailable("frozen order book violates cutoff causality")
         if self._context.cutoff - observed_at > self._context.maximum_book_age:
             maximum_age = int(self._context.maximum_book_age.total_seconds())
-            raise ToolContextUnavailable(
-                f"frozen order book is older than {maximum_age} seconds"
-            )
+            raise ToolContextUnavailable(f"frozen order book is older than {maximum_age} seconds")
         return {
             "as_of": self._context.cutoff.isoformat(),
             "snapshot_id": str(row[0]),
@@ -623,11 +619,23 @@ class ProductionToolRegistry:
                 _named(
                     row,
                     (
-                        "position_id", "market_id", "market_question", "outcome_id", "outcome",
-                        "opened_at", "closed_at", "total_bought_shares", "total_sold_shares",
-                        "average_entry_price", "average_exit_price", "entry_cost_micros",
-                        "exit_proceeds_micros", "total_fees_micros", "realized_pnl_micros",
-                        "return_on_cost", "close_reason",
+                        "position_id",
+                        "market_id",
+                        "market_question",
+                        "outcome_id",
+                        "outcome",
+                        "opened_at",
+                        "closed_at",
+                        "total_bought_shares",
+                        "total_sold_shares",
+                        "average_entry_price",
+                        "average_exit_price",
+                        "entry_cost_micros",
+                        "exit_proceeds_micros",
+                        "total_fees_micros",
+                        "realized_pnl_micros",
+                        "return_on_cost",
+                        "close_reason",
                     ),
                 )
                 for row in rows
@@ -653,9 +661,17 @@ class ProductionToolRegistry:
                 _named(
                     row,
                     (
-                        "id", "position_id", "market_id", "market_question", "outcome_id",
-                        "outcome", "winning_outcome", "shares", "payout_micros",
-                        "realized_pnl_micros", "settled_at",
+                        "id",
+                        "position_id",
+                        "market_id",
+                        "market_question",
+                        "outcome_id",
+                        "outcome",
+                        "winning_outcome",
+                        "shares",
+                        "payout_micros",
+                        "realized_pnl_micros",
+                        "settled_at",
                     ),
                 )
                 for row in rows
@@ -826,6 +842,12 @@ class ProductionToolRegistry:
         limit_price = _optional_unit_interval(arguments.get("limit_price"), "limit_price")
         if amount_type is OrderAmountType.CASH and side != "BUY":
             raise ValueError("amount_type CASH is supported only for BUY orders")
+        executor = self._context.immediate_order_executor
+        live_execution = executor is not None and self._context.live_order_execution
+        if self._context.live_order_required and not live_execution:
+            raise ToolContextUnavailable(
+                "liquidity-aware execution requires a live order context"
+            )
         rows = self._query(
             "SELECT o.id, o.market_id FROM outcomes o JOIN market_snapshots ms "
             "ON ms.market_id = o.market_id WHERE o.venue_token_id = %s "
@@ -842,57 +864,64 @@ class ProductionToolRegistry:
             ),
         )
         if len(rows) != 1:
-            raise ToolContextUnavailable("trade token is absent or not tradeable in frozen data")
-        books = self._query(
-            "SELECT obs.best_ask FROM order_book_snapshots obs JOIN outcomes o "
-            "ON o.id = obs.outcome_id WHERE o.venue_token_id = %s "
-            "AND obs.id = ANY(%s::uuid[]) AND obs.cutoff <= %s "
-            "ORDER BY obs.cutoff DESC, obs.id DESC LIMIT 1",
-            (
-                token,
-                list(self._context.order_book_snapshot_ids),
-                self._context.cutoff,
-            ),
-        )
-        if not books:
             raise ToolContextUnavailable(
-                "trade token has no order book in the current-cycle frozen universe"
+                "trade token is absent or not tradeable in the decision universe"
             )
-        # Cash buys use the best ask only to express a share ceiling for audit. The
-        # broker walks the book and enforces the cash budget (including fees).
-        best_ask = Decimal(str(books[0][0])) if books[0][0] is not None else None
+        # A live execution deliberately does not consult the cycle's order book. The
+        # executor resolves cash sizing from the validated live ask immediately before
+        # it walks the live depth. The frozen book remains available to the model only
+        # through the read-only get_orderbook tool.
         shares = amount
-        if amount_type is OrderAmountType.CASH and best_ask is not None and best_ask != 0:
-            shares = amount / best_ask
+        if not live_execution:
+            books = self._query(
+                "SELECT obs.best_ask FROM order_book_snapshots obs JOIN outcomes o "
+                "ON o.id = obs.outcome_id WHERE o.venue_token_id = %s "
+                "AND obs.id = ANY(%s::uuid[]) AND obs.cutoff <= %s "
+                "ORDER BY obs.cutoff DESC, obs.id DESC LIMIT 1",
+                (
+                    token,
+                    list(self._context.order_book_snapshot_ids),
+                    self._context.cutoff,
+                ),
+            )
+            if not books:
+                raise ToolContextUnavailable(
+                    "trade token has no order book in the current-cycle frozen universe"
+                )
+            # The isolated legacy path uses the frozen best ask only to express a
+            # share ceiling; the broker still enforces the cash budget including fees.
+            best_ask = Decimal(str(books[0][0])) if books[0][0] is not None else None
+            if amount_type is OrderAmountType.CASH and best_ask is not None and best_ask != 0:
+                shares = amount / best_ask
         intent_id = self._mutation_id("intent", arguments)
-        executor = self._context.immediate_order_executor
         if executor is None:
             with (
                 self._context.connect(self._context.database_url) as connection,
                 connection.cursor() as cursor,
             ):
                 cursor.execute(
-                "INSERT INTO order_intents "
-                "(id, agent_cycle_id, market_id, outcome_id, side, amount_micros, shares, "
-                "strategy, thesis, estimated_probability, expected_value_micros, "
-                "validation_status, idempotency_key, created_at) VALUES "
-                "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, "
-                "'pending_broker_validation', %s, %s) "
-                "ON CONFLICT (idempotency_key) DO NOTHING",
-                (
-                    intent_id,
-                    self._context.claim.cycle_id,
-                    rows[0][1],
-                    rows[0][0],
-                    side,
-                    int(amount * Decimal(1_000_000)),
-                    shares,
-                    "observed_place_market_order",
-                    "submitted through frozen tool contract",
-                    confidence,
-                    f"intent:{intent_id}",
-                    self._context.now(),
-                ),
+                    "INSERT INTO order_intents "
+                    "(id, agent_cycle_id, market_id, outcome_id, side, amount_micros, shares, "
+                    "strategy, thesis, estimated_probability, expected_value_micros, "
+                    "validation_status, idempotency_key, created_at, requested_at) VALUES "
+                    "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, "
+                    "'pending_broker_validation', %s, %s, %s) "
+                    "ON CONFLICT (idempotency_key) DO NOTHING",
+                    (
+                        intent_id,
+                        self._context.claim.cycle_id,
+                        rows[0][1],
+                        rows[0][0],
+                        side,
+                        int(amount * Decimal(1_000_000)),
+                        shares,
+                        "observed_place_market_order",
+                        "submitted through frozen tool contract",
+                        confidence,
+                        f"intent:{intent_id}",
+                        self._context.now(),
+                        self._context.now(),
+                    ),
                 )
             # Production always injects this dependency; retaining the legacy
             # result keeps isolated registry composition non-mutating.
@@ -1037,10 +1066,12 @@ def _discovery_card(row: Sequence[object]) -> JsonObject:
     if isinstance(raw_outcomes, list):
         for o in raw_outcomes:
             if isinstance(o, dict):
-                outcomes.append({
-                    "name": o.get("name", ""),
-                    "indicative_price": str(o.get("price", "")),
-                })
+                outcomes.append(
+                    {
+                        "name": o.get("name", ""),
+                        "indicative_price": str(o.get("price", "")),
+                    }
+                )
     return {
         "market_ref": _market_ref(row),
         "question": str(row[4]),
@@ -1065,9 +1096,7 @@ def _tag_names(value: object) -> list[str]:
             if label:
                 tag_names.append(str(label))
             else:
-                _DISCOVERY_CARD_LOG.warning(
-                    "skipping tag with no label/name: %s", tag
-                )
+                _DISCOVERY_CARD_LOG.warning("skipping tag with no label/name: %s", tag)
         elif isinstance(tag, str):
             tag_names.append(tag)
     return tag_names
@@ -1129,9 +1158,7 @@ def _discovery_fingerprint(
     cutoff: datetime,
 ) -> str:
     relevant_arguments = {
-        key: value
-        for key, value in arguments.items()
-        if key not in {"cursor", "limit"}
+        key: value for key, value in arguments.items() if key not in {"cursor", "limit"}
     }
     encoded = json.dumps(
         {
@@ -1256,9 +1283,7 @@ def _orderbook_lookup(arguments: Mapping[str, object]) -> tuple[str, str]:
         if isinstance(arguments.get(key), str) and str(arguments[key]).strip()
     ]
     if len(supplied) != 1:
-        raise ValueError(
-            "exactly one of venue_token_id, outcome_id, or token_id is required"
-        )
+        raise ValueError("exactly one of venue_token_id, outcome_id, or token_id is required")
     key, value = supplied[0]
     return key, str(value).strip()
 
@@ -1378,10 +1403,14 @@ def _execution_output(
         "version": result.portfolio.version,
         "cash_micros": int(result.portfolio.cash_micros),
         "affected_position": (
-            {"outcome_id": result.order.outcome_id, "shares": str(position.shares),
-             "average_cost": str(position.average_cost),
-             "cost_basis_micros": int(position.cost_basis_micros)}
-            if position is not None else None
+            {
+                "outcome_id": result.order.outcome_id,
+                "shares": str(position.shares),
+                "average_cost": str(position.average_cost),
+                "cost_basis_micros": int(position.cost_basis_micros),
+            }
+            if position is not None
+            else None
         ),
     }
     output: JsonObject = {
@@ -1389,21 +1418,28 @@ def _execution_output(
         "intent_id": str(intent_id),
         "order_id": str(receipt.order_id),
         "side": result.order.side.value,
-        "requested": {"amount": str(requested_amount), "amount_type": amount_type.value,
-                      "requested_shares": str(result.order.shares)},
+        "requested": {
+            "amount": str(requested_amount),
+            "amount_type": amount_type.value,
+            "requested_shares": str(result.order.shares),
+        },
         "portfolio_after": after,
-        "snapshot": {
+    }
+    if result.snapshot is not None and receipt.snapshot_id is not None:
+        output["snapshot"] = {
             "snapshot_id": str(receipt.snapshot_id),
             "observed_at": result.snapshot.observed_at.isoformat(),
-        },
-    }
+        }
+    failed_attempts = [
+        {"attempt": attempt.attempt, "error": attempt.error_code}
+        for attempt in receipt.attempts
+        if attempt.error_code is not None
+    ]
+    if failed_attempts:
+        output["attempts"] = failed_attempts
     if result.virtual_liquidity is not None:
         virtual = result.virtual_liquidity
         output["virtual_liquidity"] = {
-            "context_version": virtual.context_version,
-            "agent_id": virtual.agent_id,
-            "agent_cycle_id": virtual.agent_cycle_id,
-            "snapshot_id": virtual.snapshot_id,
             "token_id": virtual.token_id,
             "side": virtual.side.value,
             "requested_shares": str(virtual.requested_shares),
@@ -1430,9 +1466,11 @@ def _execution_output(
         output["message"] = _rejection_message(code)
         return output
     output["execution"] = {
-        "filled_shares": str(filled), "cancelled_shares": str(result.order.shares - filled),
+        "filled_shares": str(filled),
+        "cancelled_shares": str(result.order.shares - filled),
         "average_price": str(Decimal(gross) / Decimal(1_000_000) / filled),
-        "gross_micros": gross, "fee_micros": fees,
+        "gross_micros": gross,
+        "fee_micros": fees,
         "cash_delta_micros": (
             int(result.portfolio.cash_micros) - int(result.portfolio_before.cash_micros)
         ),
@@ -1448,6 +1486,13 @@ def _rejection_message(code: str) -> str:
         "price_limit_not_market": "No displayed liquidity satisfies the price limit.",
         "fok_not_filled": "The order could not be filled completely under FOK semantics.",
         "no_liquidity": "No executable displayed liquidity is available.",
+        "network_error": "The live market refresh failed; no paper fill was created.",
+        "live_context_expired": "The live market context expired before execution.",
+        "inconsistent_live_context": "The live market, book, and fee metadata were inconsistent.",
+        "stale_live_data": "The live market data was too old to execute safely.",
+        "cancelled_by_restart": (
+            "The incomplete paper intent was cancelled during restart recovery."
+        ),
     }
     return messages.get(code, "The order was rejected by the paper broker.")
 
@@ -1668,7 +1713,10 @@ def production_tool_context(
     immediate_order_executor: Callable[
         [MarketOrderSubmission],
         ExecutionReceipt,
-    ] | None = None,
+    ]
+    | None = None,
+    live_order_execution: bool = False,
+    live_order_required: bool = False,
 ) -> ToolContext:
     market_snapshot_ids = _uuid_list(frozen, "market_snapshot_ids")
     order_book_snapshot_ids = _uuid_list(frozen, "order_book_snapshot_ids")
@@ -1691,6 +1739,8 @@ def production_tool_context(
         maximum_book_age=maximum_book_age,
         maximum_order_book_depth=maximum_order_book_depth,
         immediate_order_executor=immediate_order_executor,
+        live_order_execution=live_order_execution,
+        live_order_required=live_order_required,
     )
 
 

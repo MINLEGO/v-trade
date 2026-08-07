@@ -81,7 +81,7 @@ class AdminSettings:
             experiment_config=Path(
                 os.getenv(
                     "VTRADE_EXPERIMENT_CONFIG",
-                    "config/experiments/predictionarena-polymarket-v1.json",
+                    "config/experiments/predictionarena-polymarket-v1-liquidity-aware.json",
                 )
             ),
         )

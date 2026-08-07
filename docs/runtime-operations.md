@@ -18,12 +18,12 @@ python -m vtrade.worker
 
 ## Explicit experiment and agent registration
 
-Registration never starts the baseline implicitly. First register the immutable
+Registration never starts the active experiment implicitly. First register the immutable
 definition, prompt, two model configurations, and a `ready` run. The command checks
 the prompt/config/model fingerprints and fails if an existing record differs:
 
 ```powershell
-vtrade-bootstrap register --config config/experiments/predictionarena-polymarket-v1.json `
+vtrade-bootstrap register --config config/experiments/predictionarena-polymarket-v1-liquidity-aware.json `
   --prompt spec/prompt/predictionarena-polymarket-v1.md --code-version <commit-sha> `
   --run-label shadow-2026-07 --starts-at 2026-07-20T00:00:00Z
 ```
@@ -33,13 +33,13 @@ Starting or soft-removing one agent addresses only that agent and preserves all
 history. Use a real configured model for the shadow run; no stub is authorized.
 
 ```powershell
-vtrade-bootstrap add-agent --experiment-version predictionarena-polymarket-v1 `
+vtrade-bootstrap add-agent --experiment-version predictionarena-polymarket-v1-liquidity-aware `
   --run-label shadow-2026-07 `
   --model-label "DeepSeek V4 Flash" --name deepseek-shadow
-vtrade-bootstrap start-agent --experiment-version predictionarena-polymarket-v1 `
+vtrade-bootstrap start-agent --experiment-version predictionarena-polymarket-v1-liquidity-aware `
   --run-label shadow-2026-07 `
   --name deepseek-shadow --starts-at 2026-07-20T00:00:00Z
-vtrade-bootstrap remove-agent --experiment-version predictionarena-polymarket-v1 `
+vtrade-bootstrap remove-agent --experiment-version predictionarena-polymarket-v1-liquidity-aware `
   --run-label shadow-2026-07 --name deepseek-shadow
 ```
 
@@ -109,8 +109,9 @@ restrictive content-security policy.
 Readiness probes the real PostgreSQL schema, private Supabase bucket, and runnable
 configuration. It returns `503` while an owner decision or required resource is
 missing. The dashboard/API expose leaderboard and PnL, drawdown, positions with the
-strict 300-second bid status, trades, settlements, rejections, cycles, provider usage
-and cost, freshness, alerts, and decision versions. Global and per-agent pause/resume
+active 1,800-second archived-bid status (historical definitions retain 300 seconds),
+live order-context freshness, trades, settlements, rejections, cycles, provider usage
+and cost, alerts, and decision versions. Global and per-agent pause/resume
 are the only control mutations; each requires an operator identity and idempotency key
 and is committed with an append-only `operator_actions` audit record.
 

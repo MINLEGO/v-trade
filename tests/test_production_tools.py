@@ -163,6 +163,8 @@ def _context(
     maximum_order_book_depth: int = 5,
     memory: _Memory | None = None,
     exa: _Exa | None = None,
+    live_order_execution: bool = False,
+    live_order_required: bool = False,
 ) -> ToolContext:
     claim = CycleClaim(
         uuid.uuid4(),
@@ -188,6 +190,8 @@ def _context(
         maximum_default_result_tokens=maximum_default_result_tokens,
         maximum_book_age=maximum_book_age,
         maximum_order_book_depth=maximum_order_book_depth,
+        live_order_execution=live_order_execution,
+        live_order_required=live_order_required,
     )
 
 
@@ -425,6 +429,22 @@ class ProductionToolRegistryTests(unittest.TestCase):
         self.assertIn("pending_broker_validation", insert)
         self.assertIn("amount_micros, shares", insert)
         self.assertFalse(any("INSERT INTO orders" in query for query, _ in cursor.queries))
+
+    def test_live_required_order_never_reads_the_frozen_order_book(self) -> None:
+        cursor = _Cursor()
+        tools = {
+            tool.name: tool
+            for tool in ProductionToolRegistry(
+                _context(cursor, live_order_required=True)
+            ).tool_specs()
+        }
+
+        with self.assertRaisesRegex(ToolContextUnavailable, "live order context"):
+            tools["place_market_order"].handler(
+                {"token_id": "token", "side": "BUY", "amount": 10}
+            )
+
+        self.assertFalse(any("SELECT obs.best_ask" in query for query, _ in cursor.queries))
 
     def test_orderbook_rejects_current_cycle_member_older_than_five_minutes(self) -> None:
         cursor = _Cursor(book_observed_at=NOW - timedelta(minutes=5, microseconds=1))

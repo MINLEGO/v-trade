@@ -15,8 +15,8 @@
       "classification": "inferred"
     },
     "tool_schemas": {
-      "path": "spec/tool-schemas-v1.json",
-      "sha256": "90a712cf486b01cb107afd04514a0c3c86f831b71da27626a7ef3735c319ae6d",
+      "path": "spec/tool-schemas-v1-legacy.json",
+      "sha256": "8c0c3bc8c8279d92fffdba5d98d77d12ff1aada320f4a9e104b2f19daeb86776",
       "classification": "inferred"
     }
   },

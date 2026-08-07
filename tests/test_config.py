@@ -227,8 +227,16 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertEqual(conservative.raw["execution"]["paper_policy"], "liquidity_aware")
         self.assertEqual(
-            baseline.raw["artifacts"]["tool_schemas"],
-            conservative.raw["artifacts"]["tool_schemas"],
+            baseline.raw["artifacts"]["tool_schemas"]["path"],
+            "spec/tool-schemas-v1-legacy.json",
+        )
+        self.assertEqual(
+            conservative.raw["artifacts"]["tool_schemas"]["path"],
+            "spec/tool-schemas-v1.json",
+        )
+        self.assertNotEqual(
+            baseline.raw["artifacts"]["tool_schemas"]["sha256"],
+            conservative.raw["artifacts"]["tool_schemas"]["sha256"],
         )
 
     def test_missing_required_fields_are_rejected(self) -> None:

@@ -33,7 +33,7 @@ source establishes them.
 | `delete_general_belief` | knowledge | belief_id | calling agent only; deactivate, never erase |
 | `create_long_term_plan` | knowledge | plan_content | calling agent only |
 | `create_next_cycle_plan` | knowledge | plan_content, cycle_date | calling agent only |
-| `place_market_order` | trading | token_id, side, amount, conviction | calling agent, frozen snapshot, deterministic validation |
+| `place_market_order` | trading | token_id, side, amount, conviction | calling agent; frozen decision context plus target-market live quote, fee, metadata and depth refresh; deterministic validation |
 
 Trace counts and examples remain in `docs/predictionarena-cycle-analysis.json`; they are
 evidence fixtures, not runtime defaults.
