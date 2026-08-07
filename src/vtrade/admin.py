@@ -80,7 +80,8 @@ _VIEWS: dict[str, str] = {
     "positions": """
         SELECT p.id, p.agent_id, a.name AS agent_name, m.id AS market_id,
                m.question, o.id AS outcome_id, o.name AS outcome, p.shares,
-               p.average_cost, p.cost_basis_micros, p.realized_pnl_micros,
+               p.average_cost, p.cost_basis_micros, p.entry_fees_micros,
+               p.realized_pnl_micros,
                quote.best_bid, quote.cutoff AS quote_cutoff,
                CASE WHEN quote.best_bid IS NULL THEN NULL
                     WHEN quote.cutoff < now() - interval '300 seconds' THEN NULL

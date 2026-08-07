@@ -136,14 +136,24 @@ class PositionState:
     average_cost: Decimal
     cost_basis_micros: MicroDollars
     realized_pnl_micros: MicroDollars = field(default_factory=lambda: MicroDollars(0))
+    entry_fees_micros: MicroDollars = field(default_factory=lambda: MicroDollars(0))
 
     def __post_init__(self) -> None:
         if not self.shares.is_finite() or not self.average_cost.is_finite():
             raise ValueError("position decimals must be finite")
-        if self.shares < 0 or self.average_cost < 0 or int(self.cost_basis_micros) < 0:
+        if (
+            self.shares < 0
+            or self.average_cost < 0
+            or int(self.cost_basis_micros) < 0
+            or int(self.entry_fees_micros) < 0
+        ):
             raise ValueError("position values cannot be negative")
-        if self.shares == 0 and (self.average_cost != 0 or int(self.cost_basis_micros) != 0):
-            raise ValueError("a zero-share position must have zero average cost and basis")
+        if self.shares == 0 and (
+            self.average_cost != 0
+            or int(self.cost_basis_micros) != 0
+            or int(self.entry_fees_micros) != 0
+        ):
+            raise ValueError("a zero-share position must have zero average cost, basis, and fees")
 
 
 @dataclass(frozen=True, slots=True)
@@ -719,6 +729,7 @@ class PredictionArenaPaperBroker:
         if order.side is Side.BUY:
             new_shares = (current.shares if current else Decimal(0)) + shares
             new_basis = (int(current.cost_basis_micros) if current else 0) + int(gross)
+            new_entry_fees = (int(current.entry_fees_micros) if current else 0) + int(fees)
             position = PositionState(
                 market_id=order.market_id,
                 outcome_id=order.outcome_id,
@@ -726,6 +737,7 @@ class PredictionArenaPaperBroker:
                 average_cost=Decimal(new_basis) / _MICROS / new_shares,
                 cost_basis_micros=MicroDollars(new_basis),
                 realized_pnl_micros=(current.realized_pnl_micros if current else MicroDollars(0)),
+                entry_fees_micros=MicroDollars(new_entry_fees),
             )
             cash_change = -(int(gross) + int(fees))
             postings = _trade_postings(
@@ -744,9 +756,22 @@ class PredictionArenaPaperBroker:
                 if shares == current.shares
                 else _money_micros(current.average_cost * shares)
             )
+            removed_entry_fees = (
+                current.entry_fees_micros
+                if shares == current.shares
+                else _pro_rata_micros(
+                    int(current.entry_fees_micros), shares, current.shares
+                )
+            )
             remaining_shares = current.shares - shares
             remaining_basis = int(current.cost_basis_micros) - int(removed_cost)
-            realized = int(gross) - int(removed_cost) - int(fees)
+            remaining_entry_fees = int(current.entry_fees_micros) - int(removed_entry_fees)
+            realized = (
+                int(gross)
+                - int(removed_cost)
+                - int(removed_entry_fees)
+                - int(fees)
+            )
             position = PositionState(
                 market_id=current.market_id,
                 outcome_id=current.outcome_id,
@@ -758,6 +783,7 @@ class PredictionArenaPaperBroker:
                 ),
                 cost_basis_micros=MicroDollars(remaining_basis),
                 realized_pnl_micros=MicroDollars(int(current.realized_pnl_micros) + realized),
+                entry_fees_micros=MicroDollars(remaining_entry_fees),
             )
             cash_change = int(gross) - int(fees)
             postings = _trade_postings(
@@ -882,7 +908,11 @@ class SettlementEngine:
             payout = _money_micros(position.shares)
         else:
             payout = MicroDollars(0)
-        realized = MicroDollars(int(payout) - int(position.cost_basis_micros))
+        realized = MicroDollars(
+            int(payout)
+            - int(position.cost_basis_micros)
+            - int(position.entry_fees_micros)
+        )
         positions = tuple(
             item for item in portfolio.positions if item.outcome_id != position.outcome_id
         )
@@ -973,9 +1003,31 @@ def replay_portfolio(initial: PortfolioState, entries: Sequence[LedgerEntry]) ->
             old_shares = current.shares if current else Decimal(0)
             old_basis = int(current.cost_basis_micros) if current else 0
             old_realized = int(current.realized_pnl_micros) if current else 0
+            old_entry_fees = int(current.entry_fees_micros) if current else 0
             shares = old_shares + posting.shares_delta
             basis = old_basis + int(posting.amount_micros)
-            if shares < 0 or basis < 0 or (shares == 0) != (basis == 0):
+            fees = sum(
+                int(item.amount_micros)
+                for item in entry.postings
+                if item.account is LedgerAccount.FEES and item.outcome_id == posting.outcome_id
+            )
+            entry_fees = old_entry_fees
+            if posting.shares_delta > 0:
+                entry_fees += fees
+            else:
+                removed_entry_fees = _pro_rata_micros(
+                    old_entry_fees,
+                    -posting.shares_delta,
+                    old_shares,
+                )
+                entry_fees -= int(removed_entry_fees)
+            if (
+                shares < 0
+                or basis < 0
+                or entry_fees < 0
+                or (shares == 0) != (basis == 0)
+                or (shares == 0) != (entry_fees == 0)
+            ):
                 raise ValueError("ledger replay produced an invalid position state")
             realized = old_realized
             if posting.shares_delta < 0:
@@ -985,12 +1037,7 @@ def replay_portfolio(initial: PortfolioState, entries: Sequence[LedgerEntry]) ->
                     if item.account is LedgerAccount.REALIZED_PNL
                     and item.outcome_id == posting.outcome_id
                 )
-                fees = sum(
-                    int(item.amount_micros)
-                    for item in entry.postings
-                    if item.account is LedgerAccount.FEES and item.outcome_id == posting.outcome_id
-                )
-                realized += -realized_debits - fees
+                realized += -realized_debits - int(removed_entry_fees) - fees
             if shares == 0:
                 positions.pop(posting.outcome_id, None)
             else:
@@ -1001,6 +1048,7 @@ def replay_portfolio(initial: PortfolioState, entries: Sequence[LedgerEntry]) ->
                     average_cost=Decimal(basis) / _MICROS / shares,
                     cost_basis_micros=MicroDollars(basis),
                     realized_pnl_micros=MicroDollars(realized),
+                    entry_fees_micros=MicroDollars(entry_fees),
                 )
     if cash < 0:
         raise ValueError("ledger replay produced negative cash")
@@ -1072,6 +1120,18 @@ def _trade_postings(
 
 def _money_micros(value: Decimal) -> MicroDollars:
     return MicroDollars(int((value * _MICROS).to_integral_value(rounding=ROUND_HALF_UP)))
+
+
+def _pro_rata_micros(total: int, part: Decimal, whole: Decimal) -> MicroDollars:
+    if total < 0 or not part.is_finite() or not whole.is_finite():
+        raise ValueError("pro-rata fee inputs must be finite and non-negative")
+    if whole <= 0 or part < 0 or part > whole:
+        raise ValueError("pro-rata fee quantity is outside its position")
+    if part == whole:
+        return MicroDollars(total)
+    return MicroDollars(
+        int((Decimal(total) * part / whole).to_integral_value(rounding=ROUND_HALF_UP))
+    )
 
 
 def _is_tick_aligned(price: Decimal, tick: Decimal) -> bool:

@@ -139,6 +139,7 @@ class PostgresPortfolioHandler:
             "'outcome', o.name, 'shares', p.shares::text, "
             "'average_cost', p.average_cost::text, "
             "'cost_basis_micros', p.cost_basis_micros, "
+            "'entry_fees_micros', p.entry_fees_micros, "
             "'realized_pnl_micros', p.realized_pnl_micros, "
             "'updated_at', to_char(p.updated_at AT TIME ZONE 'UTC', "
             "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')) "

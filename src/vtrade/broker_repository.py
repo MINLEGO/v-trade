@@ -248,7 +248,8 @@ class PostgresBrokerRepository:
             )
             cursor.execute(
                 "UPDATE positions SET shares = 0, average_cost = 0, cost_basis_micros = 0, "
-                "realized_pnl_micros = realized_pnl_micros + %s, updated_at = %s "
+                "entry_fees_micros = 0, realized_pnl_micros = realized_pnl_micros + %s, "
+                "updated_at = %s "
                 "WHERE id = %s AND agent_id = %s AND outcome_id = %s",
                 (
                     int(result.realized_pnl_micros),
@@ -528,7 +529,7 @@ def _validate_settlement_relations(
 ) -> None:
     cursor.execute(
         "SELECT p.agent_id, o.market_id, p.outcome_id, p.shares, p.average_cost, "
-        "p.cost_basis_micros, p.realized_pnl_micros, r.market_id, "
+        "p.cost_basis_micros, p.realized_pnl_micros, p.entry_fees_micros, r.market_id, "
         "r.winning_outcome_id, r.source_created_at, r.observed_at, r.eligible_after "
         "FROM positions p JOIN outcomes o ON o.id = p.outcome_id "
         "JOIN resolutions r ON r.id = %s WHERE p.id = %s FOR UPDATE OF p",
@@ -550,18 +551,19 @@ def _validate_settlement_relations(
         and Decimal(str(row[4])) == result.position.average_cost
         and int(str(row[5])) == int(result.position.cost_basis_micros)
         and int(str(row[6])) == int(result.position.realized_pnl_micros)
-        and uuid.UUID(str(row[7])) == market_id
+        and int(str(row[7])) == int(result.position.entry_fees_micros)
+        and uuid.UUID(str(row[8])) == market_id
         and (
-            (row[8] is None and expected_winner is None)
+            (row[9] is None and expected_winner is None)
             or (
-                row[8] is not None
+                row[9] is not None
                 and expected_winner is not None
-                and uuid.UUID(str(row[8])) == expected_winner
+                and uuid.UUID(str(row[9])) == expected_winner
             )
         )
-        and cast(datetime, row[9]) == result.resolution.source_created_at
-        and cast(datetime, row[10]) == result.resolution.observed_at
-        and cast(datetime, row[11]) == result.resolution.eligible_after
+        and cast(datetime, row[10]) == result.resolution.source_created_at
+        and cast(datetime, row[11]) == result.resolution.observed_at
+        and cast(datetime, row[12]) == result.resolution.eligible_after
     )
     if not matches:
         raise ValueError("settlement ownership, resolution, or position dimensions differ")
@@ -656,13 +658,16 @@ def _upsert_position(
     average_cost = position.average_cost if position else Decimal(0)
     cost_basis = int(position.cost_basis_micros) if position else 0
     realized = int(position.realized_pnl_micros) if position else 0
+    entry_fees = int(position.entry_fees_micros) if position else 0
     cursor.execute(
         "INSERT INTO positions "
         "(id, agent_id, outcome_id, shares, average_cost, cost_basis_micros, "
-        "realized_pnl_micros, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+        "realized_pnl_micros, entry_fees_micros, updated_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
         "ON CONFLICT (agent_id, outcome_id) DO UPDATE SET shares = EXCLUDED.shares, "
         "average_cost = EXCLUDED.average_cost, cost_basis_micros = EXCLUDED.cost_basis_micros, "
-        "realized_pnl_micros = EXCLUDED.realized_pnl_micros, updated_at = EXCLUDED.updated_at",
+        "realized_pnl_micros = EXCLUDED.realized_pnl_micros, "
+        "entry_fees_micros = EXCLUDED.entry_fees_micros, updated_at = EXCLUDED.updated_at",
         (
             _stable_database_uuid("position", f"{agent_id}:{market_id}:{outcome_id}"),
             agent_id,
@@ -671,6 +676,7 @@ def _upsert_position(
             average_cost,
             cost_basis,
             realized,
+            entry_fees,
             result.order.created_at,
         ),
     )

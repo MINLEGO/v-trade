@@ -54,6 +54,11 @@ const columns: ColumnDef<PositionRow, unknown>[] = [
     cell: ({ row }) => <MicroDollars value={row.original.cost_basis_micros} />,
   },
   {
+    accessorKey: "entry_fees_micros",
+    header: "Entry Fees",
+    cell: ({ row }) => <MicroDollars value={row.original.entry_fees_micros} />,
+  },
+  {
     accessorKey: "realized_pnl_micros",
     header: "Realized PnL",
     cell: ({ row }) => (

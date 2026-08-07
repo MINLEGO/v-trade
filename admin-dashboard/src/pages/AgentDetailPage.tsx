@@ -36,6 +36,7 @@ const positionColumns: ColumnDef<PositionRow, unknown>[] = [
   { accessorKey: "shares", header: "Shares", cell: ({ row }) => <span className="tabular-nums">{row.original.shares}</span> },
   { accessorKey: "average_cost", header: "Avg Cost", cell: ({ row }) => <span className="tabular-nums">{row.original.average_cost.toFixed(4)}</span> },
   { accessorKey: "cost_basis_micros", header: "Cost Basis", cell: ({ row }) => <MicroDollars value={row.original.cost_basis_micros} /> },
+  { accessorKey: "entry_fees_micros", header: "Entry Fees", cell: ({ row }) => <MicroDollars value={row.original.entry_fees_micros} /> },
   { accessorKey: "realized_pnl_micros", header: "Realized PnL", cell: ({ row }) => <MicroDollars value={row.original.realized_pnl_micros} showSign /> },
   { accessorKey: "best_bid", header: "Best Bid", cell: ({ row }) => <span className="tabular-nums">{row.original.best_bid != null ? row.original.best_bid.toFixed(4) : "—"}</span> },
   { accessorKey: "liquidation_value_micros", header: "Liquidation Value", cell: ({ row }) => <MicroDollars value={row.original.liquidation_value_micros} /> },

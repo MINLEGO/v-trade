@@ -1292,7 +1292,8 @@ class _PostgresTradingState:
         account = cursor.fetchone()
         cursor.execute(
             "SELECT m.id, p.outcome_id, p.shares, p.average_cost, "
-            "p.cost_basis_micros, p.realized_pnl_micros FROM positions p "
+            "p.cost_basis_micros, p.realized_pnl_micros, p.entry_fees_micros "
+            "FROM positions p "
             "JOIN outcomes o ON o.id = p.outcome_id "
             "JOIN markets m ON m.id = o.market_id "
             "WHERE p.agent_id = %s AND p.shares > 0 ORDER BY p.outcome_id",
@@ -1312,6 +1313,7 @@ class _PostgresTradingState:
                     Decimal(str(row[3])),
                     MicroDollars(int(str(row[4]))),
                     MicroDollars(int(str(row[5]))),
+                    MicroDollars(int(str(row[6]))),
                 )
                 for row in positions
             ),
@@ -1599,7 +1601,8 @@ class ProductionSettlementValuationPort:
         liquidation = account_value - int(portfolio.cash_micros)
         basis = sum(int(position.cost_basis_micros) for position in portfolio.positions)
         realized = self._realized_pnl(claim.agent_id)
-        unrealized = liquidation - basis
+        entry_fees = sum(int(position.entry_fees_micros) for position in portfolio.positions)
+        unrealized = liquidation - basis - entry_fees
         mismatch = self._ledger_mismatch(claim.agent_id)
         calculated = _aware(self._clock())
         self._persist_performance(
@@ -1609,6 +1612,7 @@ class ProductionSettlementValuationPort:
             account_value=account_value,
             realized=realized,
             unrealized=unrealized,
+            entry_fees=entry_fees,
             calculated=calculated,
             settlement_ids=settled_ids,
             bid_ids=valuation_book_ids,
@@ -1725,6 +1729,7 @@ class ProductionSettlementValuationPort:
         account_value: int,
         realized: int,
         unrealized: int,
+        entry_fees: int,
         calculated: datetime,
         settlement_ids: Sequence[str],
         bid_ids: Sequence[uuid.UUID],
@@ -1733,6 +1738,7 @@ class ProductionSettlementValuationPort:
         calculation = {
             "valuation_policy": "latest_archived_executable_bid_max_age_300_seconds",
             "valuation_cutoff": _cutoff(claim).isoformat(),
+            "entry_fees_micros": entry_fees,
             "settlement_ids": list(settlement_ids),
             "eligible_order_book_snapshot_ids": [str(value) for value in bid_ids],
         }
@@ -2160,6 +2166,7 @@ def _portfolio_payload(portfolio: PortfolioState) -> dict[str, object]:
                 "average_cost": str(position.average_cost),
                 "cost_basis_micros": int(position.cost_basis_micros),
                 "realized_pnl_micros": int(position.realized_pnl_micros),
+                "entry_fees_micros": int(position.entry_fees_micros),
             }
             for position in portfolio.positions
         ],
@@ -2194,6 +2201,7 @@ def _portfolio_from_payload(value: object) -> PortfolioState:
                 Decimal(str(_mapping(row)["average_cost"])),
                 MicroDollars(int(str(_mapping(row)["cost_basis_micros"]))),
                 MicroDollars(int(str(_mapping(row).get("realized_pnl_micros", 0)))),
+                MicroDollars(int(str(_mapping(row).get("entry_fees_micros", 0)))),
             )
             for row in positions_value
         )

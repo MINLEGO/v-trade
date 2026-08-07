@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 MIGRATION = Path("migrations/0015_belief_confidence_and_singleton_plans.sql")
 
 

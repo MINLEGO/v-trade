@@ -74,6 +74,7 @@ export interface PositionRow {
   shares: number;
   average_cost: number;
   cost_basis_micros: number;
+  entry_fees_micros: number;
   realized_pnl_micros: number;
   best_bid: number | null;
   quote_cutoff: string | null;

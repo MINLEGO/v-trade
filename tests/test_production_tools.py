@@ -339,9 +339,9 @@ class ProductionToolRegistryTests(unittest.TestCase):
                     "0.57",
                     42_000_000,
                     57_000_000,
-                    0,
-                    15_000_000,
-                    "0.3571",
+                    2_000_000,
+                    13_000_000,
+                    "0.3095",
                     "sold",
                 )
             ]
@@ -355,12 +355,14 @@ class ProductionToolRegistryTests(unittest.TestCase):
         self.assertEqual(output["trades"][0]["total_sold_shares"], "100")
         self.assertEqual(output["trades"][0]["average_entry_price"], "0.42")
         self.assertEqual(output["trades"][0]["average_exit_price"], "0.57")
-        self.assertEqual(output["trades"][0]["realized_pnl_micros"], 15_000_000)
-        self.assertEqual(output["trades"][0]["return_on_cost"], "0.3571")
+        self.assertEqual(output["trades"][0]["total_fees_micros"], 2_000_000)
+        self.assertEqual(output["trades"][0]["realized_pnl_micros"], 13_000_000)
+        self.assertEqual(output["trades"][0]["return_on_cost"], "0.3095")
         self.assertEqual(output["trades"][0]["close_reason"], "sold")
         query, params = cursor.queries[0]
         self.assertIn("HAVING SUM(signed_shares) = 0", query)
         self.assertIn("side = 'SELL'", query)
+        self.assertIn("total_fees_micros)::bigint", query)
         self.assertEqual(params[1], 10)
 
     def test_partial_sell_does_not_create_a_closed_trade(self) -> None:

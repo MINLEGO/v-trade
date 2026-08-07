@@ -339,6 +339,35 @@ class BrokerScenarioTests(unittest.TestCase):
             1_250_000,
         )
 
+    def test_buy_fees_follow_remaining_shares_and_replay(self) -> None:
+        buy = self.place(order(shares="10"), snapshot=book(asks=(("0.40", "10"),)))
+        bought = buy.portfolio.position("outcome-yes")
+        self.assertIsNotNone(bought)
+        buy_fee = int(buy.fills[0].fee_micros)
+        self.assertEqual(bought.entry_fees_micros, buy_fee)
+        self.assertEqual(bought.cost_basis_micros, 4_000_000)
+        self.assertEqual(bought.average_cost, Decimal("0.4"))
+
+        sell = self.place(
+            order(side=Side.SELL, shares="5", suffix="partial-sell"),
+            snapshot=book(bids=(("0.39", "10"),), asks=(("0.40", "10"),)),
+            portfolio=buy.portfolio,
+            bids={"outcome-yes": archived_bid("0.39")},
+        )
+        remaining = sell.portfolio.position("outcome-yes")
+        self.assertIsNotNone(remaining)
+        sell_fee = int(sell.fills[0].fee_micros)
+        expected_entry_fee_remaining = buy_fee // 2
+        self.assertEqual(remaining.entry_fees_micros, expected_entry_fee_remaining)
+        self.assertEqual(
+            remaining.realized_pnl_micros,
+            1_950_000 - 2_000_000 - expected_entry_fee_remaining - sell_fee,
+        )
+        self.assertEqual(
+            replay_portfolio(self.portfolio, (*buy.ledger_entries, *sell.ledger_entries)),
+            sell.portfolio,
+        )
+
     def test_taker_only_policy_does_not_charge_non_taker_execution(self) -> None:
         policy = FeePolicy(Decimal("0.05"), taker_only=True)
         self.assertEqual(
@@ -416,6 +445,31 @@ class BrokerScenarioTests(unittest.TestCase):
         self.assertEqual(first.portfolio.cash_micros, 105_000_000)
         self.assertEqual(first.portfolio.positions, ())
         self.assertEqual(sum(int(p.amount_micros) for p in first.ledger_entry.postings), 0)
+
+    def test_settlement_subtracts_entry_fees_without_changing_gross_cost_metrics(self) -> None:
+        position = PositionState(
+            "market-1",
+            "outcome-yes",
+            Decimal(10),
+            Decimal("0.4"),
+            MicroDollars(4_000_000),
+            entry_fees_micros=MicroDollars(120_000),
+        )
+        portfolio = PortfolioState(
+            "agent-1", MicroDollars(100_000_000), positions=(position,)
+        )
+
+        result = SettlementEngine().settle(
+            resolution=resolution(winner=None),
+            position=position,
+            portfolio=portfolio,
+            as_of=NOW,
+            settled_at=NOW,
+        )
+
+        self.assertEqual(result.realized_pnl_micros, 880_000)
+        self.assertEqual(result.position.cost_basis_micros, 4_000_000)
+        self.assertEqual(result.position.average_cost, Decimal("0.4"))
 
     def test_last_archived_bid_at_five_minutes_is_accepted(self) -> None:
         position = PositionState(

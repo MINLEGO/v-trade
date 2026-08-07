@@ -54,6 +54,19 @@ class SpecificationTests(unittest.TestCase):
             self.assertEqual(properties["limit"]["maximum"], 100)
             self.assertEqual(properties["limit"]["default"], 100)
 
+    def test_position_outputs_expose_buy_fees_without_redefining_gross_costs(self) -> None:
+        document = json.loads(Path("spec/tool-schemas-v1.json").read_text(encoding="utf-8"))
+        tools = {tool["name"]: tool for tool in document["tools"]}
+        portfolio_item = tools["get_portfolio"]["output_schema"]["properties"]["items"][
+            "items"
+        ]
+        self.assertEqual(
+            portfolio_item["properties"]["entry_fees_micros"], {"type": "integer"}
+        )
+        self.assertIn("entry_fees_micros", portfolio_item["required"])
+        affected = document["$defs"]["portfolio_after"]["properties"]["affected_position"]
+        self.assertIn("entry_fees_micros", affected["required"])
+
     def test_keyword_searches_accept_strings_or_keyword_arrays(self) -> None:
         document = json.loads(Path("spec/tool-schemas-v1.json").read_text(encoding="utf-8"))
         tools = {tool["name"]: tool for tool in document["tools"]}

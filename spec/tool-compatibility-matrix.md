@@ -43,3 +43,6 @@ argument accepts either the legacy string or a non-empty tuple/JSON array of str
 Multiple values use OR semantics: matches for each keyword are merged into one paginated
 result, with events and markets emitted only once.
 
+Account position outputs preserve gross `cost_basis_micros` and `average_cost` and add
+`entry_fees_micros` for buy fees still attached to open shares. Closed-trade P&L is net
+of `total_fees_micros`; settlement P&L is net of the position’s remaining entry fees.

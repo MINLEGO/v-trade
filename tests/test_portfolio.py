@@ -25,6 +25,7 @@ def _item(position_id: uuid.UUID, question: str = "Will it happen?") -> dict[str
         "shares": "10.000000000000",
         "average_cost": "0.500000000000",
         "cost_basis_micros": 5_000_000,
+        "entry_fees_micros": 120_000,
         "realized_pnl_micros": 0,
         "updated_at": "2026-07-16T12:00:00.000000Z",
     }

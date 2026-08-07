@@ -445,6 +445,7 @@ class PostgresBrokerRepositoryTests(unittest.TestCase):
             result.position.average_cost,
             int(result.position.cost_basis_micros),
             int(result.position.realized_pnl_micros),
+            int(result.position.entry_fees_micros),
             ids["market_id"],
             (
                 uuid.uuid5(

@@ -107,12 +107,13 @@
         "shares": {"type": "string"},
         "average_cost": {"type": "string"},
         "cost_basis_micros": {"type": "integer"},
+        "entry_fees_micros": {"type": "integer"},
         "realized_pnl_micros": {"type": "integer"},
         "updated_at": {"type": "string", "format": "date-time"}
       },
       "required": [
         "position_id", "market_id", "market_question", "outcome_id", "venue_token_id",
-        "outcome", "shares", "average_cost", "cost_basis_micros",
+        "outcome", "shares", "average_cost", "cost_basis_micros", "entry_fees_micros",
         "realized_pnl_micros", "updated_at"
       ]
     },
@@ -129,9 +130,10 @@
             "outcome_id": {"type": "string"},
             "shares": {"type": "string"},
             "average_cost": {"type": "string"},
-            "cost_basis_micros": {"type": "integer"}
+            "cost_basis_micros": {"type": "integer"},
+            "entry_fees_micros": {"type": "integer"}
           },
-          "required": ["outcome_id", "shares", "average_cost", "cost_basis_micros"]
+          "required": ["outcome_id", "shares", "average_cost", "cost_basis_micros", "entry_fees_micros"]
         }
       },
       "required": ["version", "cash_micros", "affected_position"]
@@ -925,7 +927,7 @@
     },
     {
       "name": "get_portfolio",
-      "description": "Retrieve the calling agent’s positive-share positions from an immutable portfolio snapshot associated with the current agent cycle and portfolio version. Each position includes market and outcome identifiers, the market question, share quantity, average cost, cost basis, realized P&L and last update time.\n\nThe result does not provide a current executable exit price or unrealized P&L. Use the position’s venue token identifier with `get_orderbook` to estimate liquidation value and exit liquidity.",
+      "description": "Retrieve the calling agent’s positive-share positions from an immutable portfolio snapshot associated with the current agent cycle and portfolio version. Each position includes market and outcome identifiers, the market question, share quantity, average cost, gross cost basis, accumulated buy fees still attached to the open shares, realized P&L and last update time. `cost_basis_micros` and `average_cost` remain gross trade-notional metrics; use `entry_fees_micros` when assessing net performance.\n\nThe result does not provide a current executable exit price or unrealized P&L. Use the position’s venue token identifier with `get_orderbook` to estimate liquidation value and exit liquidity.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -969,12 +971,14 @@
                 },
                 "average_cost": {"type": "string"},
                 "cost_basis_micros": {"type": "integer"},
+                "entry_fees_micros": {"type": "integer"},
                 "realized_pnl_micros": {"type": "integer"},
                 "updated_at": {"type": "string", "format": "date-time"}
               },
               "required": [
                 "position_id", "market_id", "market_question", "outcome_id",
                 "venue_token_id", "outcome", "shares", "average_cost", "cost_basis_micros",
+                "entry_fees_micros",
                 "realized_pnl_micros", "updated_at"
               ]
             }
@@ -987,7 +991,7 @@
     },
     {
       "name": "get_closed_trades",
-      "description": "Return positions that were fully closed through SELL executions, ordered from newest to oldest. Each record aggregates the complete position lifecycle, including entry and exit quantities, average prices, fees, realized P&L, and opening and closing times.\n\nPartially sold positions are not included until their remaining shares reach zero. Positions closed through market settlement are returned separately by get_settlements.",
+      "description": "Return positions that were fully closed through SELL executions, ordered from newest to oldest. Each record aggregates the complete position lifecycle, including entry and exit quantities, average prices, total buy and sell fees, realized P&L net of all those fees, and opening and closing times.\n\nPartially sold positions are not included until their remaining shares reach zero. Positions closed through market settlement are returned separately by get_settlements.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -1046,7 +1050,7 @@
     },
     {
       "name": "get_settlements",
-      "description": "Return the calling agent’s most recent settled position records, ordered from newest to oldest. Each record includes the settled share quantity, payout, realized P&L, settlement time, market question, winning outcome (nullable) and the outcome chosen by the agent.\n\nUse this tool to verify that an outcome has been settled and to distinguish realized settlement results from unrealized position value. Settlement P&L is authoritative for completed positions.",
+      "description": "Return the calling agent’s most recent settled position records, ordered from newest to oldest. Each record includes the settled share quantity, payout, realized P&L net of the position’s buy fees, settlement time, market question, winning outcome (nullable) and the outcome chosen by the agent.\n\nUse this tool to verify that an outcome has been settled and to distinguish realized settlement results from unrealized position value. Settlement P&L is authoritative for completed positions.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {

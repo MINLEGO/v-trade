@@ -577,7 +577,6 @@ class ProductionToolRegistry:
             "SUM(shares) FILTER (WHERE side = 'SELL') AS total_sold_shares, "
             "SUM(gross_micros) FILTER (WHERE side = 'BUY') AS entry_cost_micros, "
             "SUM(gross_micros) FILTER (WHERE side = 'SELL') AS exit_proceeds_micros, "
-            "SUM(fee_micros) FILTER (WHERE side = 'SELL') AS exit_fees_micros, "
             "SUM(fee_micros) AS total_fees_micros, "
             "SUM(signed_shares) AS remaining_shares "
             "FROM numbered WHERE trade_number > 0 "
@@ -604,11 +603,11 @@ class ProductionToolRegistry:
             "entry_cost_micros::bigint AS entry_cost_micros, "
             "exit_proceeds_micros::bigint AS exit_proceeds_micros, "
             "total_fees_micros::bigint AS total_fees_micros, "
-            "(exit_proceeds_micros - entry_cost_micros - exit_fees_micros)::bigint "
+            "(exit_proceeds_micros - entry_cost_micros - total_fees_micros)::bigint "
             "AS realized_pnl_micros, "
             "CASE WHEN entry_cost_micros = 0 THEN '0' ELSE "
             "trim(trailing '.' FROM trim(trailing '0' FROM round(("
-            "exit_proceeds_micros - entry_cost_micros - exit_fees_micros"
+            "exit_proceeds_micros - entry_cost_micros - total_fees_micros"
             ")::numeric / NULLIF(entry_cost_micros, 0), 4)::text)) END "
             "AS return_on_cost, 'sold' AS close_reason "
             "FROM aggregated ORDER BY closed_at DESC, position_id DESC LIMIT %s",
@@ -1408,6 +1407,7 @@ def _execution_output(
                 "shares": str(position.shares),
                 "average_cost": str(position.average_cost),
                 "cost_basis_micros": int(position.cost_basis_micros),
+                "entry_fees_micros": int(position.entry_fees_micros),
             }
             if position is not None
             else None
