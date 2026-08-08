@@ -1437,29 +1437,6 @@ def _execution_output(
     ]
     if failed_attempts:
         output["attempts"] = failed_attempts
-    if result.virtual_liquidity is not None:
-        virtual = result.virtual_liquidity
-        output["virtual_liquidity"] = {
-            "token_id": virtual.token_id,
-            "side": virtual.side.value,
-            "requested_shares": str(virtual.requested_shares),
-            "available_shares": str(virtual.available_shares),
-            "consumed_shares": str(virtual.consumed_shares),
-            "cancelled_shares": str(virtual.cancelled_shares),
-            "remaining_shares": str(virtual.remaining_shares),
-            "levels": [
-                {
-                    "level_index": level.level_index,
-                    "price": str(level.price),
-                    "displayed_shares": str(level.displayed_shares),
-                    "available_shares": str(level.available_shares),
-                    "consumed_shares": str(level.consumed_shares),
-                    "cancelled_shares": str(level.cancelled_shares),
-                    "remaining_shares": str(level.remaining_shares),
-                }
-                for level in virtual.levels
-            ],
-        }
     if result.status is ExecutionStatus.REJECTED:
         output["rejection_code"] = result.rejection_code.value if result.rejection_code else None
         code = result.rejection_code.value if result.rejection_code else ""

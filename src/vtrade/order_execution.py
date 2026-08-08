@@ -24,7 +24,7 @@ from vtrade.broker import (
     PredictionArenaPaperBroker,
     RejectionCode,
 )
-from vtrade.domain.types import MicroDollars
+from vtrade.domain.types import MicroDollars, PriceLevel
 from vtrade.liquidity import (
     VirtualLiquidityMetrics,
     VirtualLiquidityReservation,
@@ -103,6 +103,9 @@ class _TradingState(Protocol):
         snapshot_id: uuid.UUID,
         snapshot: Any,
         maximum_book_depth: int,
+        ignored_best_levels: int,
+        maximum_ignored_depth_fraction: Decimal,
+        liquidity_rule_version: str,
     ) -> VirtualLiquidityReservation: ...
 
     def finalize_virtual_liquidity(
@@ -419,6 +422,7 @@ class MarketOrderExecutor:
                     fee,
                     snapshot=reservation.snapshot if reservation is not None else None,
                     now=execution_at,
+                    effective_levels=_reservation_effective_levels(reservation),
                 )
                 if reservation is not None:
                     metrics = state.finalize_virtual_liquidity(
@@ -685,6 +689,7 @@ class MarketOrderExecutor:
                 now=execution_at,
                 live_context=True,
                 valuation_as_of=context.validated_at,
+                effective_levels=_reservation_effective_levels(reservation),
             )
             if reservation is not None:
                 metrics = state.finalize_virtual_liquidity(
@@ -841,6 +846,7 @@ class MarketOrderExecutor:
             fee,
             snapshot=reservation.snapshot if reservation is not None else None,
             now=execution_at,
+            effective_levels=_reservation_effective_levels(reservation),
         )
         if reservation is not None:
             metrics = state.finalize_virtual_liquidity(
@@ -884,6 +890,15 @@ class MarketOrderExecutor:
                 snapshot_id=item.book_snapshot_id,
                 snapshot=item.book,
                 maximum_book_depth=self._broker.maximum_book_depth_limit,
+                ignored_best_levels=getattr(self._broker, "ignored_best_levels", 0),
+                maximum_ignored_depth_fraction=getattr(
+                    self._broker, "maximum_ignored_depth_fraction", Decimal(0)
+                ),
+                liquidity_rule_version=getattr(
+                    self._broker,
+                    "liquidity_rule_version",
+                    "best-level-haircut-v1",
+                ),
             ),
         )
 
@@ -899,6 +914,7 @@ class MarketOrderExecutor:
         now: datetime | None = None,
         live_context: bool = False,
         valuation_as_of: datetime | None = None,
+        effective_levels: Sequence[PriceLevel] | None = None,
     ) -> ExecutionResult:
         kwargs: dict[str, Any] = {
             "market": item.market,
@@ -913,10 +929,25 @@ class MarketOrderExecutor:
             kwargs["live_context"] = True
         if valuation_as_of is not None:
             kwargs["valuation_as_of"] = valuation_as_of
+        if effective_levels is not None:
+            kwargs["effective_levels"] = effective_levels
         return self._broker.place(
             order,
             **kwargs,
         )
+
+
+def _reservation_effective_levels(
+    reservation: VirtualLiquidityReservation | None,
+) -> tuple[PriceLevel, ...] | None:
+    if reservation is None:
+        return None
+    levels = tuple(
+        PriceLevel(level.price, level.available_shares)
+        for level in reservation.levels
+        if level.executable and level.available_shares > 0
+    )
+    return levels
 
 
 def _uuid_membership(value: Mapping[str, object], key: str) -> tuple[uuid.UUID, ...]:

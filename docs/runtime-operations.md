@@ -51,6 +51,14 @@ checksum for an already applied migration. The worker checks the versioned exper
 configuration before acquiring leases or mutating external state. All required owner
 decisions are now resolved; no incomplete tool handler or fake runtime is substituted.
 
+The active liquidity-aware worker applies the configured `best-level-haircut-v1` only to
+its private simulator capacity: it observes six raw levels to execute at most five positive
+effective levels, while the agent-facing order-book response remains unchanged. The rule,
+ignored shares, effective shares, and consumption are persisted per agent, cycle, token,
+side, price level, and immutable snapshot for audit and idempotent retries. Changing the
+haircut requires a new versioned active configuration; it must not rewrite snapshots or
+historical baseline results.
+
 ## Scheduling and recovery
 
 Each agent owns an independent hourly cursor in PostgreSQL. One scheduler transaction

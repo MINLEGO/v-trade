@@ -126,6 +126,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(execution["buy_fill_price"], "walk_asks")
         self.assertEqual(execution["sell_fill_price"], "walk_bids")
         self.assertEqual(execution["order_book_depth"], 5)
+        self.assertEqual(execution["ignored_best_levels"], 1)
+        self.assertEqual(execution["maximum_ignored_depth_fraction"], 0.5)
         self.assertEqual(execution["maximum_order_book_age_seconds"], 300)
         self.assertTrue(execution["counterparty_required"])
         self.assertEqual(execution["insufficient_depth"], "partial_fill")
@@ -136,6 +138,10 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(
             config.raw["owner_decisions"]["paper_fill_rule"]["policy"],
             "walk_displayed_book_ioc_partial_fill",
+        )
+        self.assertEqual(
+            config.raw["owner_decisions"]["liquidity_haircut"]["rule_version"],
+            "best-level-haircut-v1",
         )
 
     def test_fee_configuration_is_explicit_and_zeroes_optional_costs(self) -> None:

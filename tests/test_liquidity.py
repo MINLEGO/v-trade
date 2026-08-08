@@ -10,6 +10,7 @@ from vtrade.domain.types import OrderBookSnapshot, PriceLevel, RawArtifact, Side
 from vtrade.liquidity import (
     VirtualLiquidityLevel,
     VirtualLiquidityReservation,
+    effective_liquidity_book,
     metrics_for_fills,
     private_snapshot,
 )
@@ -51,6 +52,81 @@ def reservation(*, agent_id: str, available: tuple[str, str] = ("1", "2")):
 
 
 class VirtualLiquidityTests(unittest.TestCase):
+    def test_haircut_aggregates_prices_and_keeps_five_effective_levels(self) -> None:
+        source = reservation(agent_id="agent-1").snapshot
+        snapshot = replace(
+            source,
+            asks=(
+                PriceLevel(Decimal("0.40"), Decimal("30")),
+                PriceLevel(Decimal("0.40"), Decimal("30")),
+                PriceLevel(Decimal("0.41"), Decimal("1")),
+                PriceLevel(Decimal("0.42"), Decimal("1")),
+                PriceLevel(Decimal("0.43"), Decimal("1")),
+                PriceLevel(Decimal("0.44"), Decimal("1")),
+                PriceLevel(Decimal("0.45"), Decimal("1")),
+            ),
+        )
+
+        result = effective_liquidity_book(
+            snapshot,
+            side=Side.BUY,
+            maximum_book_depth=5,
+            ignored_best_levels=1,
+            maximum_ignored_depth_fraction=Decimal("0.5"),
+        )
+
+        self.assertEqual(len(result.raw_levels), 6)
+        self.assertEqual(result.raw_levels[0].displayed_shares, Decimal("60"))
+        self.assertEqual(result.raw_levels[0].ignored_shares, Decimal("32.5"))
+        self.assertEqual(result.raw_levels[0].effective_shares, Decimal("27.5"))
+        self.assertEqual(len(result.executable_levels), 5)
+        self.assertEqual(result.executable_levels[-1].price, Decimal("0.44"))
+        self.assertEqual(result.raw_levels[-1].executable, False)
+
+    def test_haircut_fully_ignores_a_best_level_at_the_fifty_percent_boundary(self) -> None:
+        source = reservation(agent_id="agent-1").snapshot
+        snapshot = replace(
+            source,
+            asks=tuple(
+                PriceLevel(Decimal(f"0.{40 + index}"), Decimal(5))
+                for index in range(6)
+            ),
+        )
+
+        result = effective_liquidity_book(
+            snapshot,
+            side=Side.BUY,
+            maximum_book_depth=5,
+            ignored_best_levels=1,
+            maximum_ignored_depth_fraction=Decimal("0.5"),
+        )
+
+        self.assertEqual(result.raw_levels[0].effective_shares, Decimal(0))
+        self.assertEqual(
+            tuple(level.level_index for level in result.executable_levels),
+            (1, 2, 3, 4, 5),
+        )
+
+    def test_haircut_orders_sell_bids_and_limits_one_level_to_half_when_alone(self) -> None:
+        source = reservation(agent_id="agent-1").snapshot
+        snapshot = replace(
+            source,
+            bids=(PriceLevel(Decimal("0.60"), Decimal(100)),),
+        )
+
+        result = effective_liquidity_book(
+            snapshot,
+            side=Side.SELL,
+            maximum_book_depth=5,
+            ignored_best_levels=1,
+            maximum_ignored_depth_fraction=Decimal("0.5"),
+        )
+
+        self.assertEqual(result.raw_levels[0].price, Decimal("0.60"))
+        self.assertEqual(result.raw_levels[0].ignored_shares, Decimal(50))
+        self.assertEqual(result.raw_levels[0].effective_shares, Decimal(50))
+        self.assertEqual(result.effective_depth_shares, Decimal(50))
+
     def test_private_snapshot_is_a_view_and_does_not_mutate_the_historical_book(self) -> None:
         first = reservation(agent_id="agent-1")
         consumed = metrics_for_fills(

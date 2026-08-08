@@ -36,6 +36,17 @@ class SpecificationTests(unittest.TestCase):
         self.assertEqual(len(names), 27)
         self.assertEqual(len(set(names)), 27)
 
+    def test_active_order_output_keeps_private_liquidity_internal(self) -> None:
+        active = json.loads(Path("spec/tool-schemas-v1.json").read_text(encoding="utf-8"))
+        legacy = json.loads(
+            Path("spec/tool-schemas-v1-legacy.json").read_text(encoding="utf-8")
+        )
+        active_order = next(row for row in active["tools"] if row["name"] == "place_market_order")
+        legacy_order = next(row for row in legacy["tools"] if row["name"] == "place_market_order")
+
+        self.assertNotIn("virtual_liquidity", json.dumps(active_order))
+        self.assertIn("virtual_liquidity", json.dumps(legacy_order))
+
     def test_paginated_tools_expose_their_cursor_contract(self) -> None:
         document = json.loads(Path("spec/tool-schemas-v1.json").read_text(encoding="utf-8"))
         tools = {tool["name"]: tool for tool in document["tools"]}

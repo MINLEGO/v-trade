@@ -177,6 +177,116 @@ class BrokerScenarioTests(unittest.TestCase):
         self.assertEqual(result.status, ExecutionStatus.PARTIAL)
         self.assertEqual([fill.shares for fill in result.fills], [Decimal(1), Decimal(1)])
 
+    def test_liquidity_aware_haircut_limits_a_single_best_level_to_half(self) -> None:
+        broker = PredictionArenaPaperBroker(
+            policy=PaperPolicy.LIQUIDITY_AWARE,
+            ignored_best_levels=1,
+            maximum_ignored_depth_fraction=Decimal("0.5"),
+        )
+        snapshot = book(asks=(("0.40", "100"),))
+
+        result = self.place(
+            replace(order(shares="80"), liquidity_time_in_force=LiquidityTimeInForce.IOC),
+            snapshot=snapshot,
+            broker=broker,
+        )
+
+        self.assertEqual(result.status, ExecutionStatus.PARTIAL)
+        self.assertEqual(result.fills[0].shares, Decimal("50"))
+        self.assertEqual(result.fills[0].price, Decimal("0.40"))
+
+    def test_liquidity_aware_haircut_fok_rejects_without_financial_mutation(self) -> None:
+        broker = PredictionArenaPaperBroker(
+            policy=PaperPolicy.LIQUIDITY_AWARE,
+            ignored_best_levels=1,
+            maximum_ignored_depth_fraction=Decimal("0.5"),
+        )
+        portfolio = self.portfolio
+        result = self.place(
+            replace(order(shares="80"), liquidity_time_in_force=LiquidityTimeInForce.FOK),
+            snapshot=book(asks=(("0.40", "100"),)),
+            portfolio=portfolio,
+            broker=broker,
+        )
+
+        self.assertEqual(result.status, ExecutionStatus.REJECTED)
+        self.assertEqual(result.rejection_code, RejectionCode.FOK_NOT_FILLED)
+        self.assertEqual(result.fills, ())
+        self.assertEqual(result.portfolio, portfolio)
+
+    def test_liquidity_aware_haircut_applies_symmetrically_to_sell_bids(self) -> None:
+        broker = PredictionArenaPaperBroker(
+            policy=PaperPolicy.LIQUIDITY_AWARE,
+            ignored_best_levels=1,
+            maximum_ignored_depth_fraction=Decimal("0.5"),
+        )
+        portfolio = PortfolioState(
+            "agent-1",
+            MicroDollars(100_000_000),
+            positions=(
+                PositionState(
+                    "market-1",
+                    "outcome-yes",
+                    Decimal(80),
+                    Decimal("0.30"),
+                    MicroDollars(24_000_000),
+                ),
+            ),
+        )
+
+        result = self.place(
+            replace(
+                order(side=Side.SELL, shares="80"),
+                liquidity_time_in_force=LiquidityTimeInForce.IOC,
+            ),
+            snapshot=book(bids=(("0.60", "100"),), asks=(("0.70", "1"),)),
+            portfolio=portfolio,
+            broker=broker,
+            bids={"outcome-yes": archived_bid("0.60")},
+        )
+
+        self.assertEqual(result.status, ExecutionStatus.PARTIAL)
+        self.assertEqual(result.fills[0].shares, Decimal("50"))
+        self.assertEqual(result.fills[0].price, Decimal("0.60"))
+
+    def test_liquidity_aware_haircut_uses_the_next_five_levels_when_best_is_fully_ignored(
+        self,
+    ) -> None:
+        broker = PredictionArenaPaperBroker(
+            policy=PaperPolicy.LIQUIDITY_AWARE,
+            ignored_best_levels=1,
+            maximum_ignored_depth_fraction=Decimal("0.5"),
+        )
+        asks = tuple((f"0.{40 + index}", "5") for index in range(6))
+        result = self.place(
+            replace(order(shares="5"), liquidity_time_in_force=LiquidityTimeInForce.IOC),
+            snapshot=book(asks=asks),
+            broker=broker,
+        )
+
+        self.assertEqual(result.status, ExecutionStatus.FILLED)
+        self.assertEqual(result.fills[0].price, Decimal("0.41"))
+
+    def test_liquidity_aware_haircut_applies_price_limits_to_effective_depth(self) -> None:
+        broker = PredictionArenaPaperBroker(
+            policy=PaperPolicy.LIQUIDITY_AWARE,
+            ignored_best_levels=1,
+            maximum_ignored_depth_fraction=Decimal("0.5"),
+        )
+        asks = tuple((f"0.{40 + index}", "5") for index in range(6))
+        result = self.place(
+            replace(
+                order(shares="5"),
+                limit_price=Decimal("0.40"),
+                liquidity_time_in_force=LiquidityTimeInForce.IOC,
+            ),
+            snapshot=book(asks=asks),
+            broker=broker,
+        )
+
+        self.assertEqual(result.status, ExecutionStatus.REJECTED)
+        self.assertEqual(result.rejection_code, RejectionCode.PRICE_LIMIT_NOT_MARKET)
+
     def test_cash_sized_buy_never_exceeds_budget_including_fees(self) -> None:
         broker = PredictionArenaPaperBroker(policy=PaperPolicy.LIQUIDITY_AWARE)
         paper_order = replace(

@@ -42,7 +42,9 @@ from vtrade.worker import (
     ProductionHarnessPort,
     ProductionWorker,
     _harness_artifact_registrations,
+    _ignored_best_levels,
     _liquidity_time_in_force,
+    _maximum_ignored_depth_fraction,
     _maximum_order_book_age,
     _order_book_depth,
     _paper_policy,
@@ -127,6 +129,19 @@ class WorkerFailClosedTests(unittest.TestCase):
             timedelta(seconds=300),
         )
         self.assertEqual(_order_book_depth({"execution": {"order_book_depth": 5}}), 5)
+        self.assertEqual(
+            _ignored_best_levels({"execution": {"ignored_best_levels": 1}}), 1
+        )
+        self.assertEqual(
+            _maximum_ignored_depth_fraction(
+                {"execution": {"maximum_ignored_depth_fraction": 0.5}}
+            ),
+            Decimal("0.5"),
+        )
+        with self.assertRaisesRegex(ProductionCompositionUnavailable, "between zero and one"):
+            _maximum_ignored_depth_fraction(
+                {"execution": {"maximum_ignored_depth_fraction": 1.1}}
+            )
 
     def test_production_broker_port_uses_configured_policy_and_tif(self) -> None:
         port = ProductionBrokerPort(

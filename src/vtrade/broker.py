@@ -7,9 +7,21 @@ from datetime import datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
 
-from vtrade.domain.types import Market, MarketStatus, MicroDollars, OrderBookSnapshot, Outcome, Side
+from vtrade.domain.types import (
+    Market,
+    MarketStatus,
+    MicroDollars,
+    OrderBookSnapshot,
+    Outcome,
+    PriceLevel,
+    Side,
+)
 from vtrade.ledger import AppendOnlyLedger, LedgerAccount, LedgerEntry, Posting
-from vtrade.liquidity import VirtualLiquidityMetrics
+from vtrade.liquidity import (
+    LIQUIDITY_HAIRCUT_RULE_VERSION,
+    VirtualLiquidityMetrics,
+    effective_liquidity_book,
+)
 
 _MICROS = Decimal(1_000_000)
 _FEE_QUANTUM = Decimal("0.00001")
@@ -370,6 +382,9 @@ class PredictionArenaPaperBroker:
         maximum_market_cost_basis_fraction: Decimal = Decimal("0.15"),
         maximum_book_age: timedelta = timedelta(minutes=5),
         maximum_book_depth: int = 5,
+        ignored_best_levels: int = 0,
+        maximum_ignored_depth_fraction: Decimal = Decimal(0),
+        liquidity_rule_version: str = LIQUIDITY_HAIRCUT_RULE_VERSION,
         maximum_valuation_bid_age: timedelta = timedelta(minutes=5),
         no_bid_valuation_policy: NoBidValuationPolicy = NoBidValuationPolicy.LAST_KNOWN_BID,
     ) -> None:
@@ -383,20 +398,46 @@ class PredictionArenaPaperBroker:
             or maximum_book_depth <= 0
         ):
             raise ValueError("maximum book depth must be a positive integer")
+        if (
+            not isinstance(ignored_best_levels, int)
+            or isinstance(ignored_best_levels, bool)
+            or ignored_best_levels < 0
+        ):
+            raise ValueError("ignored best levels must be a non-negative integer")
+        try:
+            maximum_ignored_depth_fraction = Decimal(str(maximum_ignored_depth_fraction))
+        except (ArithmeticError, ValueError) as exc:
+            raise ValueError("maximum ignored depth fraction must be numeric") from exc
+        if (
+            not maximum_ignored_depth_fraction.is_finite()
+            or not Decimal(0) <= maximum_ignored_depth_fraction <= Decimal(1)
+        ):
+            raise ValueError("maximum ignored depth fraction must be between zero and one")
+        if not isinstance(liquidity_rule_version, str) or not liquidity_rule_version:
+            raise ValueError("liquidity rule version is required")
         if maximum_valuation_bid_age < timedelta(0):
             raise ValueError("maximum valuation bid age cannot be negative")
         self.policy = policy
         self.maximum_market_cost_basis_fraction = maximum_market_cost_basis_fraction
         self.maximum_book_age = maximum_book_age
         self.maximum_book_depth = maximum_book_depth
+        self.ignored_best_levels = ignored_best_levels
+        self.maximum_ignored_depth_fraction = maximum_ignored_depth_fraction
+        self.liquidity_rule_version = liquidity_rule_version
         self.maximum_valuation_bid_age = maximum_valuation_bid_age
         self.no_bid_valuation_policy = no_bid_valuation_policy
 
     @property
     def maximum_book_depth_limit(self) -> int:
-        """Maximum number of displayed levels considered by liquidity-aware fills."""
+        """Maximum number of effective levels considered by liquidity-aware fills."""
 
         return self.maximum_book_depth
+
+    @property
+    def maximum_raw_book_depth_limit(self) -> int:
+        """Raw levels required to produce the configured effective execution depth."""
+
+        return self.maximum_book_depth + self.ignored_best_levels
 
     def place(
         self,
@@ -411,10 +452,18 @@ class PredictionArenaPaperBroker:
         now: datetime,
         live_context: bool = False,
         valuation_as_of: datetime | None = None,
+        effective_levels: Sequence[PriceLevel] | None = None,
     ) -> ExecutionResult:
         _require_aware(now, "now")
         rejection = self._validate_context(
-            order, market, outcome, snapshot, portfolio, now, live_context=live_context
+            order,
+            market,
+            outcome,
+            snapshot,
+            portfolio,
+            now,
+            live_context=live_context,
+            effective_levels=effective_levels,
         )
         if rejection is not None:
             return self._rejected(
@@ -429,7 +478,9 @@ class PredictionArenaPaperBroker:
                 RejectionCode.BELOW_MINIMUM_SIZE,
                 executed_at=now,
             )
-        if order.limit_price is not None and not self._has_eligible_level(order, snapshot):
+        if order.limit_price is not None and not self._has_eligible_level(
+            order, snapshot, effective_levels=effective_levels
+        ):
             return self._rejected(
                 order,
                 snapshot,
@@ -438,7 +489,13 @@ class PredictionArenaPaperBroker:
                 RejectionCode.PRICE_LIMIT_NOT_MARKET,
                 executed_at=now,
             )
-        planned = self._plan_fills(order, snapshot, fee_policy, now)
+        planned = self._plan_fills(
+            order,
+            snapshot,
+            fee_policy,
+            now,
+            effective_levels=effective_levels,
+        )
         if not planned:
             code = (
                 RejectionCode.REQUIRED_QUOTE_ABSENT
@@ -507,6 +564,7 @@ class PredictionArenaPaperBroker:
         now: datetime,
         *,
         live_context: bool,
+        effective_levels: Sequence[PriceLevel] | None,
     ) -> RejectionCode | None:
         _require_aware(snapshot.observed_at, "snapshot.observed_at")
         if snapshot.source_created_at is not None:
@@ -556,11 +614,25 @@ class PredictionArenaPaperBroker:
         ):
             return RejectionCode.CROSSED_BOOK
         required_levels = snapshot.asks if order.side is Side.BUY else snapshot.bids
-        levels = (
-            required_levels[:1]
-            if self.policy is PaperPolicy.PREDICTIONARENA_UNCONDITIONAL
-            else required_levels[: self.maximum_book_depth]
-        )
+        try:
+            if self.policy is PaperPolicy.PREDICTIONARENA_UNCONDITIONAL:
+                levels = required_levels[:1]
+            elif effective_levels is not None:
+                levels = tuple(effective_levels)
+            else:
+                book = effective_liquidity_book(
+                    snapshot,
+                    side=order.side,
+                    maximum_book_depth=self.maximum_book_depth,
+                    ignored_best_levels=self.ignored_best_levels,
+                    maximum_ignored_depth_fraction=self.maximum_ignored_depth_fraction,
+                )
+                levels = tuple(
+                    PriceLevel(level.price, level.displayed_shares)
+                    for level in book.raw_levels
+                )
+        except ValueError:
+            return RejectionCode.INVALID_PRICE
         if any(
             not level.price.is_finite()
             or not Decimal(0) <= level.price <= Decimal(1)
@@ -579,19 +651,36 @@ class PredictionArenaPaperBroker:
         snapshot: OrderBookSnapshot,
         fee_policy: FeePolicy,
         now: datetime,
+        *,
+        effective_levels: Sequence[PriceLevel] | None,
     ) -> tuple[PaperFill, ...]:
         levels = snapshot.asks if order.side is Side.BUY else snapshot.bids
-        ordered = sorted(
-            levels,
-            key=lambda level: level.price,
-            reverse=order.side is Side.SELL,
-        )
+        ordered: Sequence[PriceLevel]
+        if self.policy is PaperPolicy.PREDICTIONARENA_UNCONDITIONAL:
+            ordered = sorted(
+                levels,
+                key=lambda level: level.price,
+                reverse=order.side is Side.SELL,
+            )[:1]
+        elif effective_levels is not None:
+            ordered = sorted(
+                effective_levels,
+                key=lambda level: level.price,
+                reverse=order.side is Side.SELL,
+            )[: self.maximum_book_depth]
+        else:
+            ordered = tuple(
+                PriceLevel(level.price, level.effective_shares)
+                for level in effective_liquidity_book(
+                    snapshot,
+                    side=order.side,
+                    maximum_book_depth=self.maximum_book_depth,
+                    ignored_best_levels=self.ignored_best_levels,
+                    maximum_ignored_depth_fraction=self.maximum_ignored_depth_fraction,
+                ).executable_levels
+            )
         if not ordered:
             return ()
-        if self.policy is PaperPolicy.PREDICTIONARENA_UNCONDITIONAL:
-            ordered = ordered[:1]
-        else:
-            ordered = ordered[: self.maximum_book_depth]
         remaining = order.shares
         remaining_cash = (
             int(order.cash_budget_micros) if order.cash_budget_micros is not None else None
@@ -638,11 +727,34 @@ class PredictionArenaPaperBroker:
                 break
         return tuple(fills)
 
-    @staticmethod
-    def _has_eligible_level(order: PaperOrder, snapshot: OrderBookSnapshot) -> bool:
+    def _has_eligible_level(
+        self,
+        order: PaperOrder,
+        snapshot: OrderBookSnapshot,
+        *,
+        effective_levels: Sequence[PriceLevel] | None,
+    ) -> bool:
         if order.limit_price is None:
             return True
-        levels = snapshot.asks if order.side is Side.BUY else snapshot.bids
+        levels: Sequence[PriceLevel]
+        if self.policy is PaperPolicy.PREDICTIONARENA_UNCONDITIONAL:
+            levels = snapshot.asks if order.side is Side.BUY else snapshot.bids
+        elif effective_levels is not None:
+            levels = effective_levels
+        else:
+            try:
+                levels = tuple(
+                    PriceLevel(level.price, level.effective_shares)
+                    for level in effective_liquidity_book(
+                        snapshot,
+                        side=order.side,
+                        maximum_book_depth=self.maximum_book_depth,
+                        ignored_best_levels=self.ignored_best_levels,
+                        maximum_ignored_depth_fraction=self.maximum_ignored_depth_fraction,
+                    ).executable_levels
+                )
+            except ValueError:
+                return False
         return any(
             level.price <= order.limit_price
             if order.side is Side.BUY

@@ -10,7 +10,7 @@ from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -59,11 +59,13 @@ from vtrade.harness import (
 )
 from vtrade.harness_repository import PostgresBudgetGuard, PostgresHarnessRepository
 from vtrade.liquidity import (
+    LIQUIDITY_HAIRCUT_RULE_VERSION,
     VirtualLiquidityLevel,
     VirtualLiquidityLevelMetrics,
     VirtualLiquidityMetrics,
     VirtualLiquidityReservation,
     consumed_by_level,
+    effective_liquidity_book,
     metrics_for_fills,
     private_snapshot,
 )
@@ -1001,23 +1003,37 @@ class _PostgresTradingState:
         snapshot_id: uuid.UUID,
         snapshot: OrderBookSnapshot,
         maximum_book_depth: int,
+        ignored_best_levels: int = 0,
+        maximum_ignored_depth_fraction: Decimal = Decimal(0),
+        liquidity_rule_version: str = LIQUIDITY_HAIRCUT_RULE_VERSION,
     ) -> VirtualLiquidityReservation:
         """Lock and materialize the agent-private view of one frozen book.
 
         The context is ``agent_cycle_id + order_book_snapshot_id``.  A new
         immutable book therefore starts a new private context; historical
         consumption remains available for audit and is never carried into the
-        new snapshot by changing the global book.
+        new snapshot by changing the global book.  The raw six-level observation
+        and the effective five-level execution view are both persisted.
         """
 
         order_id = uuid.uuid5(uuid.NAMESPACE_URL, f"vtrade:order:{order.id}")
         agent_id = uuid.UUID(str(claim.agent_id))
         cycle_id = uuid.UUID(str(claim.cycle_id))
-        context_version = f"agent-cycle-v1:{cycle_id}:book:{snapshot_id}"
+        context_version = _liquidity_context_version(
+            cycle_id,
+            snapshot_id,
+            rule_version=liquidity_rule_version,
+            maximum_book_depth=maximum_book_depth,
+            ignored_best_levels=ignored_best_levels,
+            maximum_ignored_depth_fraction=maximum_ignored_depth_fraction,
+        )
         cursor.execute(
             "SELECT id, agent_id, agent_cycle_id, snapshot_id, token_id, side, "
             "context_version, requested_shares, available_shares, consumed_shares, "
-            "cancelled_shares, remaining_shares, portfolio_before, execution_at "
+            "cancelled_shares, remaining_shares, portfolio_before, execution_at, "
+            "rule_version, ignored_best_levels, maximum_ignored_depth_fraction, "
+            "raw_depth_shares, best_level_fraction, ignored_depth_shares, "
+            "ignored_fraction, effective_depth_shares, best_level_price "
             "FROM virtual_liquidity_executions WHERE order_id = %s FOR UPDATE",
             (order_id,),
         )
@@ -1029,14 +1045,15 @@ class _PostgresTradingState:
                 or uuid.UUID(str(existing[3])) != snapshot_id
                 or str(existing[4]) != snapshot.token_id
                 or str(existing[5]) != order.side.value
-                or str(existing[6]) != context_version
+                or Decimal(str(existing[7])) != order.shares
             ):
                 raise ProductionCompositionUnavailable(
                     "virtual-liquidity execution context differs on retry"
                 )
             cursor.execute(
-                "SELECT level_index, price, displayed_shares, available_shares, "
-                "consumed_shares, cancelled_shares, remaining_shares "
+                "SELECT level_index, price, displayed_shares, ignored_shares, "
+                "effective_shares, available_shares, consumed_shares, cancelled_shares, "
+                "remaining_shares, executable "
                 "FROM virtual_liquidity_execution_levels WHERE execution_id = %s "
                 "ORDER BY level_index",
                 (uuid.UUID(str(existing[0])),),
@@ -1044,17 +1061,20 @@ class _PostgresTradingState:
             level_rows = cursor.fetchall()
             existing_levels = tuple(
                 VirtualLiquidityLevel(
-                    int(str(row[0])),
-                    Decimal(str(row[1])),
-                    Decimal(str(row[2])),
-                    Decimal(str(row[3])),
+                    level_index=int(str(row[0])),
+                    price=Decimal(str(row[1])),
+                    displayed_shares=Decimal(str(row[2])),
+                    available_shares=Decimal(str(row[5])),
+                    ignored_shares=Decimal(str(row[3])),
+                    effective_shares=Decimal(str(row[4])),
+                    executable=bool(row[9]),
                 )
                 for row in level_rows
             )
             metrics = _virtual_liquidity_metrics_from_rows(existing, level_rows)
             return VirtualLiquidityReservation(
                 order_id=str(order_id),
-                context_version=context_version,
+                context_version=str(existing[6]),
                 agent_id=str(agent_id),
                 agent_cycle_id=str(cycle_id),
                 snapshot_id=str(snapshot_id),
@@ -1065,20 +1085,25 @@ class _PostgresTradingState:
                 existing_metrics=metrics,
                 retry_portfolio=_portfolio_from_payload(existing[12]),
                 retry_now=_aware(cast(datetime, existing[13])),
+                rule_version=str(existing[14]),
+                ignored_best_levels=int(str(existing[15])),
+                maximum_ignored_depth_fraction=Decimal(str(existing[16])),
             )
 
-        source_levels = snapshot.asks if order.side is Side.BUY else snapshot.bids
-        ordered = sorted(
-            source_levels,
-            key=lambda level: level.price,
-            reverse=order.side is Side.SELL,
-        )[:maximum_book_depth]
-        for level_index, level in enumerate(ordered):
+        book = effective_liquidity_book(
+            snapshot,
+            side=order.side,
+            maximum_book_depth=maximum_book_depth,
+            ignored_best_levels=ignored_best_levels,
+            maximum_ignored_depth_fraction=maximum_ignored_depth_fraction,
+        )
+        for level in book.raw_levels:
             cursor.execute(
                 "INSERT INTO virtual_liquidity_levels "
                 "(agent_id, agent_cycle_id, snapshot_id, token_id, side, level_index, "
-                "price, displayed_shares, consumed_shares, cancelled_shares, created_at, "
-                "updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 0, 0, %s, %s) "
+                "price, displayed_shares, ignored_shares, effective_shares, executable, "
+                "consumed_shares, cancelled_shares, created_at, updated_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, 0, %s, %s) "
                 "ON CONFLICT (agent_id, agent_cycle_id, snapshot_id, token_id, side, "
                 "level_index, price) DO NOTHING",
                 (
@@ -1087,45 +1112,72 @@ class _PostgresTradingState:
                     snapshot_id,
                     snapshot.token_id,
                     order.side.value,
-                    level_index,
+                    level.level_index,
                     level.price,
-                    level.size,
+                    level.displayed_shares,
+                    level.ignored_shares,
+                    level.effective_shares,
+                    level.executable,
                     order.created_at,
                     order.created_at,
                 ),
             )
         cursor.execute(
-            "SELECT level_index, price, displayed_shares, consumed_shares "
+            "SELECT level_index, price, displayed_shares, ignored_shares, effective_shares, "
+            "consumed_shares, executable "
             "FROM virtual_liquidity_levels WHERE agent_id = %s AND agent_cycle_id = %s "
             "AND snapshot_id = %s AND token_id = %s AND side = %s "
             "ORDER BY level_index FOR UPDATE",
             (agent_id, cycle_id, snapshot_id, snapshot.token_id, order.side.value),
         )
         rows = cursor.fetchall()
-        if len(rows) != len(ordered):
+        if len(rows) != len(book.raw_levels):
             raise ProductionCompositionUnavailable("virtual-liquidity level state is incomplete")
         parsed_levels: list[VirtualLiquidityLevel] = []
-        for expected_index, row in enumerate(rows):
+        expected_by_index = {level.level_index: level for level in book.raw_levels}
+        for row in rows:
             level_index = int(str(row[0]))
             displayed = Decimal(str(row[2]))
-            consumed = Decimal(str(row[3]))
-            if level_index != expected_index:
+            ignored = Decimal(str(row[3]))
+            effective = Decimal(str(row[4]))
+            consumed = Decimal(str(row[5]))
+            executable = bool(row[6])
+            source = expected_by_index.get(level_index)
+            if source is None:
                 raise ProductionCompositionUnavailable(
-                    "virtual-liquidity level indexes are not contiguous"
+                    "virtual-liquidity level index is not present in the immutable book"
                 )
-            source = ordered[level_index]
-            if Decimal(str(row[1])) != source.price or displayed != source.size:
+            if (
+                Decimal(str(row[1])) != source.price
+                or displayed != source.displayed_shares
+                or ignored != source.ignored_shares
+                or effective != source.effective_shares
+                or executable != source.executable
+            ):
                 raise ProductionCompositionUnavailable(
-                    "virtual-liquidity level differs from its immutable snapshot"
+                    "virtual-liquidity level differs from its immutable haircut view"
                 )
-            available = displayed - consumed
+            if consumed < 0 or consumed > effective:
+                raise ProductionCompositionUnavailable(
+                    "virtual-liquidity consumption exceeds effective depth"
+                )
+            available = effective - consumed if executable else Decimal(0)
             if available < 0:
                 raise ProductionCompositionUnavailable(
-                    "virtual-liquidity consumption exceeds displayed depth"
+                    "virtual-liquidity consumption exceeds effective depth"
                 )
             parsed_levels.append(
-                VirtualLiquidityLevel(level_index, source.price, displayed, available)
+                VirtualLiquidityLevel(
+                    level_index=level_index,
+                    price=source.price,
+                    displayed_shares=displayed,
+                    available_shares=available,
+                    ignored_shares=ignored,
+                    effective_shares=effective,
+                    executable=executable,
+                )
             )
+        parsed_levels.sort(key=lambda level: level.level_index)
         return VirtualLiquidityReservation(
             order_id=str(order_id),
             context_version=context_version,
@@ -1136,6 +1188,9 @@ class _PostgresTradingState:
             side=order.side,
             snapshot=private_snapshot(snapshot, side=order.side, levels=tuple(parsed_levels)),
             levels=tuple(parsed_levels),
+            rule_version=liquidity_rule_version,
+            ignored_best_levels=ignored_best_levels,
+            maximum_ignored_depth_fraction=maximum_ignored_depth_fraction,
         )
 
     def finalize_virtual_liquidity(
@@ -1164,8 +1219,8 @@ class _PostgresTradingState:
                 "consumed_shares + %s, updated_at = %s WHERE agent_id = %s "
                 "AND agent_cycle_id = %s AND snapshot_id = %s AND token_id = %s "
                 "AND side = %s AND level_index = %s AND price = %s "
-                "AND displayed_shares - consumed_shares >= %s "
-                "RETURNING displayed_shares, consumed_shares",
+                "AND executable = true AND effective_shares - consumed_shares >= %s "
+                "RETURNING effective_shares, consumed_shares",
                 (
                     amount,
                     completed_at,
@@ -1199,9 +1254,11 @@ class _PostgresTradingState:
             "(id, order_id, agent_id, agent_cycle_id, snapshot_id, token_id, side, "
             "context_version, requested_shares, available_shares, consumed_shares, "
             "cancelled_shares, remaining_shares, portfolio_before, execution_at, "
-            "idempotency_key, "
-            "created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, "
-            "%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s) "
+            "idempotency_key, created_at, rule_version, ignored_best_levels, "
+            "maximum_ignored_depth_fraction, raw_depth_shares, best_level_fraction, "
+            "ignored_depth_shares, ignored_fraction, effective_depth_shares, "
+            "best_level_price) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, "
+            "%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
             "ON CONFLICT (order_id) DO NOTHING",
             (
                 execution_id,
@@ -1221,19 +1278,32 @@ class _PostgresTradingState:
                 completed_at,
                 f"virtual-liquidity:{reservation.order_id}",
                 completed_at,
+                metrics.rule_version,
+                metrics.ignored_best_levels,
+                metrics.maximum_ignored_depth_fraction,
+                metrics.raw_depth_shares,
+                metrics.best_level_fraction,
+                metrics.ignored_depth_shares,
+                metrics.ignored_fraction,
+                metrics.effective_depth_shares,
+                metrics.best_level_price,
             ),
         )
         for metric_level in metrics.levels:
             cursor.execute(
                 "INSERT INTO virtual_liquidity_execution_levels "
-                "(execution_id, level_index, price, displayed_shares, available_shares, "
-                "consumed_shares, cancelled_shares, remaining_shares) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                "(execution_id, level_index, price, displayed_shares, ignored_shares, "
+                "effective_shares, executable, available_shares, consumed_shares, "
+                "cancelled_shares, remaining_shares) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     execution_id,
                     metric_level.level_index,
                     metric_level.price,
                     metric_level.displayed_shares,
+                    metric_level.ignored_shares,
+                    metric_level.effective_shares,
+                    metric_level.executable,
                     metric_level.available_shares,
                     metric_level.consumed_shares,
                     metric_level.cancelled_shares,
@@ -1259,8 +1329,12 @@ class _PostgresTradingState:
         cursor.execute(
             "SELECT agent_id, agent_cycle_id, snapshot_id, token_id, side, "
             "sum(displayed_shares) AS displayed_shares, "
+            "sum(ignored_shares) AS ignored_shares, "
+            "sum(effective_shares) AS effective_shares, "
+            "sum(effective_shares) FILTER (WHERE executable) AS executable_shares, "
             "sum(consumed_shares) AS consumed_shares, "
-            "sum(displayed_shares - consumed_shares) AS remaining_shares, "
+            "sum(effective_shares - consumed_shares) FILTER (WHERE executable) "
+            "AS remaining_shares, "
             "COALESCE((SELECT sum(cancelled_shares) FROM virtual_liquidity_executions "
             "vle WHERE vle.agent_id = vll.agent_id "
             "AND vle.agent_cycle_id = vll.agent_cycle_id "
@@ -1452,6 +1526,9 @@ class ProductionBrokerPort:
         liquidity_time_in_force: LiquidityTimeInForce,
         maximum_valuation_bid_age: timedelta | None = None,
         maximum_book_depth: int = 5,
+        ignored_best_levels: int = 0,
+        maximum_ignored_depth_fraction: Decimal = Decimal(0),
+        liquidity_rule_version: str = LIQUIDITY_HAIRCUT_RULE_VERSION,
         live_context_provider: LiveOrderContextProvider | None = None,
         connect: _Connect | None = None,
     ) -> None:
@@ -1468,6 +1545,9 @@ class ProductionBrokerPort:
             maximum_market_cost_basis_fraction=maximum_market_fraction,
             maximum_book_age=maximum_bid_age,
             maximum_book_depth=maximum_book_depth,
+            ignored_best_levels=ignored_best_levels,
+            maximum_ignored_depth_fraction=maximum_ignored_depth_fraction,
+            liquidity_rule_version=liquidity_rule_version,
             maximum_valuation_bid_age=(
                 maximum_bid_age if maximum_valuation_bid_age is None else maximum_valuation_bid_age
             ),
@@ -1885,6 +1965,8 @@ def build_production_worker(
     )
     maximum_order_book_age = _maximum_order_book_age(config.raw)
     maximum_order_book_depth = _order_book_depth(config.raw)
+    ignored_best_levels = _ignored_best_levels(config.raw)
+    maximum_ignored_depth_fraction = _maximum_ignored_depth_fraction(config.raw)
     paper_policy = _paper_policy(config.raw)
     live_context_provider: LiveOrderContextProvider | None = None
     if paper_policy is PaperPolicy.LIQUIDITY_AWARE:
@@ -1912,6 +1994,9 @@ def build_production_worker(
             ),
             maximum_book_age=maximum_order_book_age,
             maximum_book_depth=maximum_order_book_depth,
+            ignored_best_levels=ignored_best_levels,
+            maximum_ignored_depth_fraction=maximum_ignored_depth_fraction,
+            liquidity_rule_version=LIQUIDITY_HAIRCUT_RULE_VERSION,
             maximum_valuation_bid_age=maximum_valuation_bid_age,
         ),
         clock=clock,
@@ -1952,6 +2037,9 @@ def build_production_worker(
             maximum_bid_age=maximum_order_book_age,
             maximum_valuation_bid_age=maximum_valuation_bid_age,
             maximum_book_depth=maximum_order_book_depth,
+            ignored_best_levels=ignored_best_levels,
+            maximum_ignored_depth_fraction=maximum_ignored_depth_fraction,
+            liquidity_rule_version=LIQUIDITY_HAIRCUT_RULE_VERSION,
             paper_policy=paper_policy,
             liquidity_time_in_force=_liquidity_time_in_force(config.raw),
             live_context_provider=live_context_provider,
@@ -2087,6 +2175,55 @@ def _order_book_depth(raw: Mapping[str, Any]) -> int:
         {"order_book_depth": execution.get("order_book_depth", 5)},
         "order_book_depth",
     )
+
+
+def _liquidity_context_version(
+    cycle_id: uuid.UUID,
+    snapshot_id: uuid.UUID,
+    *,
+    rule_version: str,
+    maximum_book_depth: int,
+    ignored_best_levels: int,
+    maximum_ignored_depth_fraction: Decimal,
+) -> str:
+    """Make the simulator rule part of the persisted private context identity."""
+
+    return (
+        f"{rule_version}:cycle:{cycle_id}:snapshot:{snapshot_id}:"
+        f"raw-depth:{maximum_book_depth + ignored_best_levels}:"
+        f"effective-depth:{maximum_book_depth}:ignored-levels:{ignored_best_levels}:"
+        f"ignored-fraction:{maximum_ignored_depth_fraction}"
+    )
+
+
+def _ignored_best_levels(raw: Mapping[str, Any]) -> int:
+    execution = raw.get("execution")
+    if not isinstance(execution, Mapping):
+        raise ProductionCompositionUnavailable("experiment execution configuration is missing")
+    value = execution.get("ignored_best_levels", 0)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ProductionCompositionUnavailable(
+            "configuration field ignored_best_levels must be a non-negative integer"
+        )
+    return value
+
+
+def _maximum_ignored_depth_fraction(raw: Mapping[str, Any]) -> Decimal:
+    execution = raw.get("execution")
+    if not isinstance(execution, Mapping):
+        raise ProductionCompositionUnavailable("experiment execution configuration is missing")
+    value = execution.get("maximum_ignored_depth_fraction", 0)
+    try:
+        result = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise ProductionCompositionUnavailable(
+            "configuration field maximum_ignored_depth_fraction must be numeric"
+        ) from exc
+    if not result.is_finite() or not Decimal(0) <= result <= Decimal(1):
+        raise ProductionCompositionUnavailable(
+            "configuration field maximum_ignored_depth_fraction must be between zero and one"
+        )
+    return result
 
 
 def _verify_frozen_artifact(raw: Mapping[str, object], name: str) -> None:
@@ -2246,15 +2383,29 @@ def _virtual_liquidity_metrics_from_rows(
         consumed_shares=Decimal(str(execution_row[9])),
         cancelled_shares=Decimal(str(execution_row[10])),
         remaining_shares=Decimal(str(execution_row[11])),
+        rule_version=str(execution_row[14]),
+        ignored_best_levels=int(str(execution_row[15])),
+        maximum_ignored_depth_fraction=Decimal(str(execution_row[16])),
+        raw_depth_shares=Decimal(str(execution_row[17])),
+        best_level_fraction=Decimal(str(execution_row[18])),
+        ignored_depth_shares=Decimal(str(execution_row[19])),
+        ignored_fraction=Decimal(str(execution_row[20])),
+        effective_depth_shares=Decimal(str(execution_row[21])),
+        best_level_price=(
+            None if execution_row[22] is None else Decimal(str(execution_row[22]))
+        ),
         levels=tuple(
             VirtualLiquidityLevelMetrics(
                 level_index=int(str(row[0])),
                 price=Decimal(str(row[1])),
                 displayed_shares=Decimal(str(row[2])),
-                available_shares=Decimal(str(row[3])),
-                consumed_shares=Decimal(str(row[4])),
-                cancelled_shares=Decimal(str(row[5])),
-                remaining_shares=Decimal(str(row[6])),
+                ignored_shares=Decimal(str(row[3])),
+                effective_shares=Decimal(str(row[4])),
+                available_shares=Decimal(str(row[5])),
+                consumed_shares=Decimal(str(row[6])),
+                cancelled_shares=Decimal(str(row[7])),
+                remaining_shares=Decimal(str(row[8])),
+                executable=bool(row[9]),
             )
             for row in level_rows
         ),

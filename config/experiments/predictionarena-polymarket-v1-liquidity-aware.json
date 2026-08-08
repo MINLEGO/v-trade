@@ -19,7 +19,7 @@
     },
     "tool_schemas": {
       "path": "spec/tool-schemas-v1.json",
-      "sha256": "9b1d40290ed0b6b8a6b87099ab23974d7cd8f4c61c2db0eda409b265e1b234a9",
+      "sha256": "f6b5b39c83703f19a82d48a33cc6468b7727d1df6e16b1f8097071b05f0c5551",
       "classification": "inferred"
     }
   },
@@ -32,6 +32,8 @@
     "risk.max_market_cost_basis_fraction": "documented",
     "execution.paper_fill_rule": "vtrade_deviation",
     "execution.order_book_depth": "vtrade_deviation",
+    "execution.ignored_best_levels": "vtrade_deviation",
+    "execution.maximum_ignored_depth_fraction": "vtrade_deviation",
     "execution.maximum_order_book_age_seconds": "vtrade_deviation",
     "prompt.role_separation": "inferred",
     "discovery.policy": "inferred"
@@ -63,6 +65,8 @@
     "buy_fill_price": "walk_asks",
     "sell_fill_price": "walk_bids",
     "order_book_depth": 5,
+    "ignored_best_levels": 1,
+    "maximum_ignored_depth_fraction": 0.5,
     "maximum_order_book_age_seconds": 300,
     "counterparty_required": true,
     "absent_required_quote": "reject",
@@ -167,6 +171,17 @@
       "status": "resolved",
       "required": true,
       "policy": "walk_displayed_book_ioc_partial_fill"
+    },
+    "liquidity_haircut": {
+      "status": "resolved",
+      "required": true,
+      "rule_version": "best-level-haircut-v1",
+      "raw_observed_levels": 6,
+      "effective_executable_levels": 5,
+      "ignored_best_levels": 1,
+      "maximum_ignored_depth_fraction": 0.5,
+      "scope": "simulator_only_internal_audit",
+      "adaptation": "manual_versioned_change_only"
     },
     "model_routing": {
       "status": "resolved",

@@ -1438,44 +1438,6 @@
               "error": {"type": "string"}
             },
             "required": ["attempt", "error"]
-          },
-          "virtual_liquidity_level": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "level_index": {"type": "integer", "minimum": 0},
-              "price": {"type": "string"},
-              "displayed_shares": {"type": "string"},
-              "available_shares": {"type": "string"},
-              "consumed_shares": {"type": "string"},
-              "cancelled_shares": {"type": "string"},
-              "remaining_shares": {"type": "string"}
-            },
-            "required": [
-              "level_index", "price", "displayed_shares", "available_shares",
-              "consumed_shares", "cancelled_shares", "remaining_shares"
-            ]
-          },
-          "virtual_liquidity": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "token_id": {"type": "string"},
-              "side": {"type": "string", "enum": ["BUY", "SELL"]},
-              "requested_shares": {"type": "string"},
-              "available_shares": {"type": "string"},
-              "consumed_shares": {"type": "string"},
-              "cancelled_shares": {"type": "string"},
-              "remaining_shares": {"type": "string"},
-              "levels": {
-                "type": "array",
-                "items": {"$ref": "#/$defs/virtual_liquidity_level"}
-              }
-            },
-            "required": [
-              "token_id", "side", "requested_shares", "available_shares", "consumed_shares",
-              "cancelled_shares", "remaining_shares", "levels"
-            ]
           }
         },
         "oneOf": [
@@ -1494,7 +1456,6 @@
                 "type": "array",
                 "items": {"$ref": "#/$defs/live_attempt"}
               },
-              "virtual_liquidity": {"$ref": "#/$defs/virtual_liquidity"},
               "rejection_code": {
                 "type": "string",
                 "enum": [
@@ -1530,7 +1491,6 @@
                 "type": "array",
                 "items": {"$ref": "#/$defs/live_attempt"}
               },
-              "virtual_liquidity": {"$ref": "#/$defs/virtual_liquidity"},
               "execution": {"$ref": "#/$defs/execution"}
             },
             "required": [
@@ -1553,7 +1513,6 @@
                 "type": "array",
                 "items": {"$ref": "#/$defs/live_attempt"}
               },
-              "virtual_liquidity": {"$ref": "#/$defs/virtual_liquidity"},
               "execution": {"$ref": "#/$defs/execution"}
             },
             "required": [
