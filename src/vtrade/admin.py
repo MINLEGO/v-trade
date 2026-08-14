@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol, cast
 
+from vtrade.dashboard.policy import POSITION_VALUATION_MAX_AGE_SQL
+
 
 class AdminRepositoryError(RuntimeError):
     pass
@@ -77,18 +79,30 @@ _VIEWS: dict[str, str] = {
          ORDER BY latest.account_value_micros DESC NULLS LAST, a.id
          LIMIT %s OFFSET %s
     """,
-    "positions": """
+    "positions": f"""
         SELECT p.id, p.agent_id, a.name AS agent_name, m.id AS market_id,
                m.question, o.id AS outcome_id, o.name AS outcome, p.shares,
                p.average_cost, p.cost_basis_micros, p.entry_fees_micros,
                p.realized_pnl_micros,
                quote.best_bid, quote.cutoff AS quote_cutoff,
+               valuation_policy.max_age_seconds AS valuation_max_age_seconds,
                CASE WHEN quote.best_bid IS NULL THEN NULL
-                    WHEN quote.cutoff < now() - interval '300 seconds' THEN NULL
+                    WHEN quote.cutoff < now()
+                         - make_interval(secs => valuation_policy.max_age_seconds)
+                        THEN NULL
                     ELSE round(p.shares * quote.best_bid * 1000000)::bigint END
                     AS liquidation_value_micros,
+               CASE WHEN quote.best_bid IS NULL
+                          OR quote.cutoff < now()
+                             - make_interval(secs => valuation_policy.max_age_seconds)
+                    THEN NULL
+                    ELSE round(p.shares * quote.best_bid * 1000000)::bigint
+                         - p.cost_basis_micros - p.entry_fees_micros END
+                    AS unrealized_pnl_micros,
                CASE WHEN quote.best_bid IS NULL THEN 'missing'
-                    WHEN quote.cutoff < now() - interval '300 seconds' THEN 'stale'
+                    WHEN quote.cutoff < now()
+                         - make_interval(secs => valuation_policy.max_age_seconds)
+                        THEN 'stale'
                     ELSE 'fresh' END AS valuation_status,
                CASE WHEN quote.cutoff IS NULL THEN NULL
                     ELSE extract(epoch FROM (now() - quote.cutoff))::bigint END
@@ -96,8 +110,13 @@ _VIEWS: dict[str, str] = {
                p.updated_at
           FROM positions p
           JOIN agents a ON a.id = p.agent_id
+          JOIN experiment_runs er ON er.id = a.run_id
+          JOIN experiment_definitions ed ON ed.id = er.definition_id
           JOIN outcomes o ON o.id = p.outcome_id
           JOIN markets m ON m.id = o.market_id
+          CROSS JOIN LATERAL (
+              SELECT {POSITION_VALUATION_MAX_AGE_SQL} AS max_age_seconds
+          ) valuation_policy
           LEFT JOIN LATERAL (
               SELECT obs.best_bid, obs.cutoff
                 FROM order_book_snapshots obs

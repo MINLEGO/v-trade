@@ -5,7 +5,7 @@
 - Python source is under `src/vtrade/`; domain types and ports are in `src/vtrade/domain/`. Runtime, broker, portfolio, provider, API, and admin modules live beside them.
 - `tests/` contains the unit and contract suite. `tests/test_postgres_*.py` are opt-in, rollback-only integration tests.
 - `migrations/` holds versioned PostgreSQL SQL. Experiment definitions are in `config/experiments/`; agent prompts, tool schemas, compatibility matrices, and fixtures are in `spec/`.
-- `docs/` contains operations and research evidence, `scripts/` contains probes and analysis utilities, and `admin-dashboard/` is the separate React/TypeScript/Vite frontend. Dashboard static assets are in `admin-dashboard/public/`.
+- `docs/` contains operations and research evidence, `scripts/` contains probes and analysis utilities, and the canonical read-only admin dashboard is packaged under `src/vtrade/dashboard/`.
 
 ## Build, Test, and Development Commands
 
@@ -18,11 +18,11 @@ uv run --extra dev python -m ruff check src tests
 uv run --extra dev python -m mypy src/vtrade
 ```
 
-For the dashboard, run `npm ci`, then `npm run dev`, `npm run lint`, or `npm run build` from `admin-dashboard/`. PostgreSQL integration tests require a real configured database and `VTRADE_RUN_POSTGRES_INTEGRATION=1`; keep them separate from offline validation.
+The Python dashboard is served by the FastAPI application and is covered by the Python test suite and wheel build. PostgreSQL integration tests require a real configured database and `VTRADE_RUN_POSTGRES_INTEGRATION=1`; keep them separate from offline validation.
 
 ## Coding Style & Naming Conventions
 
-Python uses four-space indentation, a 100-character Ruff line limit, strict mypy, and Ruff rules `E`, `F`, `I`, `UP`, `B`, `SIM`, and `RUF`. Use `snake_case` for modules/functions, `PascalCase` for classes and React components, `useX` for React hooks, and `UPPER_SNAKE_CASE` for constants. Keep financial values, audit records, idempotency, and fail-closed behavior intact. Avoid files longer than 1000 lines ; 300-500 lines is ideal. 
+Python uses four-space indentation, a 100-character Ruff line limit, strict mypy, and Ruff rules `E`, `F`, `I`, `UP`, `B`, `SIM`, and `RUF`. Use `snake_case` for modules/functions, `PascalCase` for classes, and `UPPER_SNAKE_CASE` for constants. Keep financial values, audit records, idempotency, and fail-closed behavior intact. Avoid files longer than 1000 lines ; 300-500 lines is ideal.
 
 Tool schemas, experiment definitions, migrations, tests, and documentation are coupled contracts. When changing `spec/tool-schemas-v1.json`, refresh the `tool_schemas.sha256` values in both experiment JSON files and update the corresponding tests and compatibility documentation.
 
