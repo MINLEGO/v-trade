@@ -94,6 +94,23 @@
       },
       "required": ["price", "size"]
     },
+    "fee_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "condition_id": {"type": "string", "minLength": 1},
+        "rate": {"type": "string"},
+        "exponent": {"type": ["string", "null"]},
+        "taker_only": {"type": "boolean"},
+        "formula_version": {"const": "polymarket-v2-p-one-minus-p"},
+        "observed_at": {"type": "string", "format": "date-time"},
+        "source_created_at": {"type": ["string", "null"], "format": "date-time"}
+      },
+      "required": [
+        "condition_id", "rate", "exponent", "taker_only", "formula_version",
+        "observed_at", "source_created_at"
+      ]
+    },
     "position": {
       "type": "object",
       "additionalProperties": false,
@@ -565,7 +582,7 @@
     },
     {
       "name": "get_orderbook",
-      "description": "Retrieve the latest valid frozen order-book snapshot for one outcome as of the current cycle cutoff. Supply exactly one of `venue_token_id`, `token_id`, or `outcome_id`.\n\nThe result contains up to five bid and ask levels, the best bid, the best ask, observation timestamps and the snapshot identifier. Use asks to evaluate a BUY and bids to evaluate a SELL. Inspect the displayed depth rather than assuming the full requested size can execute at the best price.\n\nThe tool rejects missing, causally invalid or stale books. A missing or rejected result means that executable liquidity cannot currently be verified and the outcome should not be traded unless a later valid book is obtained.",
+      "description": "Retrieve the latest valid frozen order-book snapshot for one outcome as of the current cycle cutoff. Supply exactly one of `venue_token_id`, `token_id`, or `outcome_id`.\n\nThe result contains up to five bid and ask levels, the best bid, the best ask, observation timestamps, the snapshot identifier, and `fee_policy`. Use asks to evaluate a BUY and bids to evaluate a SELL. Inspect the displayed depth rather than assuming the full requested size can execute at the best price. Only the displayed levels are available for analysis; do not assume additional executable depth.\n\n`fee_policy` is either `null` or an object containing the applicable condition, rate, raw exponent, taker-only flag, formula version and timestamps. A null policy means fees cannot be estimated reliably; do not place an order for that outcome until a usable policy is available.\n\nThe tool rejects missing, causally invalid or stale books. A missing or rejected result means that executable liquidity cannot currently be verified and the outcome should not be traded unless a later valid book is obtained.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -619,11 +636,12 @@
           "best_bid": {"type": ["string", "null"]},
           "best_ask": {"type": ["string", "null"]},
           "raw_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-          "depth": {"const": 5}
+          "depth": {"const": 5},
+          "fee_policy": {"anyOf": [{"$ref": "#/$defs/fee_policy"}, {"type": "null"}]}
         },
         "required": [
           "as_of", "snapshot_id", "observed_at", "source_created_at", "lookup",
-          "bids", "asks", "best_bid", "best_ask", "raw_sha256", "depth"
+          "bids", "asks", "best_bid", "best_ask", "raw_sha256", "depth", "fee_policy"
         ]
       }
     },
@@ -1283,7 +1301,7 @@
     },
     {
       "name": "create_long_term_plan",
-      "description": "Replace the calling agent’s active long-term trading plan. Use the plan to store durable portfolio objectives, research priorities, strategic constraints, risk-management intentions and the most important lessons that should guide multiple future cycles.\n\nCreating a new long-term plan supersedes the previous active long-term plan. Write a coherent replacement rather than an incremental fragment, because only the latest active plan should be treated as current.\n\nDo not include current balances, prices or position quantities unless they are clearly timestamped and necessary for context. Current account and tool results remain authoritative over plan text.",
+      "description": "Replace the calling agent’s active long-term trading plan. Use the plan to store durable portfolio objectives, research priorities, strategic constraints, risk-management intentions and the most important lessons that should guide multiple future cycles.\n\nCreating a new long-term plan supersedes the previous active long-term plan. Write a coherent replacement rather than an incremental fragment, because only the latest active plan should be treated as current.\n\nDo not include current balances, prices or position quantities unless they are clearly timestamped and necessary for context. Current account and tool results remain authoritative over plan text. Call this tool only when a replacement is intended; repeated identical content is not a meaningful update.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -1311,7 +1329,7 @@
     },
     {
       "name": "create_next_cycle_plan",
-      "description": "Replace the plan that will be supplied to the agent at the beginning of its next cycle.\n\nUse this tool near the end of the current cycle to preserve concrete follow-up actions, catalysts to monitor, positions to reassess, unresolved research, deadlines and explicit invalidation conditions. If the next cycle plan is not replaced, the agent will receive the same plan as this cycle.\n\nOnly one next-cycle plan exists. Calling this tool again during the same cycle replaces the previously created next-cycle plan; it does not append another plan.\n\nWrite the complete replacement plan rather than an incremental update. Do not repeat information already stored as durable general beliefs or long-term strategy unless it is directly relevant to the next cycle.\n\nThe optional cycle_date is descriptive scheduling metadata. It does not schedule the agent or guarantee execution on that date.Except for maintenance or other exceptional circumstances, the period between each cycle is 1 hour.",
+      "description": "Replace the plan that will be supplied to the agent at the beginning of its next cycle.\n\nUse this tool near the end of the current cycle to preserve concrete follow-up actions, catalysts to monitor, positions to reassess, unresolved research, deadlines and explicit invalidation conditions. If the next cycle plan is not replaced, the agent will receive the same plan as this cycle.\n\nOnly one next-cycle plan exists. Calling this tool again during the same cycle replaces the previously created next-cycle plan; it does not append another plan.\n\nWrite the complete replacement plan rather than an incremental update. Do not repeat information already stored as durable general beliefs or long-term strategy unless it is directly relevant to the next cycle.\n\nThe optional cycle_date is descriptive scheduling metadata. It does not schedule the agent or guarantee execution on that date. Except for maintenance or other exceptional circumstances, the period between each cycle is 1 hour.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {
@@ -1343,7 +1361,7 @@
     },
     {
       "name": "place_market_order",
-      "description": "Submit and immediately evaluate a paper-market order. The agent decision uses the current cycle's frozen market data, but the active liquidity-aware path refreshes the target market metadata, order book and fee policy immediately before execution. `token_id` must be the venue token identifier for the exact outcome being bought or sold.\n\nFor BUY orders, `amount_type` defaults to `CASH`, meaning `amount` is a dollar budget. BUY orders may instead use `SHARES`. For SELL orders, `amount_type` defaults to `SHARES`; SELL with `CASH` is not supported.\n\n`time_in_force` defaults to `IOC`:\n\n* `IOC` executes available eligible liquidity immediately and cancels any unfilled remainder.\n* `FOK` executes only if the complete requested quantity can be filled under the order constraints; otherwise it is rejected.\n\nThe optional `limit_price` restricts execution to acceptable displayed prices between 0 and 1. The optional `conviction` value is a 0-to-1 audit value; it does not replace an explicit probability, expected-value or risk analysis.\n\nBefore calling this tool:\n\n1. retrieve the complete market details and resolution rules;\n2. verify the exact YES/NO outcome and token;\n3. retrieve the current frozen order book;\n4. calculate edge and expected P&L using executable depth;\n5. confirm available cash or shares;\n6. check existing exposure and risk limits.\n\nThe active live refresh is bounded by a 10-second construction window, a five-second source skew, and the configured book-age limit. A network failure is retried once with the same intent; stale, expired or inconsistent context is rejected without a frozen fallback or financial mutation. The result status is `rejected`, `filled`, `partial`, or `pending_broker_validation`. A pending result records the order intent but does not establish that any execution occurred; do not treat it as filled. For `rejected`, inspect `rejection_code`, `message`, `portfolio_after`, and `attempts` when present. A pre-context rejection omits `snapshot`. For `filled` or `partial`, inspect `execution.filled_shares`, `execution.cancelled_shares`, `execution.average_price`, `execution.gross_micros`, `execution.fee_micros`, `execution.cash_delta_micros`, `execution.remainder_status`, and `portfolio_after.affected_position`.\n\nNever assume that submitting an order means it executed. After a rejection or partial fill, recalculate cash, exposure, remaining edge and liquidity before deciding whether to submit another order. Do not retry unchanged orders repeatedly.",
+      "description": "Submit and immediately evaluate a market order using execution context refreshed at order time. The current cycle's frozen order book is for decision-making and is not a fill guarantee. `token_id` must be the venue token identifier for the exact outcome being bought or sold.\n\nFor BUY orders, `amount_type` defaults to `CASH`, meaning `amount` is a dollar budget. BUY orders may instead use `SHARES`. For SELL orders, `amount_type` defaults to `SHARES`; SELL with `CASH` is not supported.\n\n`time_in_force` defaults to `IOC`:\n\n* `IOC` executes available eligible liquidity immediately and cancels any unfilled remainder.\n* `FOK` executes only if the complete requested quantity can be filled under the order constraints; otherwise it is rejected.\n\nThe optional `limit_price` restricts live execution prices between 0 and 1. For a BUY it is the maximum acceptable per-share price; for a SELL it is the minimum acceptable per-share price. It does not guarantee a fill. The optional `conviction` value is a 0-to-1 audit value; it does not replace explicit probability, expected-value or risk analysis.\n\nBefore calling this tool:\n\n1. retrieve the complete market details and resolution rules;\n2. verify the exact YES/NO outcome and token;\n3. retrieve the current frozen order book;\n4. verify a non-null fee policy and calculate net edge and expected P&L using executable depth and the fee estimate;\n5. confirm available cash or shares;\n6. check existing exposure and risk limits.\n\nThe execution context is refreshed immediately before the order. Stale, expired or inconsistent context is rejected without falling back to the frozen book. The result status is `rejected`, `filled`, `partial`, or `pending_broker_validation`. A pending result records the order intent but does not establish that any execution occurred; do not treat it as filled. For `rejected`, inspect `rejection_code`, `message`, `portfolio_after`, and `attempts` when present. For `filled` or `partial`, inspect `execution.filled_shares`, `execution.cancelled_shares`, `execution.average_price`, `execution.gross_micros`, `execution.fee_micros`, `execution.cash_delta_micros`, `execution.remainder_status`, and `portfolio_after.affected_position`. `execution.fee_micros` is authoritative after execution and replaces the pre-order estimate.\n\nNever assume that submitting an order means it executed. After a rejection or partial fill, recalculate cash, exposure, remaining edge and liquidity before deciding whether to submit another order. Do not retry unchanged orders repeatedly.",
       "classification": "inferred",
       "observed_name": true,
       "input_schema": {

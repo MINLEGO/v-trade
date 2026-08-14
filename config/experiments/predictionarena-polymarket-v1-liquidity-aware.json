@@ -14,12 +14,12 @@
   "artifacts": {
     "prompt": {
       "path": "spec/prompt/predictionarena-polymarket-v1.md",
-      "sha256": "6ac731802e160d02ade16e7076ebfdf28629e086d010c7cf0b3abd979efdae0a",
+      "sha256": "16799e0956c2b90cb716f27a798b7c41c5d1eaa5cb770bc5d65f6ac786c4c057",
       "classification": "inferred"
     },
     "tool_schemas": {
       "path": "spec/tool-schemas-v1.json",
-      "sha256": "f6b5b39c83703f19a82d48a33cc6468b7727d1df6e16b1f8097071b05f0c5551",
+      "sha256": "c13ab6c11b8b7ff6d8e946ec7b92a78db8274bf1c5c431912f3da32fa4c63744",
       "classification": "inferred"
     }
   },

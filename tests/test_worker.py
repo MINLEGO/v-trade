@@ -40,6 +40,7 @@ from vtrade.worker import (
     ProductionBrokerPort,
     ProductionCompositionUnavailable,
     ProductionHarnessPort,
+    ProductionPromptPort,
     ProductionWorker,
     _harness_artifact_registrations,
     _ignored_best_levels,
@@ -52,6 +53,8 @@ from vtrade.worker import (
     _PostgresTradingState,
     run_worker,
 )
+
+NOW = datetime(2026, 7, 16, 15, 0, tzinfo=UTC)
 
 
 def _write_config(directory: str, *, pending: bool) -> Path:
@@ -80,6 +83,162 @@ def _write_config(directory: str, *, pending: bool) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+class _PromptCursor:
+    def __init__(
+        self,
+        *,
+        account_row: tuple[object, ...],
+        position_rows: list[tuple[object, ...]],
+        settlement_rows: list[tuple[object, ...]] | None = None,
+        rejection_rows: list[tuple[object, ...]] | None = None,
+    ) -> None:
+        self.account_row = account_row
+        self.position_rows = position_rows
+        self.settlement_rows = settlement_rows or []
+        self.rejection_rows = rejection_rows or []
+        self.rows: list[tuple[object, ...]] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+    def execute(self, query, _params=()):
+        if query.startswith("SELECT COALESCE(sum(lp.amount_micros)"):
+            self.rows = [self.account_row]
+        elif query.startswith("SELECT m.id::text"):
+            self.rows = self.position_rows
+        elif query.startswith("SELECT 'settlement'"):
+            self.rows = self.settlement_rows
+        elif query.startswith("SELECT 'rejection'"):
+            self.rows = self.rejection_rows
+        else:
+            raise AssertionError(query)
+
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+
+    def fetchall(self):
+        rows, self.rows = self.rows, []
+        return rows
+
+
+class _PromptConnection:
+    def __init__(self, cursor: _PromptCursor) -> None:
+        self._cursor = cursor
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+    def cursor(self):
+        return self._cursor
+
+
+class PromptContextTests(unittest.TestCase):
+    def _port(self, cursor: _PromptCursor) -> Any:
+        port = cast(Any, ProductionPromptPort.__new__(ProductionPromptPort))
+        port._database_url = "test"
+        port._connect = lambda _url: _PromptConnection(cursor)
+        port._maximum_market_cost_basis_fraction = Decimal("0.15")
+        port._maximum_valuation_bid_age = timedelta(minutes=5)
+        return port
+
+    def _position_row(self, *, bid: str | None) -> tuple[object, ...]:
+        return (
+            "market-1",
+            "outcome-1",
+            "token-1",
+            "Question",
+            "YES",
+            NOW + timedelta(days=2),
+            "10",
+            "0.5",
+            5_000_000,
+            10_000,
+            100_000,
+            NOW,
+            Decimal(bid) if bid is not None else None,
+            NOW,
+        )
+
+    def test_prompt_account_summary_contains_complete_valuation_and_capacity(self) -> None:
+        cursor = _PromptCursor(
+            account_row=(100_000_000, 3, 100_000_000, 100_000),
+            position_rows=[self._position_row(bid="0.60")],
+        )
+        summary = self._port(cursor)._account_context(
+            uuid.uuid4(),
+            cutoff=NOW,
+            frozen={"order_book_snapshot_ids": [str(uuid.uuid4())]},
+        )
+
+        self.assertTrue(summary["nav_complete"])
+        self.assertEqual(summary["valuation_status"], "complete")
+        self.assertEqual(summary["nav_micros"], 106_000_000)
+        self.assertEqual(summary["unrealized_pnl_micros"], 990_000)
+        position = summary["attention_positions"][0]
+        self.assertEqual(position["liquidation_value_micros"], 6_000_000)
+        self.assertEqual(position["remaining_capacity_micros"], 10_900_000)
+
+    def test_prompt_account_summary_nulls_derived_values_without_a_bid(self) -> None:
+        cursor = _PromptCursor(
+            account_row=(100_000_000, 3, 100_000_000, 100_000),
+            position_rows=[self._position_row(bid=None)],
+        )
+        summary = self._port(cursor)._account_context(
+            uuid.uuid4(),
+            cutoff=NOW,
+            frozen={"order_book_snapshot_ids": [str(uuid.uuid4())]},
+        )
+
+        self.assertFalse(summary["nav_complete"])
+        self.assertEqual(summary["valuation_status"], "incomplete")
+        self.assertIsNone(summary["nav_micros"])
+        self.assertIsNone(summary["unrealized_pnl_micros"])
+        self.assertIsNone(summary["attention_positions"][0]["position_weight"])
+
+    def test_recent_activity_is_merged_newest_first_and_capped(self) -> None:
+        settlements = [
+            (
+                "settlement",
+                f"market-{index}",
+                f"outcome-{index}",
+                index,
+                NOW - timedelta(minutes=index),
+                "",
+            )
+            for index in range(13)
+        ]
+        rejections = [
+            (
+                "rejection",
+                f"market-r{index}",
+                f"outcome-r{index}",
+                0,
+                NOW - timedelta(minutes=index + 1),
+                "stale_book",
+            )
+            for index in range(13)
+        ]
+        cursor = _PromptCursor(
+            account_row=(100_000_000, 3, 100_000_000, 0),
+            position_rows=[],
+            settlement_rows=settlements,
+            rejection_rows=rejections,
+        )
+
+        activity = self._port(cursor)._recent_activity(uuid.uuid4(), NOW)
+
+        self.assertEqual(len(activity["events"]), 25)
+        self.assertTrue(activity["truncated"])
+        self.assertEqual(activity["events"][0]["created_at"], NOW.isoformat())
+        self.assertEqual(activity["events"][0]["type"], "settlement")
 
 
 class WorkerFailClosedTests(unittest.TestCase):

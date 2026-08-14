@@ -78,6 +78,20 @@ class SpecificationTests(unittest.TestCase):
         affected = document["$defs"]["portfolio_after"]["properties"]["affected_position"]
         self.assertIn("entry_fees_micros", affected["required"])
 
+    def test_orderbook_exposes_nullable_fee_policy_contract(self) -> None:
+        document = json.loads(Path("spec/tool-schemas-v1.json").read_text(encoding="utf-8"))
+        orderbook = next(row for row in document["tools"] if row["name"] == "get_orderbook")
+        output = orderbook["output_schema"]
+        self.assertIn("fee_policy", output["properties"])
+        self.assertIn("fee_policy", output["required"])
+        self.assertEqual(
+            output["properties"]["fee_policy"]["anyOf"][1], {"type": "null"}
+        )
+        self.assertEqual(
+            document["$defs"]["fee_policy"]["properties"]["formula_version"]["const"],
+            "polymarket-v2-p-one-minus-p",
+        )
+
     def test_keyword_searches_accept_strings_or_keyword_arrays(self) -> None:
         document = json.loads(Path("spec/tool-schemas-v1.json").read_text(encoding="utf-8"))
         tools = {tool["name"]: tool for tool in document["tools"]}
@@ -139,7 +153,14 @@ class SpecificationTests(unittest.TestCase):
         body = Path("spec/prompt/predictionarena-polymarket-v1.md").read_text(encoding="utf-8")
         placeholders = re.findall(r"\{[A-Za-z_][A-Za-z0-9_]*\}", body)
         self.assertEqual(placeholders, [])
-        stages = ("fundamental outcome", "Research efficiently", "YES", "expected profit", "size")
+        stages = (
+            "data_cutoff",
+            "recent activity",
+            "YES/NO",
+            "expected value",
+            "IOC",
+            "unrelated theses",
+        )
         for stage in stages:
             self.assertIn(stage, body)
 

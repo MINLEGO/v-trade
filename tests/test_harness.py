@@ -14,16 +14,15 @@ from vtrade.harness import (
     BoundedToolHarness,
     HarnessLimitExceeded,
     HarnessLimits,
-    LearningEvent,
     PlanRecord,
     PlanType,
     PrivateAgentMemory,
     PromptBuilder,
+    RecentActivityEvent,
     ToolExecution,
     ToolHandlerError,
     ToolOutputContractError,
     ToolSpec,
-    deterministic_critical_learning,
 )
 from vtrade.providers import RecordedModelGateway
 
@@ -610,28 +609,52 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(memory.for_agent("bob").beliefs(), ())
 
     def test_prompt_builder_rejects_cross_agent_memory(self) -> None:
-        belief = BeliefRecord(
-            str(uuid.uuid4()), "bob", Decimal("0.5"), "x", "event_analysis", (), NOW
+        plan = PlanRecord(
+            str(uuid.uuid4()), "bob", PlanType.NEXT_CYCLE, "x", None, NOW
         )
         with self.assertRaises(PermissionError):
             PromptBuilder("system").build(
                 agent_id="alice",
                 cycle_context={},
-                beliefs=(belief,),
-                plans=(),
-                critical_learning="none",
+                plans=(plan,),
+                recent_activity={"events": [], "truncated": False},
             )
 
-    def test_critical_learning_is_deterministic_across_input_order(self) -> None:
-        events = (
-            LearningEvent("rejection", "m2"),
-            LearningEvent("settlement", "m1", 100),
-            LearningEvent("drawdown", "portfolio", -50),
+    def test_prompt_builder_uses_named_plans_and_excludes_beliefs_and_audit_ids(self) -> None:
+        plans = (
+            PlanRecord(str(uuid.uuid4()), "alice", PlanType.LONG_TERM, "durable", None, NOW),
+            PlanRecord(
+                str(uuid.uuid4()),
+                "alice",
+                PlanType.NEXT_CYCLE,
+                "follow up",
+                NOW,
+                NOW,
+            ),
         )
-        self.assertEqual(
-            deterministic_critical_learning(events),
-            deterministic_critical_learning(tuple(reversed(events))),
+        _system, user = PromptBuilder("system").build(
+            agent_id="alice",
+            cycle_context={
+                "scheduled_at": NOW.isoformat(),
+                "data_cutoff": NOW.isoformat(),
+                "account": {"cash_micros": 10},
+            },
+            plans=plans,
+            recent_activity={"events": [], "truncated": False},
         )
+        payload = json.loads(str(user["content"]))
+        self.assertEqual(payload["long_term_plan"]["content"], "durable")
+        self.assertEqual(payload["long_term_plan"]["created_at"], NOW.isoformat())
+        self.assertEqual(payload["next_cycle_plan"]["content"], "follow up")
+        self.assertNotIn("agent_id", payload)
+        self.assertNotIn("beliefs", payload)
+        self.assertNotIn("plans", payload)
+        self.assertNotIn("critical_learning", payload)
+
+    def test_recent_activity_event_keeps_created_at_and_optional_outcome(self) -> None:
+        event = RecentActivityEvent("rejection", "market", NOW, "outcome", None, "stale")
+        self.assertEqual(event.created_at, NOW)
+        self.assertEqual(event.outcome_id, "outcome")
 
     def test_plan_records_are_private_in_bound_view(self) -> None:
         memory = PrivateAgentMemory()

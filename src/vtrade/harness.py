@@ -469,35 +469,28 @@ class PromptBuilder:
         *,
         agent_id: str,
         cycle_context: JsonObject,
-        beliefs: Sequence[BeliefRecord],
         plans: Sequence[PlanRecord],
-        critical_learning: str,
+        recent_activity: JsonObject,
     ) -> tuple[JsonObject, JsonObject]:
-        if any(item.agent_id != agent_id for item in beliefs) or any(
-            item.agent_id != agent_id for item in plans
-        ):
+        if any(item.agent_id != agent_id for item in plans):
             raise PermissionError("prompt context cannot include another agent's memory")
+        plan_payload: dict[str, JsonObject | None] = {
+            PlanType.LONG_TERM.value: None,
+            PlanType.NEXT_CYCLE.value: None,
+        }
+        for item in plans:
+            if plan_payload[item.plan_type.value] is not None:
+                raise ValueError(f"prompt context contains duplicate {item.plan_type.value} plans")
+            plan_payload[item.plan_type.value] = {
+                "content": item.content,
+                "created_at": item.created_at.isoformat(),
+                "due_at": item.due_at.isoformat() if item.due_at else None,
+            }
         payload = {
-            "agent_id": agent_id,
             "cycle_context": cycle_context,
-            "beliefs": [
-                {
-                    "confidence": str(item.confidence),
-                    "content": item.content,
-                    "category": item.category,
-                    "evidence": list(item.evidence),
-                }
-                for item in beliefs
-            ],
-            "plans": [
-                {
-                    "type": item.plan_type.value,
-                    "content": item.content,
-                    "due_at": item.due_at.isoformat() if item.due_at else None,
-                }
-                for item in plans
-            ],
-            "critical_learning": critical_learning,
+            "long_term_plan": plan_payload[PlanType.LONG_TERM.value],
+            "next_cycle_plan": plan_payload[PlanType.NEXT_CYCLE.value],
+            "recent_activity": recent_activity,
         }
         return (
             {"role": "system", "content": self.system_prompt},
@@ -509,25 +502,13 @@ class PromptBuilder:
 
 
 @dataclass(frozen=True, slots=True)
-class LearningEvent:
+class RecentActivityEvent:
     kind: str
     market_id: str
-    pnl_micros: int = 0
+    created_at: datetime
+    outcome_id: str | None = None
+    pnl_micros: int | None = None
     detail: str = ""
-
-
-def deterministic_critical_learning(events: Sequence[LearningEvent]) -> str:
-    ordered = sorted(events, key=lambda item: (item.kind, item.market_id, item.detail))
-    wins = sum(1 for item in ordered if item.kind == "settlement" and item.pnl_micros > 0)
-    losses = sum(1 for item in ordered if item.kind == "settlement" and item.pnl_micros < 0)
-    rejected = sum(1 for item in ordered if item.kind == "rejection")
-    concentration = sum(1 for item in ordered if item.kind == "concentration")
-    drawdowns = [item.pnl_micros for item in ordered if item.kind == "drawdown"]
-    worst_drawdown = min(drawdowns, default=0)
-    return (
-        f"Settled wins/losses: {wins}/{losses}. Rejections: {rejected}. "
-        f"Concentration events: {concentration}. Worst drawdown: {worst_drawdown} micros."
-    )
 
 
 def _assistant_message(response: JsonObject) -> JsonObject:

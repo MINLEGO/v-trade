@@ -10,7 +10,7 @@ from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -47,15 +47,13 @@ from vtrade.domain.types import (
     Side,
 )
 from vtrade.harness import (
-    BeliefRecord,
     BoundedToolHarness,
     HarnessLimits,
     HarnessResult,
-    LearningEvent,
     PlanRecord,
     PlanType,
     PromptBuilder,
-    deterministic_critical_learning,
+    RecentActivityEvent,
 )
 from vtrade.harness_repository import PostgresBudgetGuard, PostgresHarnessRepository
 from vtrade.liquidity import (
@@ -141,6 +139,24 @@ class _PromptSource:
     model_config: JsonObject
 
 
+@dataclass(frozen=True, slots=True)
+class _PromptPosition:
+    market_id: str
+    outcome_id: str
+    venue_token_id: str
+    question: str
+    outcome: str
+    closes_at: datetime | None
+    shares: Decimal
+    average_cost: Decimal
+    cost_basis_micros: int
+    entry_fees_micros: int
+    realized_pnl_micros: int
+    updated_at: datetime
+    bid: Decimal | None
+    bid_observed_at: datetime | None
+
+
 class ProductionPromptPort:
     """Materialize and persist the private, immutable per-cycle prompt context."""
 
@@ -151,52 +167,44 @@ class ProductionPromptPort:
         *,
         clock: Callable[[], datetime],
         connect: _Connect | None = None,
+        maximum_market_cost_basis_fraction: Decimal = Decimal("0.15"),
+        maximum_valuation_bid_age: timedelta = timedelta(minutes=5),
     ) -> None:
         self._database_url = database_url
         self._store = artifact_store
         self._clock = clock
         self._connect = connect or _default_connect
         self._memory = PostgresHarnessRepository(database_url, connect=connect)
+        if (
+            not maximum_market_cost_basis_fraction.is_finite()
+            or not Decimal(0) < maximum_market_cost_basis_fraction <= Decimal(1)
+        ):
+            raise ValueError("maximum market cost-basis fraction must be between zero and one")
+        if maximum_valuation_bid_age < timedelta(0):
+            raise ValueError("maximum valuation bid age cannot be negative")
+        self._maximum_market_cost_basis_fraction = maximum_market_cost_basis_fraction
+        self._maximum_valuation_bid_age = maximum_valuation_bid_age
 
     def render(self, claim: CycleClaim, frozen: JsonObject) -> PromptResult:
         cutoff = _cutoff(claim)
         source = self._prompt_source(claim.agent_id)
-        beliefs = tuple(
-            _belief(row, claim.agent_id)
-            for row in self._memory.read_beliefs(
-                actor_id=claim.agent_id, target_agent_id=claim.agent_id
-            )
-        )
         plans = tuple(
             _plan(row, claim.agent_id)
             for row in self._memory.read_plans(
                 actor_id=claim.agent_id, target_agent_id=claim.agent_id
             )
         )
-        learning_events = self._learning_events(claim.agent_id)
-        learning = deterministic_critical_learning(learning_events)
-        learning_input_sha256 = hashlib.sha256(
-            json.dumps(
-                [asdict(event) for event in learning_events],
-                sort_keys=True,
-                separators=(",", ":"),
-                default=str,
-            ).encode("utf-8")
-        ).hexdigest()
+        recent_activity = self._recent_activity(claim.agent_id, cutoff)
         cycle_context: JsonObject = {
-            "cycle_id": str(claim.cycle_id),
             "scheduled_at": claim.scheduled_at.isoformat(),
             "data_cutoff": cutoff.isoformat(),
-            "market_snapshot_ids": _strings(frozen, "market_snapshot_ids"),
-            "order_book_snapshot_ids": _strings(frozen, "order_book_snapshot_ids"),
-            "account": self._account_context(claim.agent_id),
+            "account": self._account_context(claim.agent_id, cutoff=cutoff, frozen=frozen),
         }
         messages = PromptBuilder(source.system_prompt).build(
             agent_id=str(claim.agent_id),
             cycle_context=cycle_context,
-            beliefs=beliefs,
             plans=plans,
-            critical_learning=learning,
+            recent_activity=recent_activity,
         )
         rendered = json.dumps(
             messages,
@@ -210,7 +218,7 @@ class ProductionPromptPort:
         context: JsonObject = {
             "messages": list(messages),
             "model_config": source.model_config,
-            "critical_learning": learning,
+            "recent_activity": recent_activity,
         }
         digest = hashlib.sha256(rendered.encode("utf-8")).hexdigest()
         market_ids = _uuids(frozen, "market_snapshot_ids")
@@ -243,20 +251,6 @@ class ProductionPromptPort:
                         now,
                     ),
                 )
-            cursor.execute(
-                "INSERT INTO critical_learning_snapshots "
-                "(id, agent_cycle_id, agent_id, summary, input_sha256, created_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s) "
-                "ON CONFLICT (agent_cycle_id) DO NOTHING",
-                (
-                    uuid.uuid5(uuid.NAMESPACE_URL, f"vtrade:learning:{claim.cycle_id}"),
-                    claim.cycle_id,
-                    claim.agent_id,
-                    learning,
-                    learning_input_sha256,
-                    now,
-                ),
-            )
         return PromptResult(
             {
                 "cycle_context_id": str(
@@ -286,42 +280,364 @@ class ProductionPromptPort:
         config["slug"] = str(row[2])
         return _PromptSource(uuid.UUID(str(row[0])), str(row[1]), config)
 
-    def _learning_events(self, agent_id: uuid.UUID) -> tuple[LearningEvent, ...]:
+    def _recent_activity(self, agent_id: uuid.UUID, cutoff: datetime) -> JsonObject:
+        oldest = cutoff - timedelta(hours=24)
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
             cursor.execute(
-                "SELECT 'settlement', p.outcome_id::text, s.realized_pnl_micros, '' "
+                "SELECT 'settlement', m.id::text, p.outcome_id::text, "
+                "s.realized_pnl_micros, s.settled_at, '' "
                 "FROM settlements s JOIN positions p ON p.id = s.position_id "
-                "WHERE s.agent_id = %s ORDER BY s.settled_at DESC LIMIT 50",
-                (agent_id,),
+                "JOIN outcomes o ON o.id = p.outcome_id "
+                "JOIN markets m ON m.id = o.market_id "
+                "WHERE s.agent_id = %s AND s.settled_at > %s AND s.settled_at <= %s "
+                "ORDER BY s.settled_at DESC LIMIT 26",
+                (agent_id, oldest, cutoff),
             )
             rows = list(cursor.fetchall())
             cursor.execute(
-                "SELECT 'rejection', oi.market_id::text, 0, COALESCE(o.rejection_code, '') "
+                "SELECT 'rejection', oi.market_id::text, oi.outcome_id::text, "
+                "0, o.created_at, COALESCE(o.rejection_code, '') "
                 "FROM orders o JOIN order_intents oi ON oi.id = o.intent_id "
                 "JOIN agent_cycles ac ON ac.id = oi.agent_cycle_id "
                 "WHERE ac.agent_id = %s AND o.status = 'rejected' "
-                "ORDER BY o.created_at DESC LIMIT 50",
-                (agent_id,),
+                "AND o.created_at > %s AND o.created_at <= %s "
+                "ORDER BY o.created_at DESC LIMIT 26",
+                (agent_id, oldest, cutoff),
             )
             rows.extend(cursor.fetchall())
-        return tuple(
-            LearningEvent(str(row[0]), str(row[1]), int(str(row[2])), str(row[3])) for row in rows
+        events = tuple(
+            RecentActivityEvent(
+                kind=str(row[0]),
+                market_id=str(row[1]),
+                outcome_id=str(row[2]) if row[2] is not None else None,
+                pnl_micros=int(str(row[3])) if row[0] == "settlement" else None,
+                created_at=_aware(cast(datetime, row[4])),
+                detail=str(row[5]),
+            )
+            for row in rows
         )
+        ordered = tuple(
+            sorted(
+                events,
+                key=lambda item: (
+                    item.created_at,
+                    item.kind,
+                    item.market_id,
+                    item.outcome_id or "",
+                ),
+                reverse=True,
+            )
+        )
+        return {
+            "events": [self._activity_event_payload(event) for event in ordered[:25]],
+            "truncated": len(ordered) > 25,
+        }
 
-    def _account_context(self, agent_id: uuid.UUID) -> JsonObject:
+    @staticmethod
+    def _activity_event_payload(event: RecentActivityEvent) -> JsonObject:
+        payload: JsonObject = {
+            "type": event.kind,
+            "market_id": event.market_id,
+            "outcome_id": event.outcome_id,
+            "created_at": event.created_at.isoformat(),
+        }
+        if event.kind == "settlement":
+            payload["realized_pnl_micros"] = event.pnl_micros
+        else:
+            payload["rejection_code"] = event.detail
+        return payload
+
+    def _account_context(
+        self,
+        agent_id: uuid.UUID,
+        *,
+        cutoff: datetime,
+        frozen: Mapping[str, object],
+    ) -> JsonObject:
+        snapshot_ids = _uuids(frozen, "order_book_snapshot_ids")
+        oldest_bid = cutoff - self._maximum_valuation_bid_age
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
             cursor.execute(
                 "SELECT COALESCE(sum(lp.amount_micros) FILTER "
-                "(WHERE lp.account = 'cash'), 0), a.portfolio_version FROM agents a "
-                "LEFT JOIN ledger_entries le ON le.agent_id = a.id "
+                "(WHERE lp.account = 'cash'), 0), a.portfolio_version, "
+                "a.initial_cash_micros, "
+                "COALESCE((SELECT sum(p2.realized_pnl_micros) FROM positions p2 "
+                "WHERE p2.agent_id = a.id), 0) "
+                "FROM agents a LEFT JOIN ledger_entries le ON le.agent_id = a.id "
                 "LEFT JOIN ledger_postings lp ON lp.ledger_entry_id = le.id "
                 "WHERE a.id = %s GROUP BY a.id",
                 (agent_id,),
             )
-            row = cursor.fetchone()
-        if row is None:
+            account = cursor.fetchone()
+            cursor.execute(
+                "SELECT m.id::text, p.outcome_id::text, o.venue_token_id, m.question, "
+                "o.name, m.closes_at, p.shares, p.average_cost, p.cost_basis_micros, "
+                "p.entry_fees_micros, p.realized_pnl_micros, p.updated_at, "
+                "book.best_bid, book.cutoff "
+                "FROM positions p JOIN outcomes o ON o.id = p.outcome_id "
+                "JOIN markets m ON m.id = o.market_id "
+                "LEFT JOIN LATERAL ("
+                "SELECT obs.best_bid, obs.cutoff FROM order_book_snapshots obs "
+                "WHERE obs.outcome_id = p.outcome_id "
+                "AND obs.id = ANY(%s::uuid[]) AND obs.best_bid IS NOT NULL "
+                "AND obs.cutoff <= %s AND obs.cutoff >= %s "
+                "AND (obs.source_created_at IS NULL OR obs.source_created_at <= %s) "
+                "ORDER BY obs.cutoff DESC, obs.id DESC LIMIT 1"
+                ") book ON TRUE "
+                "WHERE p.agent_id = %s AND p.shares > 0 ORDER BY p.outcome_id",
+                (list(snapshot_ids), cutoff, oldest_bid, cutoff, agent_id),
+            )
+            rows = cursor.fetchall()
+        if account is None:
             raise ProductionCompositionUnavailable("agent account is missing")
-        return {"cash_micros": int(str(row[0])), "portfolio_version": int(str(row[1]))}
+        positions = tuple(self._prompt_position(row) for row in rows)
+        cash_micros = int(str(account[0]))
+        portfolio_version = int(str(account[1]))
+        initial_cash_micros = int(str(account[2]))
+        realized_pnl_micros = int(str(account[3]))
+        valid_positions = tuple(position for position in positions if self._valid_bid(position))
+        nav_complete = len(valid_positions) == len(positions)
+        liquidation_by_market: dict[str, int | None] = {}
+        basis_by_market: dict[str, int] = {}
+        for position in positions:
+            basis_by_market[position.market_id] = (
+                basis_by_market.get(position.market_id, 0) + position.cost_basis_micros
+            )
+            value = self._liquidation_value(position) if self._valid_bid(position) else None
+            previous = liquidation_by_market.get(position.market_id, 0)
+            liquidation_by_market[position.market_id] = (
+                None
+                if value is None or previous is None
+                else previous + value
+            )
+        total_liquidation = (
+            sum(self._liquidation_value(position) for position in positions)
+            if nav_complete
+            else None
+        )
+        nav_micros = cash_micros + total_liquidation if total_liquidation is not None else None
+        entry_fees_micros = sum(position.entry_fees_micros for position in positions)
+        unrealized_pnl_micros = (
+            total_liquidation
+            - sum(position.cost_basis_micros for position in positions)
+            - entry_fees_micros
+            if total_liquidation is not None
+            else None
+        )
+        market_order = sorted(
+            liquidation_by_market.items(),
+            key=lambda item: (
+                item[1] is not None,
+                item[1] if item[1] is not None else -1,
+                item[0],
+            ),
+            reverse=True,
+        )
+        concentration = self._concentration(market_order, nav_micros)
+        position_info = [
+            self._position_payload(
+                position,
+                cutoff=cutoff,
+                nav_micros=nav_micros,
+                market_basis_micros=basis_by_market[position.market_id],
+                market_limit_micros=(
+                    self._market_limit(nav_micros, basis_by_market[position.market_id])
+                    if nav_micros is not None
+                    else None
+                ),
+            )
+            for position in positions
+        ]
+        position_info.sort(key=lambda item: self._attention_key(item, cutoff=cutoff))
+        attention = position_info[:15]
+        omitted = position_info[15:]
+        return {
+            "cash_micros": cash_micros,
+            "portfolio_version": portfolio_version,
+            "initial_cash_micros": initial_cash_micros,
+            "nav_micros": nav_micros,
+            "nav_complete": nav_complete,
+            "valuation_status": "complete" if nav_complete else "incomplete",
+            "realized_pnl_micros": realized_pnl_micros,
+            "unrealized_pnl_micros": unrealized_pnl_micros,
+            "total_pnl_micros": (
+                nav_micros - initial_cash_micros if nav_micros is not None else None
+            ),
+            "entry_fees_micros": entry_fees_micros,
+            "concentration": concentration,
+            "attention_positions": attention,
+            "other_positions": self._aggregate_positions(omitted),
+        }
+
+    @staticmethod
+    def _prompt_position(row: Sequence[object]) -> _PromptPosition:
+        closes_at = _aware(cast(datetime, row[5])) if row[5] is not None else None
+        bid = Decimal(str(row[12])) if row[12] is not None else None
+        bid_observed_at = _aware(cast(datetime, row[13])) if row[13] is not None else None
+        return _PromptPosition(
+            market_id=str(row[0]),
+            outcome_id=str(row[1]),
+            venue_token_id=str(row[2]),
+            question=str(row[3]),
+            outcome=str(row[4]),
+            closes_at=closes_at,
+            shares=Decimal(str(row[6])),
+            average_cost=Decimal(str(row[7])),
+            cost_basis_micros=int(str(row[8])),
+            entry_fees_micros=int(str(row[9])),
+            realized_pnl_micros=int(str(row[10])),
+            updated_at=_aware(cast(datetime, row[11])),
+            bid=bid,
+            bid_observed_at=bid_observed_at,
+        )
+
+    def _valid_bid(self, position: _PromptPosition) -> bool:
+        return (
+            position.bid is not None
+            and position.bid.is_finite()
+            and Decimal(0) <= position.bid <= Decimal(1)
+            and position.bid_observed_at is not None
+        )
+
+    @staticmethod
+    def _liquidation_value(position: _PromptPosition) -> int:
+        if position.bid is None:
+            raise ValueError("liquidation value requires a bid")
+        return int(
+            (position.shares * position.bid * Decimal(1_000_000)).to_integral_value(
+                rounding=ROUND_HALF_UP
+            )
+        )
+
+    def _market_limit(self, nav_micros: int | None, market_basis_micros: int) -> int | None:
+        if nav_micros is None:
+            return None
+        limit = int(
+            (Decimal(nav_micros) * self._maximum_market_cost_basis_fraction).to_integral_value(
+                rounding=ROUND_HALF_UP
+            )
+        )
+        return max(0, limit - market_basis_micros)
+
+    @staticmethod
+    def _ratio(numerator: int, denominator: int | None) -> str | None:
+        if denominator is None or denominator <= 0:
+            return None
+        return str(
+            (Decimal(numerator) / Decimal(denominator)).quantize(
+                Decimal("0.000001"), rounding=ROUND_HALF_UP
+            )
+        )
+
+    def _concentration(
+        self, market_order: Sequence[tuple[str, int | None]], nav_micros: int | None
+    ) -> JsonObject:
+        values = [value for _market_id, value in market_order]
+        if nav_micros is None or any(value is None for value in values):
+            empty = None
+            return {
+                "top_1_fraction": empty,
+                "top_5_fraction": empty,
+                "top_10_fraction": empty,
+                "other_fraction": empty,
+            }
+        numeric = [cast(int, value) for value in values]
+        return {
+            "top_1_fraction": self._ratio(sum(numeric[:1]), nav_micros),
+            "top_5_fraction": self._ratio(sum(numeric[:5]), nav_micros),
+            "top_10_fraction": self._ratio(sum(numeric[:10]), nav_micros),
+            "other_fraction": self._ratio(sum(numeric[10:]), nav_micros),
+        }
+
+    def _position_payload(
+        self,
+        position: _PromptPosition,
+        *,
+        cutoff: datetime,
+        nav_micros: int | None,
+        market_basis_micros: int,
+        market_limit_micros: int | None,
+    ) -> JsonObject:
+        valid = self._valid_bid(position)
+        liquidation = self._liquidation_value(position) if valid else None
+        unrealized = (
+            liquidation - position.cost_basis_micros - position.entry_fees_micros
+            if liquidation is not None
+            else None
+        )
+        hours_to_close = (
+            round((position.closes_at - cutoff).total_seconds() / 3600, 2)
+            if position.closes_at is not None
+            else None
+        )
+        return {
+            "market_id": position.market_id,
+            "outcome_id": position.outcome_id,
+            "venue_token_id": position.venue_token_id,
+            "question": position.question,
+            "outcome": position.outcome,
+            "shares": str(position.shares),
+            "average_cost": str(position.average_cost),
+            "cost_basis_micros": position.cost_basis_micros,
+            "entry_fees_micros": position.entry_fees_micros,
+            "bid": str(position.bid) if valid and position.bid is not None else None,
+            "liquidation_value_micros": liquidation,
+            "unrealized_pnl_micros": unrealized,
+            "position_weight": self._ratio(liquidation or 0, nav_micros)
+            if liquidation is not None
+            else None,
+            "market_cost_basis_micros": market_basis_micros,
+            "market_exposure": self._ratio(market_basis_micros, nav_micros),
+            "remaining_capacity_micros": market_limit_micros,
+            "closes_at": position.closes_at.isoformat() if position.closes_at else None,
+            "hours_to_close": hours_to_close,
+        }
+
+    @staticmethod
+    def _attention_key(item: JsonObject, *, cutoff: datetime) -> tuple[object, ...]:
+        valuation_missing = 0 if item["liquidation_value_micros"] is None else 1
+        exposure = Decimal(str(item["market_exposure"] or "0"))
+        closes_at = item["closes_at"]
+        close_soon = 0
+        if isinstance(closes_at, str):
+            close_soon = (
+                0
+                if _aware(datetime.fromisoformat(closes_at)) <= cutoff + timedelta(hours=48)
+                else 1
+            )
+        pnl = item["unrealized_pnl_micros"]
+        adverse = 0 if isinstance(pnl, int) and pnl < 0 else 1
+        loss = pnl if isinstance(pnl, int) and pnl < 0 else 0
+        return (
+            valuation_missing,
+            -exposure,
+            close_soon,
+            adverse,
+            loss,
+            str(item["market_id"]),
+            str(item["outcome_id"]),
+        )
+
+    @staticmethod
+    def _aggregate_positions(positions: Sequence[JsonObject]) -> JsonObject:
+        liquidation_values = [item["liquidation_value_micros"] for item in positions]
+        unrealized_values = [item["unrealized_pnl_micros"] for item in positions]
+        return {
+            "count": len(positions),
+            "market_count": len({str(item["market_id"]) for item in positions}),
+            "cost_basis_micros": sum(int(item["cost_basis_micros"]) for item in positions),
+            "entry_fees_micros": sum(int(item["entry_fees_micros"]) for item in positions),
+            "liquidation_value_micros": (
+                sum(int(value) for value in liquidation_values)
+                if all(isinstance(value, int) for value in liquidation_values)
+                else None
+            ),
+            "unrealized_pnl_micros": (
+                sum(int(value) for value in unrealized_values)
+                if all(isinstance(value, int) for value in unrealized_values)
+                else None
+            ),
+        }
 
 
 class ProductionHarnessPort:
@@ -2011,7 +2327,15 @@ def build_production_worker(
             clock=clock,
         ),
         pre_settlement=settlement_valuation,
-        prompt=ProductionPromptPort(database_url, store, clock=clock),
+        prompt=ProductionPromptPort(
+            database_url,
+            store,
+            clock=clock,
+            maximum_market_cost_basis_fraction=Decimal(
+                str(config.raw["limits"]["maximum_market_cost_basis_fraction"])
+            ),
+            maximum_valuation_bid_age=maximum_valuation_bid_age,
+        ),
         harness=ProductionHarnessPort(
             database_url,
             store,
@@ -2421,19 +2745,6 @@ def _levels(value: object) -> tuple[PriceLevel, ...]:
             raise ProductionCompositionUnavailable("frozen order-book level is malformed")
         levels.append(PriceLevel(Decimal(str(row.get("price"))), Decimal(str(row.get("size")))))
     return tuple(levels)
-
-
-def _belief(row: Mapping[str, object], agent_id: uuid.UUID) -> BeliefRecord:
-    evidence = row.get("evidence", [])
-    return BeliefRecord(
-        str(row["id"]),
-        str(agent_id),
-        Decimal(str(row["confidence"])),
-        str(row["content"]),
-        str(row["category"]),
-        tuple(str(value) for value in evidence) if isinstance(evidence, list) else (),
-        _parse_timestamp(row["created_at"]),
-    )
 
 
 def _required_payload_string(value: Mapping[str, object], key: str) -> str:

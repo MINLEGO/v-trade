@@ -29,6 +29,7 @@ class _Cursor:
         market_rows: list[tuple[object, ...]] | None = None,
         closed_trade_rows: list[tuple[object, ...]] | None = None,
         settlement_rows: list[tuple[object, ...]] | None = None,
+        fee_policy_rows: list[tuple[object, ...]] | None = None,
     ) -> None:
         self.rows: list[tuple[object, ...]] = []
         self.queries: list[tuple[str, tuple[object, ...]]] = []
@@ -36,6 +37,7 @@ class _Cursor:
         self.market_rows = market_rows
         self.closed_trade_rows = closed_trade_rows
         self.settlement_rows = settlement_rows
+        self.fee_policy_rows = fee_policy_rows
 
     def __enter__(self):
         return self
@@ -87,6 +89,8 @@ class _Cursor:
             self.rows = self.closed_trade_rows or []
         elif query.startswith("SELECT s.id, s.position_id"):
             self.rows = self.settlement_rows or []
+        elif query.startswith("SELECT frs.condition_id"):
+            self.rows = self.fee_policy_rows or []
         else:
             self.rows = []
         return self
@@ -165,6 +169,7 @@ def _context(
     exa: _Exa | None = None,
     live_order_execution: bool = False,
     live_order_required: bool = False,
+    fee_rate_snapshot_ids: tuple[uuid.UUID, ...] = (),
 ) -> ToolContext:
     claim = CycleClaim(
         uuid.uuid4(),
@@ -187,6 +192,7 @@ def _context(
         lambda: NOW,
         (market_snapshot_id,),
         (book_snapshot_id,),
+        fee_rate_snapshot_ids,
         maximum_default_result_tokens=maximum_default_result_tokens,
         maximum_book_age=maximum_book_age,
         maximum_order_book_depth=maximum_order_book_depth,
@@ -299,12 +305,42 @@ class ProductionToolRegistryTests(unittest.TestCase):
         self.assertEqual(output["best_bid"], "0.49")
         self.assertEqual(output["lookup"], {"token_id": "token"})
         self.assertEqual(output["depth"], 5)
+        self.assertIsNone(output["fee_policy"])
         query, params = cursor.queries[0]
         self.assertIn("obs.cutoff <= %s", query)
         self.assertEqual(params[0], "token")
         self.assertEqual(len(params[1]), 1)
         self.assertEqual(params[2], NOW)
         self.assertIn("obs.id = ANY(%s::uuid[])", query)
+
+    def test_orderbook_exposes_current_cycle_fee_policy(self) -> None:
+        fee_id = uuid.uuid4()
+        cursor = _Cursor(
+            fee_policy_rows=[
+                ("condition", Decimal("0.03"), Decimal("2"), True, NOW, NOW)
+            ]
+        )
+        tools = {
+            tool.name: tool
+            for tool in ProductionToolRegistry(
+                _context(cursor, fee_rate_snapshot_ids=(fee_id,))
+            ).tool_specs()
+        }
+
+        output = tools["get_orderbook"].handler({"token_id": "token"})
+
+        self.assertEqual(
+            output["fee_policy"],
+            {
+                "condition_id": "condition",
+                "rate": "0.03",
+                "exponent": "2",
+                "taker_only": True,
+                "formula_version": "polymarket-v2-p-one-minus-p",
+                "observed_at": NOW.isoformat(),
+                "source_created_at": NOW.isoformat(),
+            },
+        )
 
     def test_orderbook_uses_configured_depth(self) -> None:
         cursor = _Cursor()

@@ -59,6 +59,7 @@ class ToolContext:
     clock: Callable[[], datetime]
     market_snapshot_ids: tuple[uuid.UUID, ...] = ()
     order_book_snapshot_ids: tuple[uuid.UUID, ...] = ()
+    fee_rate_snapshot_ids: tuple[uuid.UUID, ...] = ()
     maximum_default_result_tokens: int = 4_000
     maximum_book_age: timedelta = timedelta(minutes=5)
     maximum_order_book_depth: int = 5
@@ -516,6 +517,7 @@ class ProductionToolRegistry:
         if self._context.cutoff - observed_at > self._context.maximum_book_age:
             maximum_age = int(self._context.maximum_book_age.total_seconds())
             raise ToolContextUnavailable(f"frozen order book is older than {maximum_age} seconds")
+        fee_policy = self._frozen_fee_policy(lookup_key, lookup_value)
         return {
             "as_of": self._context.cutoff.isoformat(),
             "snapshot_id": str(row[0]),
@@ -528,7 +530,63 @@ class ProductionToolRegistry:
             "best_ask": str(row[6]) if row[6] is not None else None,
             "raw_sha256": str(row[7]),
             "depth": self._context.maximum_order_book_depth,
+            "fee_policy": fee_policy,
         }
+
+    def _frozen_fee_policy(self, lookup_key: str, lookup_value: str) -> JsonObject | None:
+        if not self._context.fee_rate_snapshot_ids:
+            return None
+        predicate = "o.id = %s::uuid" if lookup_key == "outcome_id" else "o.venue_token_id = %s"
+        rows = self._query(
+            "SELECT frs.condition_id, frs.fee_rate, frs.fee_exponent, "
+            "frs.fee_taker_only, frs.observed_at, frs.source_created_at "
+            "FROM fee_rate_snapshots frs JOIN outcomes o ON o.venue_token_id = frs.token_id "
+            "WHERE " + predicate + " AND frs.id = ANY(%s::uuid[]) "
+            "AND frs.observed_at <= %s "
+            "AND (frs.source_created_at IS NULL OR frs.source_created_at <= %s) "
+            "ORDER BY frs.observed_at DESC, frs.id DESC LIMIT 1",
+            (
+                lookup_value,
+                list(self._context.fee_rate_snapshot_ids),
+                self._context.cutoff,
+                self._context.cutoff,
+            ),
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        try:
+            condition_id = str(row[0])
+            rate = Decimal(str(row[1]))
+            exponent = Decimal(str(row[2])) if row[2] is not None else None
+            taker_only = row[3]
+            observed_at = row[4]
+            source_created_at = row[5]
+            if (
+                not condition_id
+                or not rate.is_finite()
+                or not Decimal(0) <= rate <= Decimal(1)
+                or (exponent is not None and (not exponent.is_finite() or exponent < 0))
+                or not isinstance(taker_only, bool)
+                or not isinstance(observed_at, datetime)
+                or (source_created_at is not None and not isinstance(source_created_at, datetime))
+            ):
+                return None
+            return {
+                "condition_id": condition_id,
+                "rate": str(rate),
+                "exponent": str(exponent) if exponent is not None else None,
+                "taker_only": taker_only,
+                "formula_version": "polymarket-v2-p-one-minus-p",
+                "observed_at": observed_at.astimezone(UTC).isoformat(),
+                "source_created_at": (
+                    source_created_at.astimezone(UTC).isoformat()
+                    if source_created_at is not None
+                    else None
+                ),
+            }
+        except (ArithmeticError, TypeError, ValueError):
+            return None
 
     def _get_balance(self, _arguments: JsonObject) -> JsonObject:
         rows = self._query(
@@ -1697,6 +1755,7 @@ def production_tool_context(
 ) -> ToolContext:
     market_snapshot_ids = _uuid_list(frozen, "market_snapshot_ids")
     order_book_snapshot_ids = _uuid_list(frozen, "order_book_snapshot_ids")
+    fee_rate_snapshot_ids = _optional_uuid_list(frozen, "fee_rate_snapshot_ids")
     if not market_snapshot_ids:
         raise ToolContextUnavailable("market freeze contains no market snapshot membership")
     return ToolContext(
@@ -1713,6 +1772,7 @@ def production_tool_context(
         clock,
         market_snapshot_ids,
         order_book_snapshot_ids,
+        fee_rate_snapshot_ids,
         maximum_book_age=maximum_book_age,
         maximum_order_book_depth=maximum_order_book_depth,
         immediate_order_executor=immediate_order_executor,
@@ -1732,3 +1792,9 @@ def _uuid_list(value: Mapping[str, object], key: str) -> tuple[uuid.UUID, ...]:
     if len(set(result)) != len(result):
         raise ToolContextUnavailable(f"market freeze has duplicate {key}")
     return result
+
+
+def _optional_uuid_list(value: Mapping[str, object], key: str) -> tuple[uuid.UUID, ...]:
+    if key not in value:
+        return ()
+    return _uuid_list(value, key)
