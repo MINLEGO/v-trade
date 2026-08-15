@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>V-Trade private admin — Audit dashboard</title>
+    <link rel="stylesheet" href="/admin/assets/dashboard.css">
+    <script src="/admin/assets/dashboard.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <div class="shell">
+      <header class="site-header">
+        <a class="brand" href="#overview" aria-label="V-Trade dashboard home">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span>V-Trade private admin</span>
+          <small>private audit console</small>
+        </a>
+        <nav class="primary-nav" aria-label="Dashboard sections">
+          <button class="nav-link is-active" type="button" data-tab="overview" aria-current="page">Overview</button>
+          <button class="nav-link" type="button" data-tab="agents">Agents</button>
+          <button class="nav-link" type="button" data-tab="cycles">Cycle Explorer</button>
+          <button class="nav-link" type="button" data-tab="operations">Operations</button>
+        </nav>
+        <div class="header-status">
+          <span class="status-dot" id="connection-dot" aria-hidden="true"></span>
+          <span id="connection-label">Loading data</span>
+        </div>
+      </header>
+
+      <section class="filter-bar" aria-label="Dashboard filters">
+        <div class="range-picker" role="group" aria-label="Time range">
+          <button class="range-button" type="button" data-window="24h">24h</button>
+          <button class="range-button" type="button" data-window="7d">7d</button>
+          <button class="range-button is-active" type="button" data-window="30d">30d</button>
+          <button class="range-button" type="button" data-window="all">All run</button>
+        </div>
+        <label class="select-field">
+          <span>Agent</span>
+          <select id="agent-filter" name="agent_id"><option value="">All agents</option></select>
+        </label>
+        <label class="run-field">
+          <span>Run ID</span>
+          <input id="run-filter" name="run_id" type="search" autocomplete="off" placeholder="Current run">
+        </label>
+        <button class="refresh-button" id="refresh-button" type="button">
+          <span aria-hidden="true">↻</span> Refresh
+        </button>
+        <p class="updated-at" id="updated-at" aria-live="polite">Awaiting data</p>
+      </section>
+
+      <main id="main-content">
+        <section class="view is-active" id="overview" data-view="overview" tabindex="-1">
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">Performance and audit</p>
+              <h1>How is the run behaving?</h1>
+              <p class="lede">Inspect performance, agent activity, costs and signals that deserve a closer look.</p>
+            </div>
+            <div class="run-status" id="run-status"><span class="status-dot" aria-hidden="true"></span><span>Loading run status</span></div>
+          </div>
+
+          <section class="metric-grid" id="overview-metrics" aria-label="Run metrics" aria-busy="true">
+            <article class="metric-card skeleton-card"></article><article class="metric-card skeleton-card"></article>
+            <article class="metric-card skeleton-card"></article><article class="metric-card skeleton-card"></article>
+            <article class="metric-card skeleton-card"></article><article class="metric-card skeleton-card"></article>
+          </section>
+
+          <section class="split-grid overview-grid">
+            <article class="panel performance-panel">
+              <div class="panel-heading">
+                <div><p class="eyebrow">Portfolio history</p><h2>Account value</h2></div>
+                <div class="chart-legend" id="performance-legend" aria-label="Chart legend"></div>
+              </div>
+              <div class="chart-wrap"><canvas id="performance-chart" aria-label="Account value performance chart" role="img"></canvas><p class="empty-state chart-empty" hidden>No performance snapshots are available for this period.</p></div>
+            </article>
+            <article class="panel activity-panel">
+              <div class="panel-heading"><div><p class="eyebrow">Most recent</p><h2>Audit activity</h2></div><button class="text-button" type="button" data-switch-tab="cycles">Open explorer</button></div>
+              <ol class="activity-list" id="activity-list" aria-live="polite"><li class="loading-line">Loading activity…</li></ol>
+            </article>
+          </section>
+
+          <section class="panel data-panel">
+            <div class="panel-heading"><div><p class="eyebrow">Relative performance</p><h2>Agent leaderboard</h2></div><button class="text-button" type="button" data-switch-tab="agents">Inspect agents</button></div>
+            <div class="table-wrap"><table><thead><tr><th scope="col">Agent</th><th scope="col">Model</th><th scope="col">Account value</th><th scope="col">Total PnL</th><th scope="col">Return</th><th scope="col">Drawdown</th><th scope="col">Last cycle</th></tr></thead><tbody id="leaderboard-body"><tr><td colspan="7" class="table-message">Loading agents…</td></tr></tbody></table></div>
+          </section>
+        </section>
+
+        <section class="view" id="agents" data-view="agents" tabindex="-1" hidden>
+          <div class="page-heading compact"><div><p class="eyebrow">Agent inspection</p><h1>Plans, beliefs and outcomes</h1><p class="lede">Read the context each agent carries between cycles alongside its current exposure and performance.</p></div></div>
+          <div class="agent-layout">
+            <aside class="agent-list-panel panel" aria-label="Agents"><div class="panel-heading"><h2>Agents</h2><span class="item-count" id="agent-count">—</span></div><div id="agent-list" class="agent-list"><p class="empty-state">Loading agents…</p></div></aside>
+            <section class="agent-detail" id="agent-detail" aria-live="polite"><div class="empty-state large-empty">Select an agent to inspect its audit context.</div></section>
+          </div>
+        </section>
+
+        <section class="view" id="cycles" data-view="cycles" tabindex="-1" hidden>
+          <div class="page-heading compact"><div><p class="eyebrow">Decision trace</p><h1>Cycle Explorer</h1><p class="lede">Follow the chronological record from model reasoning and research through execution.</p></div></div>
+          <div class="explorer-layout">
+            <aside class="cycle-list-panel panel" aria-label="Cycles"><div class="panel-heading"><h2>Cycles</h2><span class="item-count" id="cycle-count">—</span></div><div id="cycle-list" class="cycle-list"><p class="empty-state">Loading cycles…</p></div></aside>
+            <section class="cycle-detail" id="cycle-detail" aria-live="polite"><div class="empty-state large-empty">Select a cycle to read its complete audit trail.</div></section>
+          </div>
+        </section>
+
+        <section class="view" id="operations" data-view="operations" tabindex="-1" hidden>
+          <div class="page-heading compact"><div><p class="eyebrow">Run health</p><h1>Operations</h1><p class="lede">Review data freshness, provider usage, alerts and audit-safe operational controls.</p></div></div>
+          <div class="operation-grid">
+            <section class="panel"><div class="panel-heading"><div><p class="eyebrow">Attention needed</p><h2>Alerts</h2></div><span class="item-count" id="alert-count">—</span></div><div class="alert-list" id="alert-list"><p class="empty-state">Loading alerts…</p></div></section>
+            <section class="panel"><div class="panel-heading"><div><p class="eyebrow">Data quality</p><h2>Freshness</h2></div></div><div class="freshness-list" id="freshness-list"><p class="empty-state">Loading freshness checks…</p></div></section>
+            <section class="panel"><div class="panel-heading"><div><p class="eyebrow">Providers</p><h2>Usage and costs</h2></div></div><div class="usage-list" id="usage-list"><p class="empty-state">Loading usage…</p></div></section>
+            <section class="panel controls-panel"><div class="panel-heading"><div><p class="eyebrow">Restricted controls</p><h2>Run controls</h2></div></div><p>Pause and resume remain available only through the authenticated, audited operator API. This read-only dashboard never submits a control action.</p></section>
+          </div>
+        </section>
+      </main>
+    </div>
+    <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+  </body>
+</html>

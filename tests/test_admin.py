@@ -123,22 +123,21 @@ class PrivateAdminApiTests(unittest.TestCase):
             self.assertEqual(response.headers["x-content-type-options"], "nosniff")
             self.assertIn("default-src 'none'", response.headers["content-security-policy"])
 
-    def test_dashboard_contains_every_required_operator_view(self) -> None:
+    def test_dashboard_contains_the_canonical_python_views(self) -> None:
         response = self.client.get("/admin", headers=self.auth)
         self.assertEqual(response.status_code, 200)
         for label in (
-            "Leaderboard and PnL",
-            "Positions and executable bid valuation",
-            "Trades",
-            "Settlements",
-            "Rejections",
-            "Cycles and decision versions",
-            "Model and search usage and cost",
-            "Data freshness",
-            "Configuration, prompt, model and code versions",
+            "Overview",
+            "Agents",
+            "Cycle Explorer",
+            "Operations",
+            "Plans, beliefs and outcomes",
+            "Audit activity",
+            "Freshness",
             "Alerts",
         ):
             self.assertIn(label, response.text)
+        self.assertNotIn("legacy-views", response.text)
 
     def test_views_are_bounded_and_can_filter_by_agent(self) -> None:
         response = self.client.get(
@@ -356,7 +355,10 @@ class AdminRepositoryTests(unittest.TestCase):
     def test_position_query_blocks_stale_and_missing_bid_valuation(self) -> None:
         self.repository.view("positions", agent_id=AGENT_ID)
         query = self.connection.cursor_instance.queries[-1][0]
-        self.assertIn("interval '300 seconds'", query)
+        self.assertIn("no_bid_valuation", query)
+        self.assertIn("maximum_archived_bid_age_seconds", query)
+        self.assertIn("make_interval", query)
+        self.assertIn("unrealized_pnl_micros", query)
         self.assertIn("THEN 'stale'", query)
         self.assertIn("liquidation_value_micros", query)
 

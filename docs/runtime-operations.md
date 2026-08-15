@@ -123,6 +123,25 @@ and cost, alerts, and decision versions. Global and per-agent pause/resume
 are the only control mutations; each requires an operator identity and idempotency key
 and is committed with an append-only `operator_actions` audit record.
 
+Freshness and valuation intentionally use different thresholds. The 300-second value
+comes from `execution.maximum_order_book_age_seconds` and governs current order-book
+and venue-sync freshness. Position valuation uses the persisted experiment definition's
+`owner_decisions.no_bid_valuation.maximum_age_seconds` (falling back to
+`limits.maximum_archived_bid_age_seconds`): it is 1,800 seconds for the active
+`predictionarena-polymarket-v1-liquidity-aware` definition and 300 seconds for the
+historical baseline. The dashboard and compatibility positions view read these values
+from the stored definition, so a stale or missing bid is never displayed as a valid
+liquidation value and net unrealized P&L remains
+`liquidation_value_micros - cost_basis_micros - entry_fees_micros`.
+
+The dashboard UI is a separate, read-only presentation module mounted by the private
+API. Its 30-day default window can be changed to 24 hours, seven days, or the complete
+run. The cycle explorer joins retained model reasoning, tool calls, research sources,
+provider usage, belief and plan revisions, order execution, and runtime checkpoints
+without importing worker or broker logic. Detailed payloads are marked unavailable
+after retention cleanup; surviving audit metadata is never presented as if the raw
+reasoning were still available.
+
 ## Validation boundaries
 
 Offline unit/recovery tests do not contact model or research providers. PostgreSQL

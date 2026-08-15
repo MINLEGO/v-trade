@@ -2131,8 +2131,13 @@ class ProductionSettlementValuationPort:
         bid_ids: Sequence[uuid.UUID],
     ) -> None:
         identifier = uuid.uuid5(uuid.NAMESPACE_URL, f"vtrade:performance:{claim.cycle_id}")
+        valuation_age_seconds = int(self._maximum_bid_age.total_seconds())
         calculation = {
-            "valuation_policy": "latest_archived_executable_bid_max_age_300_seconds",
+            "valuation_policy": (
+                "latest_archived_executable_bid_max_age_"
+                f"{valuation_age_seconds}_seconds"
+            ),
+            "valuation_max_age_seconds": valuation_age_seconds,
             "valuation_cutoff": _cutoff(claim).isoformat(),
             "entry_fees_micros": entry_fees,
             "settlement_ids": list(settlement_ids),
