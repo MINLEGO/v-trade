@@ -621,9 +621,20 @@ function renderFreshness(items) {
   root.replaceChildren(fragment);
 }
 
+function providerUsageLabel(item) {
+  const legacyTotalTokens = numeric(first(item.total_tokens, item.tokens));
+  const totalTokens = legacyTotalTokens ?? (
+    (numeric(item.prompt_tokens) || 0)
+    + (numeric(item.completion_tokens) || 0)
+    + (numeric(item.reasoning_tokens) || 0)
+  );
+  const requestCount = numeric(first(item.request_count, item.requests)) || 0;
+  return `${number.format(totalTokens)} tokens / ${number.format(requestCount)} requests`;
+}
+
 function renderUsage(items) {
   const root = $("#usage-list"); if (!items.length) { root.replaceChildren(element("p", "empty-state", "No provider usage is available for this period.")); return; }
-  const fragment = document.createDocumentFragment(); items.forEach((item) => { const row = element("div", "usage-row"); row.append(element("span", "badge", first(item.provider, item.route, "provider"))); const copy = document.createElement("div"); copy.append(element("p", "", first(item.model, item.name, item.provider)), element("small", "", `${number.format(numeric(first(item.total_tokens, item.tokens, item.requests)) || 0)} tokens / requests`)); row.append(copy, element("span", "usage-value", amount(first(item.cost_micros, item.cost, item.billed_cost_micros)))); fragment.append(row); }); root.replaceChildren(fragment);
+  const fragment = document.createDocumentFragment(); items.forEach((item) => { const row = element("div", "usage-row"); row.append(element("span", "badge", first(item.provider, item.route, "provider"))); const copy = document.createElement("div"); copy.append(element("p", "", first(item.model, item.name, item.provider)), element("small", "", providerUsageLabel(item))); row.append(copy, element("span", "usage-value", amount(first(item.cost_micros, item.cost, item.billed_cost_micros)))); fragment.append(row); }); root.replaceChildren(fragment);
 }
 
 function bindEvents() {
