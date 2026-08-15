@@ -221,14 +221,14 @@ class MarketFreezeTests(unittest.TestCase):
             uuid.uuid4(), uuid.uuid4(), NOW, None, "worker", NOW + timedelta(minutes=10)
         )
         result = PolymarketFreezeService(venue, repository, clock=lambda: NOW).freeze(claim)
-        self.assertEqual([len(batch) for batch in venue.book_batches], [20, 20])
+        self.assertEqual([len(batch) for batch in venue.book_batches], [20, 20, 10])
         self.assertEqual(venue.book_batches[0][:2], ("t-24-YES", "t-24-NO"))
         self.assertTrue(repository.persisted)
         self.assertEqual(result.freshest_observed_at, NOW)
         selected_ids = set(result.payload["market_snapshot_ids"])
-        self.assertEqual(len(selected_ids), 20)
-        self.assertNotIn(str(repository.persisted_market_ids[markets[0].id]), selected_ids)
-        self.assertNotIn(str(repository.persisted_market_ids[markets[4].id]), selected_ids)
+        self.assertEqual(len(selected_ids), 25)
+        self.assertIn(str(repository.persisted_market_ids[markets[0].id]), selected_ids)
+        self.assertIn(str(repository.persisted_market_ids[markets[4].id]), selected_ids)
 
     def test_all_held_outcomes_are_frozen_in_batches_beyond_shortlist_limit(self) -> None:
         page = MarketDelta("markets", None, None, NOW, (), (), ARTIFACT)
