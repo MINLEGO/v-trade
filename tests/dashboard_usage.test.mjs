@@ -35,17 +35,10 @@ function loadDashboardContext(document = undefined) {
   return context;
 }
 
-function providerUsageLabel() {
-  const context = loadDashboardContext();
-  assert.equal(typeof context.providerUsageLabel, "function");
-  return context.providerUsageLabel;
-}
-
-function renderedUsage(item) {
-  const usageRoot = new FakeNode("div");
-  const document = {
+function fakeDocument() {
+  return {
     querySelector(selector) {
-      return selector === "#usage-list" ? usageRoot : new FakeNode(selector);
+      return new FakeNode(selector);
     },
     createElement(tag) {
       return new FakeNode(tag);
@@ -59,10 +52,39 @@ function renderedUsage(item) {
       return node;
     },
   };
+}
+
+function flatten(node) {
+  return String(node.textContent || "") + node.children.map(flatten).join("");
+}
+
+function providerUsageLabel() {
+  const context = loadDashboardContext();
+  assert.equal(typeof context.providerUsageLabel, "function");
+  return context.providerUsageLabel;
+}
+
+function renderedUsage(item) {
+  const usageRoot = new FakeNode("div");
+  const document = {
+    ...fakeDocument(),
+    querySelector(selector) {
+      return selector === "#usage-list" ? usageRoot : new FakeNode(selector);
+    },
+  };
   const context = loadDashboardContext(document);
   context.renderUsage([item]);
-  const flatten = (node) => String(node.textContent || "") + node.children.map(flatten).join("");
   return flatten(usageRoot);
+}
+
+function renderedTimelineEntry(event) {
+  const context = loadDashboardContext(fakeDocument());
+  return flatten(context.timelineEntry(event));
+}
+
+function renderedCycleContext(detail) {
+  const context = loadDashboardContext(fakeDocument());
+  return flatten(context.cycleContext(detail));
 }
 
 test("provider usage label uses canonical SQL counters", () => {
@@ -108,4 +130,41 @@ test("provider usage label supports legacy total and request aliases", () => {
   const label = providerUsageLabel();
   assert.equal(label({ total_tokens: 42, requests: 3 }), "42 tokens / 3 requests");
   assert.equal(label({ tokens: 9, requests: 1 }), "9 tokens / 1 requests");
+});
+
+test("auditText marks a retained value unavailable after retention purge", () => {
+  const context = loadDashboardContext();
+  const audit = context.auditText("sensitive payload", "Payload unavailable after retention cleanup.", true);
+  assert.equal(audit.content, "Payload unavailable after retention cleanup.");
+  assert.equal(audit.unavailable, true);
+});
+
+test("timeline entries hide purged model payloads", () => {
+  const rendered = renderedTimelineEntry({
+    kind: "reasoning",
+    title: "Model turn 0",
+    at: "2026-07-30T12:00:00Z",
+    reasoning: "sensitive reasoning",
+    input: { secret: "sensitive input" },
+    response: { secret: "sensitive response" },
+    retention_purged: true,
+  });
+
+  assert.doesNotMatch(rendered, /sensitive (reasoning|input|response)/);
+  assert.match(rendered, /Payload unavailable after retention cleanup\./);
+});
+
+test("cycle context hides purged prompt payloads", () => {
+  const rendered = renderedCycleContext({
+    metadata: {
+      rendered_cycle_prompt: "sensitive prompt",
+      prompt_context: { secret: "sensitive context" },
+      prompt_retention_purged: true,
+    },
+    plan_revisions: [],
+    belief_revisions: [],
+  });
+
+  assert.doesNotMatch(rendered, /sensitive (prompt|context)/);
+  assert.match(rendered, /Payload unavailable after retention cleanup\./);
 });

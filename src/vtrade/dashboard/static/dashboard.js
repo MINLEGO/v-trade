@@ -413,7 +413,10 @@ function renderAgents() {
 
 function badge(value) { return element("span", `badge ${statusClass(value)}`, text(value)); }
 
-function auditText(value, unavailable = "Not recorded for this cycle.") {
+const RETENTION_UNAVAILABLE = "Payload unavailable after retention cleanup.";
+
+function auditText(value, unavailable = "Not recorded for this cycle.", retentionPurged = false) {
+  if (retentionPurged) return { content: RETENTION_UNAVAILABLE, unavailable: true };
   if (value === undefined || value === null || value === "") return { content: unavailable, unavailable: true };
   if (typeof value === "object") return { content: JSON.stringify(value, null, 2), unavailable: false };
   return { content: String(value), unavailable: false };
@@ -511,13 +514,13 @@ function renderCycleDetail(raw) {
 function cycleContext(detail) {
   const panel = element("section", "panel context-card"); panel.append(element("h3", "", "Cycle context"));
   const metadata = first(detail.metadata, {});
-  const prompt = auditText(metadata.rendered_cycle_prompt, "The rendered prompt is unavailable.");
+  const prompt = auditText(metadata.rendered_cycle_prompt, "The rendered prompt is unavailable.", metadata.prompt_retention_purged);
   const promptDetails = document.createElement("details");
   promptDetails.append(
     element("summary", "", "Rendered prompt"),
     element("pre", prompt.unavailable ? "code-block retention-note" : "code-block", prompt.content),
   );
-  const context = auditText(metadata.prompt_context, "The initial prompt context is unavailable.");
+  const context = auditText(metadata.prompt_context, "The initial prompt context is unavailable.", metadata.prompt_retention_purged);
   const contextDetails = document.createElement("details");
   contextDetails.append(
     element("summary", "", "Initial prompt context"),
@@ -568,14 +571,23 @@ function timelineEntry(event) {
   const kind = String(first(event.kind, event.type, event.event_type, "reasoning")).toLowerCase(); const classifications = `${kind} ${statusClass(first(event.status, kind))}`; const entry = element("li", `timeline-entry ${classifications}`);
   const header = document.createElement("header"); const title = first(event.title, event.tool_name, event.name, kind.replace(/[_-]/g, " ")); header.append(element("h3", "", title), element("time", "", date(first(event.occurred_at, event.at, event.created_at, event.started_at)))); entry.append(header);
   const body = first(event.reasoning, event.content, event.summary, event.message, event.result_summary, event.decision, event.trade_summary);
-  if (body !== undefined) entry.append(element("p", "", body));
+  if (body !== undefined) {
+    const audit = auditText(body, RETENTION_UNAVAILABLE, event.retention_purged);
+    entry.append(element("p", audit.unavailable ? "retention-note" : "", audit.content));
+  }
   const details = [];
   if (event.arguments || event.input) details.push(["Tool input", first(event.arguments, event.input)]);
   if (event.result || event.output || event.response) details.push(["Tool result", first(event.result, event.output, event.response)]);
   if (event.query || event.sources || event.results) details.push(["Research detail", { query: event.query, sources: first(event.sources, event.results) }]);
   if (event.trade || event.order || event.fill) details.push(["Execution detail", first(event.trade, event.order, event.fill)]);
   if (event.cost_micros || event.tokens) details.push(["Model usage", { tokens: event.tokens, input_tokens: event.input_tokens, output_tokens: event.output_tokens, cost_micros: event.cost_micros }]);
-  details.forEach(([label, payload]) => { const detail = document.createElement("details"); detail.append(element("summary", "", label), element("pre", "code-block", typeof payload === "string" ? payload : JSON.stringify(payload, null, 2))); entry.append(detail); });
+  details.forEach(([label, payload]) => {
+    const detail = document.createElement("details");
+    const audit = auditText(payload, RETENTION_UNAVAILABLE, event.retention_purged);
+    detail.append(element("summary", "", label), element("pre", audit.unavailable ? "code-block retention-note" : "code-block", audit.content));
+    entry.append(detail);
+  });
+  if (event.retention_purged && body === undefined && !details.length) entry.append(element("p", "retention-note", RETENTION_UNAVAILABLE));
   return entry;
 }
 
