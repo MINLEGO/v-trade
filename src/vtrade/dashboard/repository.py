@@ -11,7 +11,8 @@ from enum import StrEnum
 from typing import Protocol, cast
 
 from vtrade.dashboard.policy import (
-    FRESHNESS_MAX_AGE_SECONDS,
+    ACTIVE_EXPERIMENT_DEFINITION_SQL,
+    FRESHNESS_MAX_AGE_SQL,
     POSITION_VALUATION_MAX_AGE_SQL,
 )
 from vtrade.dashboard.service import build_cycle_diagnostics
@@ -415,16 +416,9 @@ SELECT al.id, al.run_id, al.agent_id, al.severity, al.code, al.details,
 """
 
 _FRESHNESS = f"""
-SELECT source, last_observed_at,
-       CASE WHEN last_observed_at IS NULL THEN NULL
-            ELSE extract(epoch FROM (now() - last_observed_at))::bigint END AS age_seconds,
-       record_count,
-       CASE WHEN last_observed_at IS NULL THEN 'missing'
-            WHEN last_observed_at < now() - make_interval(secs => {FRESHNESS_MAX_AGE_SECONDS})
-                THEN 'stale'
-            ELSE 'fresh' END AS status,
-       {FRESHNESS_MAX_AGE_SECONDS} AS freshness_max_age_seconds
-  FROM (
+WITH active_definition AS (
+    {ACTIVE_EXPERIMENT_DEFINITION_SQL}
+), observations AS (
       SELECT 'market' AS source, max(observed_at) AS last_observed_at,
              count(*) AS record_count FROM markets
       UNION ALL
@@ -433,7 +427,22 @@ SELECT source, last_observed_at,
       SELECT 'resolution', max(observed_at), count(*) FROM resolutions
       UNION ALL
       SELECT 'venue_sync', max(observed_at), count(*) FROM venue_sync_pages
-  ) observations
+)
+SELECT source, last_observed_at,
+       CASE WHEN last_observed_at IS NULL THEN NULL
+            ELSE extract(epoch FROM (now() - last_observed_at))::bigint END AS age_seconds,
+       record_count,
+       CASE WHEN last_observed_at IS NULL THEN 'missing'
+            WHEN last_observed_at < now()
+                 - make_interval(secs => freshness_policy.max_age_seconds)
+                THEN 'stale'
+            ELSE 'fresh' END AS status,
+       freshness_policy.max_age_seconds AS freshness_max_age_seconds
+  FROM observations
+  LEFT JOIN active_definition ON true
+ CROSS JOIN LATERAL (
+      SELECT {FRESHNESS_MAX_AGE_SQL} AS max_age_seconds
+  ) freshness_policy
  ORDER BY source
 """
 

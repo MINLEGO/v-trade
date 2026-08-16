@@ -8,8 +8,12 @@ from fastapi.testclient import TestClient
 
 from vtrade.api import AdminSettings, create_app
 from vtrade.config import load_experiment_config
-from vtrade.dashboard.policy import FRESHNESS_MAX_AGE_SECONDS, position_valuation_max_age_seconds
+from vtrade.dashboard.policy import (
+    freshness_max_age_seconds,
+    position_valuation_max_age_seconds,
+)
 from vtrade.dashboard.repository import (
+    _FRESHNESS,
     DashboardFilters,
     DashboardPage,
     DashboardWindow,
@@ -219,10 +223,25 @@ class TestDashboardWindow:
         historical = load_experiment_config(
             "config/experiments/predictionarena-polymarket-v1.json"
         ).raw
-        assert active["execution"]["maximum_order_book_age_seconds"] == FRESHNESS_MAX_AGE_SECONDS
+        assert (
+            active["execution"]["maximum_order_book_age_seconds"]
+            == freshness_max_age_seconds(active)
+        )
         assert position_valuation_max_age_seconds(active) == 1800
         assert position_valuation_max_age_seconds(historical) == 300
         assert position_valuation_max_age_seconds({}) == 300
+
+    def test_freshness_query_reads_active_order_book_age_policy(self) -> None:
+        assert "experiment_definitions" in _FRESHNESS
+        assert "experiment_runs" in _FRESHNESS
+        assert "maximum_order_book_age_seconds" in _FRESHNESS
+        policy = {
+            "execution": {"maximum_order_book_age_seconds": 42},
+            "limits": {"maximum_archived_bid_age_seconds": 1800},
+            "owner_decisions": {"no_bid_valuation": {"maximum_age_seconds": 1800}},
+        }
+        assert freshness_max_age_seconds(policy) == 42
+        assert freshness_max_age_seconds({"limits": {"maximum_archived_bid_age_seconds": 17}}) == 17
 
 
 class TestDashboardRepository:
