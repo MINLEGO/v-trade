@@ -461,12 +461,15 @@ class ProductionToolRegistryTests(unittest.TestCase):
             {"token_id": "token", "side": "BUY", "amount": 10, "conviction": 0.7}
         )
         self.assertEqual(output["status"], "pending_broker_validation")
+        self.assertEqual(set(output), {"intent_id", "status"})
+        self.assertNotIn("reserved_cost_basis_micros", output)
         insert = next(
             query for query, _params in cursor.queries if "INSERT INTO order_intents" in query
         )
         self.assertIn("pending_broker_validation", insert)
         self.assertIn("amount_micros, shares", insert)
         self.assertFalse(any("INSERT INTO orders" in query for query, _ in cursor.queries))
+        self.assertFalse(any("pending_orders" in query for query, _ in cursor.queries))
 
     def test_live_required_order_never_reads_the_frozen_order_book(self) -> None:
         cursor = _Cursor()

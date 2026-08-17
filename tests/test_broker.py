@@ -385,16 +385,27 @@ class BrokerScenarioTests(unittest.TestCase):
         position = PositionState(
             "market-1",
             "outcome-yes",
-            Decimal(1490),
+            Decimal(1400),
             Decimal(1),
-            MicroDollars(1_490_000_000),
+            MicroDollars(1_400_000_000),
         )
         portfolio = PortfolioState(
-            "agent-1", MicroDollars(8_510_000_000), positions=(position,)
+            "agent-1",
+            MicroDollars(8_600_000_000),
+            positions=(position,),
+            pending_orders=(
+                PendingOrder(
+                    "pending-buy",
+                    "market-1",
+                    "outcome-yes",
+                    Side.BUY,
+                    reserved_cost_basis_micros=MicroDollars(100_000_000),
+                ),
+            ),
         )
         snapshot = book(bids=(("0.99", "100"),), asks=(("1.00", "100"),))
         result = self.place(
-            order(shares="20"),
+            order(shares="50"),
             snapshot=snapshot,
             portfolio=portfolio,
             bids={"outcome-yes": archived_bid("1")},

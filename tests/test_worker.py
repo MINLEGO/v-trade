@@ -17,6 +17,7 @@ from vtrade.broker import (
     LiquidityTimeInForce,
     PaperOrder,
     PaperPolicy,
+    PendingOrder,
     PortfolioState,
     PredictionArenaPaperBroker,
 )
@@ -210,6 +211,73 @@ class PromptContextTests(unittest.TestCase):
         position = summary["attention_positions"][0]
         self.assertEqual(position["liquidation_value_micros"], 6_000_000)
         self.assertEqual(position["remaining_capacity_micros"], 10_900_000)
+
+    def test_prompt_capacity_includes_buy_reservations_and_pending_only_markets(self) -> None:
+        cursor = _PromptCursor(
+            account_row=(100_000_000, 3, 100_000_000, 100_000),
+            position_rows=[self._position_row(bid="0.60")],
+        )
+        pending_orders = (
+            PendingOrder(
+                "pending-same-1",
+                "market-1",
+                "outcome-1",
+                Side.BUY,
+                reserved_cost_basis_micros=MicroDollars(1_000_000),
+            ),
+            PendingOrder(
+                "pending-same-2",
+                "market-1",
+                "outcome-1",
+                Side.BUY,
+                reserved_cost_basis_micros=MicroDollars(2_000_000),
+            ),
+            PendingOrder(
+                "pending-other",
+                "market-2",
+                "outcome-2",
+                Side.BUY,
+                reserved_cost_basis_micros=MicroDollars(4_000_000),
+            ),
+            PendingOrder(
+                "pending-sell",
+                "market-1",
+                "outcome-1",
+                Side.SELL,
+                reserved_cost_basis_micros=MicroDollars(99_000_000),
+            ),
+        )
+
+        summary = self._port(cursor)._account_context(
+            uuid.uuid4(),
+            cutoff=NOW,
+            frozen={"order_book_snapshot_ids": [str(uuid.uuid4())]},
+            pending_orders=pending_orders,
+        )
+
+        self.assertEqual(
+            summary["market_capacities"],
+            [
+                {
+                    "market_id": "market-1",
+                    "held_cost_basis_micros": 5_000_000,
+                    "pending_buy_reserved_cost_basis_micros": 3_000_000,
+                    "market_limit_micros": 15_900_000,
+                    "remaining_capacity_micros": 7_900_000,
+                },
+                {
+                    "market_id": "market-2",
+                    "held_cost_basis_micros": 0,
+                    "pending_buy_reserved_cost_basis_micros": 4_000_000,
+                    "market_limit_micros": 15_900_000,
+                    "remaining_capacity_micros": 11_900_000,
+                },
+            ],
+        )
+        self.assertEqual(
+            summary["attention_positions"][0]["remaining_capacity_micros"],
+            7_900_000,
+        )
 
     def test_prompt_account_summary_nulls_derived_values_without_a_bid(self) -> None:
         cursor = _PromptCursor(
@@ -407,6 +475,38 @@ class PromptContextTests(unittest.TestCase):
                 "rejection_code": "unknown",
             },
         )
+
+
+class PortfolioLoadingTests(unittest.TestCase):
+    def test_current_postgres_portfolio_projection_keeps_pending_orders_empty(self) -> None:
+        class Cursor:
+            def __init__(self) -> None:
+                self.rows: list[tuple[object, ...]] = []
+                self.queries: list[str] = []
+
+            def execute(self, query: str, _params=()) -> None:
+                self.queries.append(query)
+                if query.startswith("SELECT COALESCE(sum(lp.amount_micros)"):
+                    self.rows = [(10_000_000, 7)]
+                elif query.startswith("SELECT m.id, p.outcome_id"):
+                    self.rows = []
+                else:
+                    raise AssertionError(query)
+
+            def fetchone(self) -> tuple[object, ...] | None:
+                return self.rows[0] if self.rows else None
+
+            def fetchall(self) -> tuple[tuple[object, ...], ...]:
+                rows, self.rows = self.rows, []
+                return tuple(rows)
+
+        cursor = Cursor()
+        portfolio = _PostgresTradingState("postgresql://unused").portfolio(
+            uuid.uuid4(), cursor=cast(Any, cursor)
+        )
+
+        self.assertEqual(portfolio.pending_orders, ())
+        self.assertFalse(any("order_intents" in query for query in cursor.queries))
 
 
 class WorkerFailClosedTests(unittest.TestCase):

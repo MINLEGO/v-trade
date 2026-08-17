@@ -83,6 +83,7 @@ from vtrade.providers import (
     ProviderTelemetry,
     canonical_redacted_json,
 )
+from vtrade.risk import MarketCapacity, calculate_market_capacity
 from vtrade.runtime import (
     ArtifactRegistration,
     BrokerExecutionResult,
@@ -204,7 +205,14 @@ class ProductionPromptPort:
         cycle_context: JsonObject = {
             "scheduled_at": claim.scheduled_at.isoformat(),
             "data_cutoff": cutoff.isoformat(),
-            "account": self._account_context(claim.agent_id, cutoff=cutoff, frozen=frozen),
+            # The current PostgreSQL graph has no pending-order projection. Keep that
+            # absence explicit until a real reservation lifecycle is introduced.
+            "account": self._account_context(
+                claim.agent_id,
+                cutoff=cutoff,
+                frozen=frozen,
+                pending_orders=(),
+            ),
         }
         messages = PromptBuilder(source.system_prompt).build(
             agent_id=str(claim.agent_id),
@@ -429,6 +437,7 @@ class ProductionPromptPort:
         *,
         cutoff: datetime,
         frozen: Mapping[str, object],
+        pending_orders: Sequence[PendingOrder] = (),
     ) -> JsonObject:
         snapshot_ids = _uuids(frozen, "order_book_snapshot_ids")
         oldest_bid = cutoff - self._maximum_valuation_bid_age
@@ -474,10 +483,10 @@ class ProductionPromptPort:
         valid_positions = tuple(position for position in positions if self._valid_bid(position))
         nav_complete = len(valid_positions) == len(positions)
         liquidation_by_market: dict[str, int | None] = {}
-        basis_by_market: dict[str, int] = {}
+        held_basis_by_market: dict[str, int] = {}
         for position in positions:
-            basis_by_market[position.market_id] = (
-                basis_by_market.get(position.market_id, 0) + position.cost_basis_micros
+            held_basis_by_market[position.market_id] = (
+                held_basis_by_market.get(position.market_id, 0) + position.cost_basis_micros
             )
             value = self._liquidation_value(position) if self._valid_bid(position) else None
             previous = liquidation_by_market.get(position.market_id, 0)
@@ -500,6 +509,27 @@ class ProductionPromptPort:
             if total_liquidation is not None
             else None
         )
+        pending_basis_by_market: dict[str, int] = {}
+        for pending in pending_orders:
+            if pending.side is Side.BUY:
+                pending_basis_by_market[pending.market_id] = (
+                    pending_basis_by_market.get(pending.market_id, 0)
+                    + int(pending.reserved_cost_basis_micros)
+                )
+        market_ids = sorted(set(held_basis_by_market) | set(pending_basis_by_market))
+        capacity_by_market: dict[str, MarketCapacity | None] = {}
+        for market_id in market_ids:
+            if nav_micros is None:
+                capacity_by_market[market_id] = None
+            else:
+                capacity_by_market[market_id] = calculate_market_capacity(
+                    nav_micros,
+                    self._maximum_market_cost_basis_fraction,
+                    held_cost_basis_micros=held_basis_by_market.get(market_id, 0),
+                    pending_buy_reserved_cost_basis_micros=pending_basis_by_market.get(
+                        market_id, 0
+                    ),
+                )
         market_order = sorted(
             liquidation_by_market.items(),
             key=lambda item: (
@@ -515,18 +545,35 @@ class ProductionPromptPort:
                 position,
                 cutoff=cutoff,
                 nav_micros=nav_micros,
-                market_basis_micros=basis_by_market[position.market_id],
-                market_limit_micros=(
-                    self._market_limit(nav_micros, basis_by_market[position.market_id])
-                    if nav_micros is not None
-                    else None
+                market_basis_micros=(
+                    held_basis_by_market[position.market_id]
+                    + pending_basis_by_market.get(position.market_id, 0)
                 ),
+                market_capacity=capacity_by_market[position.market_id],
             )
             for position in positions
         ]
         position_info.sort(key=lambda item: self._attention_key(item, cutoff=cutoff))
         attention = position_info[:15]
         omitted = position_info[15:]
+        market_capacities: list[JsonObject] = []
+        for market_id in market_ids:
+            capacity = capacity_by_market[market_id]
+            market_capacities.append(
+                {
+                    "market_id": market_id,
+                    "held_cost_basis_micros": held_basis_by_market.get(market_id, 0),
+                    "pending_buy_reserved_cost_basis_micros": pending_basis_by_market.get(
+                        market_id, 0
+                    ),
+                    "market_limit_micros": (
+                        int(capacity.market_limit_micros) if capacity is not None else None
+                    ),
+                    "remaining_capacity_micros": (
+                        int(capacity.remaining_capacity_micros) if capacity is not None else None
+                    ),
+                }
+            )
         return {
             "cash_micros": cash_micros,
             "portfolio_version": portfolio_version,
@@ -541,6 +588,7 @@ class ProductionPromptPort:
             ),
             "entry_fees_micros": entry_fees_micros,
             "concentration": concentration,
+            "market_capacities": market_capacities,
             "attention_positions": attention,
             "other_positions": self._aggregate_positions(omitted),
         }
@@ -585,16 +633,6 @@ class ProductionPromptPort:
             )
         )
 
-    def _market_limit(self, nav_micros: int | None, market_basis_micros: int) -> int | None:
-        if nav_micros is None:
-            return None
-        limit = int(
-            (Decimal(nav_micros) * self._maximum_market_cost_basis_fraction).to_integral_value(
-                rounding=ROUND_HALF_UP
-            )
-        )
-        return max(0, limit - market_basis_micros)
-
     @staticmethod
     def _ratio(numerator: int, denominator: int | None) -> str | None:
         if denominator is None or denominator <= 0:
@@ -632,7 +670,7 @@ class ProductionPromptPort:
         cutoff: datetime,
         nav_micros: int | None,
         market_basis_micros: int,
-        market_limit_micros: int | None,
+        market_capacity: MarketCapacity | None,
     ) -> JsonObject:
         valid = self._valid_bid(position)
         liquidation = self._liquidation_value(position) if valid else None
@@ -664,7 +702,11 @@ class ProductionPromptPort:
             else None,
             "market_cost_basis_micros": market_basis_micros,
             "market_exposure": self._ratio(market_basis_micros, nav_micros),
-            "remaining_capacity_micros": market_limit_micros,
+            "remaining_capacity_micros": (
+                int(market_capacity.remaining_capacity_micros)
+                if market_capacity is not None
+                else None
+            ),
             "closes_at": position.closes_at.isoformat() if position.closes_at else None,
             "hours_to_close": hours_to_close,
         }
@@ -1783,8 +1825,8 @@ class _PostgresTradingState:
                 )
                 for row in positions
             ),
-            (),
-            int(str(account[1])),
+            pending_orders=(),
+            version=int(str(account[1])),
         )
 
     def executable_bids(

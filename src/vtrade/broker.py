@@ -22,6 +22,7 @@ from vtrade.liquidity import (
     VirtualLiquidityMetrics,
     effective_liquidity_book,
 )
+from vtrade.risk import calculate_market_capacity
 
 _MICROS = Decimal(1_000_000)
 _FEE_QUANTUM = Decimal("0.00001")
@@ -241,7 +242,9 @@ class PortfolioState:
             total += int(_money_micros(position.shares * bid.price))
         return MicroDollars(total)
 
-    def market_cost_basis_micros(self, market_id: str) -> MicroDollars:
+    def market_cost_basis_components_micros(
+        self, market_id: str
+    ) -> tuple[MicroDollars, MicroDollars]:
         held = sum(
             int(position.cost_basis_micros)
             for position in self.positions
@@ -252,7 +255,11 @@ class PortfolioState:
             for order in self.pending_orders
             if order.market_id == market_id and order.side is Side.BUY
         )
-        return MicroDollars(held + pending)
+        return MicroDollars(held), MicroDollars(pending)
+
+    def market_cost_basis_micros(self, market_id: str) -> MicroDollars:
+        held, pending = self.market_cost_basis_components_micros(market_id)
+        return MicroDollars(int(held) + int(pending))
 
     @property
     def available_cash_micros(self) -> MicroDollars:
@@ -818,10 +825,14 @@ class PredictionArenaPaperBroker:
                 if live_context:
                     return RejectionCode.NO_BID_VALUATION
                 raise
-            maximum_basis = Decimal(account_value) * self.maximum_market_cost_basis_fraction
-            cap = int(maximum_basis.to_integral_value(rounding=ROUND_HALF_UP))
-            existing = int(portfolio.market_cost_basis_micros(market.id))
-            if existing + int(gross) > cap:
+            held_basis, pending_basis = portfolio.market_cost_basis_components_micros(market.id)
+            capacity = calculate_market_capacity(
+                account_value,
+                self.maximum_market_cost_basis_fraction,
+                held_cost_basis_micros=int(held_basis),
+                pending_buy_reserved_cost_basis_micros=int(pending_basis),
+            )
+            if int(gross) > int(capacity.remaining_capacity_micros):
                 return RejectionCode.CONCENTRATION_LIMIT
         elif filled_shares > portfolio.available_shares(order.outcome_id):
             return RejectionCode.INSUFFICIENT_SHARES
