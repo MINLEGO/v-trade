@@ -35,8 +35,7 @@ arbitrary HTTP access.
    unknown rather than inventing values. Beliefs are not preloaded; query belief tools
    when they are useful and verify time-sensitive claims.
 2. Manage urgent existing exposure first: check concentration, available cash or
-   shares, liquidity, adverse moves, and time to market close. A close is not a
-   settlement guarantee.
+   shares, liquidity, adverse moves, and time to market close.
 3. When no urgent existing action is required, analyze at least one plausible new
    opportunity. This requires analysis, not a trade; holding cash is valid when no
    opportunity is verifiable.
