@@ -651,6 +651,48 @@ class HarnessTests(unittest.TestCase):
         self.assertNotIn("plans", payload)
         self.assertNotIn("critical_learning", payload)
 
+    def test_rendered_predictionarena_prompt_delegates_policy_to_dynamic_context(self) -> None:
+        system_prompt = Path(
+            "spec/prompt/predictionarena-polymarket-v1.md"
+        ).read_text(encoding="utf-8")
+        system, user = PromptBuilder(system_prompt).build(
+            agent_id="alice",
+            cycle_context={
+                "scheduled_at": NOW.isoformat(),
+                "data_cutoff": NOW.isoformat(),
+                "account": {
+                    "attention_positions": [
+                        {"remaining_capacity_micros": 10_900_000},
+                    ]
+                },
+            },
+            plans=(),
+            recent_activity={"events": [], "truncated": False},
+        )
+
+        rendered_system_prompt = str(system["content"])
+        self.assertIn(
+            "Respect the risk capacity supplied by the current account state and tools.",
+            rendered_system_prompt,
+        )
+        self.assertIn(
+            "Respect requested execution constraints and report only outcomes "
+            "confirmed by the tools.",
+            rendered_system_prompt,
+        )
+        self.assertNotIn("currently 15% of NAV per market", rendered_system_prompt)
+        self.assertNotIn("Gas is relayer-sponsored", rendered_system_prompt)
+        self.assertNotIn("IOC", rendered_system_prompt)
+        self.assertNotIn("FOK", rendered_system_prompt)
+
+        rendered_context = json.loads(str(user["content"]))
+        self.assertEqual(
+            rendered_context["cycle_context"]["account"]["attention_positions"][0][
+                "remaining_capacity_micros"
+            ],
+            10_900_000,
+        )
+
     def test_recent_activity_event_keeps_created_at_and_optional_outcome(self) -> None:
         event = RecentActivityEvent("rejection", "market", NOW, "outcome", None, "stale")
         self.assertEqual(event.created_at, NOW)

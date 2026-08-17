@@ -158,7 +158,7 @@ class SpecificationTests(unittest.TestCase):
             "recent activity",
             "YES/NO",
             "expected value",
-            "IOC",
+            "execution constraints",
             "unrelated theses",
         )
         for stage in stages:

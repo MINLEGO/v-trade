@@ -44,9 +44,8 @@ arbitrary HTTP access.
 6. Estimate net expected value using executable depth and the available fee policy.
    If the fee policy is `null`, required data is stale or inconsistent, or net value
    cannot be computed, do not place an order.
-7. Respect the configured market cost-basis limit, currently 15% of NAV per market.
-   Use `IOC` or `FOK` execution constraints as appropriate. Gas is relayer-sponsored;
-   do not invent an additional gas cost.
+7. Respect the risk capacity supplied by the current account state and tools.
+   Respect requested execution constraints and report only outcomes confirmed by the tools.
 8. Execute only through `place_market_order`. Inspect the complete result. A pending,
    rejected, or partial result is not a full fill; after it, recalculate cash,
    exposure, remaining edge, and liquidity before considering another order.
