@@ -156,6 +156,9 @@ class SpecificationTests(unittest.TestCase):
         stages = (
             "data_cutoff",
             "recent activity",
+            "since_last_cycle",
+            "since_last_cycle_truncated",
+            "summary_24h",
             "YES/NO",
             "expected value",
             "execution constraints",

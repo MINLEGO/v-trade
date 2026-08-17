@@ -617,7 +617,15 @@ class HarnessTests(unittest.TestCase):
                 agent_id="alice",
                 cycle_context={},
                 plans=(plan,),
-                recent_activity={"events": [], "truncated": False},
+                recent_activity={
+                    "since_last_cycle": [],
+                    "since_last_cycle_truncated": False,
+                    "summary_24h": {
+                        "settlements": 0,
+                        "settlement_pnl_micros": 0,
+                        "rejections": {},
+                    },
+                },
             )
 
     def test_prompt_builder_uses_named_plans_and_excludes_beliefs_and_audit_ids(self) -> None:
@@ -640,7 +648,15 @@ class HarnessTests(unittest.TestCase):
                 "account": {"cash_micros": 10},
             },
             plans=plans,
-            recent_activity={"events": [], "truncated": False},
+            recent_activity={
+                "since_last_cycle": [],
+                "since_last_cycle_truncated": False,
+                "summary_24h": {
+                    "settlements": 0,
+                    "settlement_pnl_micros": 0,
+                    "rejections": {},
+                },
+            },
         )
         payload = json.loads(str(user["content"]))
         self.assertEqual(payload["long_term_plan"]["content"], "durable")
@@ -650,6 +666,10 @@ class HarnessTests(unittest.TestCase):
         self.assertNotIn("beliefs", payload)
         self.assertNotIn("plans", payload)
         self.assertNotIn("critical_learning", payload)
+        self.assertEqual(
+            set(payload["recent_activity"]),
+            {"since_last_cycle", "since_last_cycle_truncated", "summary_24h"},
+        )
 
     def test_rendered_predictionarena_prompt_delegates_policy_to_dynamic_context(self) -> None:
         system_prompt = Path(
@@ -667,7 +687,15 @@ class HarnessTests(unittest.TestCase):
                 },
             },
             plans=(),
-            recent_activity={"events": [], "truncated": False},
+            recent_activity={
+                "since_last_cycle": [],
+                "since_last_cycle_truncated": False,
+                "summary_24h": {
+                    "settlements": 0,
+                    "settlement_pnl_micros": 0,
+                    "rejections": {},
+                },
+            },
         )
 
         rendered_system_prompt = str(system["content"])
@@ -693,9 +721,9 @@ class HarnessTests(unittest.TestCase):
             10_900_000,
         )
 
-    def test_recent_activity_event_keeps_created_at_and_optional_outcome(self) -> None:
+    def test_recent_activity_event_keeps_occurred_at_and_optional_outcome(self) -> None:
         event = RecentActivityEvent("rejection", "market", NOW, "outcome", None, "stale")
-        self.assertEqual(event.created_at, NOW)
+        self.assertEqual(event.occurred_at, NOW)
         self.assertEqual(event.outcome_id, "outcome")
 
     def test_plan_records_are_private_in_bound_view(self) -> None:

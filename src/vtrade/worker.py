@@ -160,6 +160,8 @@ class _PromptPosition:
 class ProductionPromptPort:
     """Materialize and persist the private, immutable per-cycle prompt context."""
 
+    _RECENT_ACTIVITY_LIMIT = 25
+
     def __init__(
         self,
         database_url: str,
@@ -194,7 +196,11 @@ class ProductionPromptPort:
                 actor_id=claim.agent_id, target_agent_id=claim.agent_id
             )
         )
-        recent_activity = self._recent_activity(claim.agent_id, cutoff)
+        recent_activity = self._recent_activity(
+            claim.agent_id,
+            cutoff,
+            current_cycle_id=claim.cycle_id,
+        )
         cycle_context: JsonObject = {
             "scheduled_at": claim.scheduled_at.isoformat(),
             "data_cutoff": cutoff.isoformat(),
@@ -280,39 +286,91 @@ class ProductionPromptPort:
         config["slug"] = str(row[2])
         return _PromptSource(uuid.UUID(str(row[0])), str(row[1]), config)
 
-    def _recent_activity(self, agent_id: uuid.UUID, cutoff: datetime) -> JsonObject:
-        oldest = cutoff - timedelta(hours=24)
+    def _recent_activity(
+        self,
+        agent_id: uuid.UUID,
+        cutoff: datetime,
+        *,
+        current_cycle_id: uuid.UUID | None = None,
+    ) -> JsonObject:
+        cutoff = _aware(cutoff)
+        summary_oldest = cutoff - timedelta(hours=24)
+        delta_oldest = summary_oldest
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
+            if current_cycle_id is not None:
+                cursor.execute(
+                    "SELECT previous.data_cutoff "
+                    "FROM agent_cycles current_cycle "
+                    "JOIN agent_cycles previous "
+                    "ON previous.agent_id = current_cycle.agent_id "
+                    "AND previous.scheduled_at < current_cycle.scheduled_at "
+                    "JOIN cycle_contexts previous_context "
+                    "ON previous_context.agent_cycle_id = previous.id "
+                    "WHERE current_cycle.id = %s AND current_cycle.agent_id = %s "
+                    "AND previous.data_cutoff IS NOT NULL "
+                    "ORDER BY previous.scheduled_at DESC, previous.id DESC LIMIT 1",
+                    (current_cycle_id, agent_id),
+                )
+                previous = cursor.fetchone()
+                if previous is not None and previous[0] is not None:
+                    delta_oldest = _aware(cast(datetime, previous[0]))
+
             cursor.execute(
                 "SELECT 'settlement', m.id::text, p.outcome_id::text, "
-                "s.realized_pnl_micros, s.settled_at, '' "
+                "s.realized_pnl_micros, s.settled_at, '', s.id::text "
                 "FROM settlements s JOIN positions p ON p.id = s.position_id "
                 "JOIN outcomes o ON o.id = p.outcome_id "
                 "JOIN markets m ON m.id = o.market_id "
                 "WHERE s.agent_id = %s AND s.settled_at > %s AND s.settled_at <= %s "
-                "ORDER BY s.settled_at DESC LIMIT 26",
-                (agent_id, oldest, cutoff),
+                "ORDER BY s.settled_at DESC, s.id DESC LIMIT %s",
+                (agent_id, delta_oldest, cutoff, self._RECENT_ACTIVITY_LIMIT + 1),
             )
             rows = list(cursor.fetchall())
             cursor.execute(
                 "SELECT 'rejection', oi.market_id::text, oi.outcome_id::text, "
-                "0, o.created_at, COALESCE(o.rejection_code, '') "
+                "0, COALESCE(o.rejected_at, o.created_at), "
+                "COALESCE(NULLIF(BTRIM(o.rejection_code), ''), 'unknown'), o.id::text "
                 "FROM orders o JOIN order_intents oi ON oi.id = o.intent_id "
                 "JOIN agent_cycles ac ON ac.id = oi.agent_cycle_id "
                 "WHERE ac.agent_id = %s AND o.status = 'rejected' "
-                "AND o.created_at > %s AND o.created_at <= %s "
-                "ORDER BY o.created_at DESC LIMIT 26",
-                (agent_id, oldest, cutoff),
+                "AND COALESCE(o.rejected_at, o.created_at) > %s "
+                "AND COALESCE(o.rejected_at, o.created_at) <= %s "
+                "ORDER BY COALESCE(o.rejected_at, o.created_at) DESC, o.id DESC LIMIT %s",
+                (agent_id, delta_oldest, cutoff, self._RECENT_ACTIVITY_LIMIT + 1),
             )
             rows.extend(cursor.fetchall())
+            cursor.execute(
+                "SELECT count(*), COALESCE(sum(s.realized_pnl_micros), 0) "
+                "FROM settlements s "
+                "WHERE s.agent_id = %s AND s.settled_at > %s AND s.settled_at <= %s",
+                (agent_id, summary_oldest, cutoff),
+            )
+            settlement_summary = cursor.fetchone()
+            cursor.execute(
+                "SELECT COALESCE(NULLIF(BTRIM(o.rejection_code), ''), 'unknown'), count(*) "
+                "FROM orders o JOIN order_intents oi ON oi.id = o.intent_id "
+                "JOIN agent_cycles ac ON ac.id = oi.agent_cycle_id "
+                "WHERE ac.agent_id = %s AND o.status = 'rejected' "
+                "AND COALESCE(o.rejected_at, o.created_at) > %s "
+                "AND COALESCE(o.rejected_at, o.created_at) <= %s "
+                "GROUP BY COALESCE(NULLIF(BTRIM(o.rejection_code), ''), 'unknown') "
+                "ORDER BY COALESCE(NULLIF(BTRIM(o.rejection_code), ''), 'unknown')",
+                (agent_id, summary_oldest, cutoff),
+            )
+            rejection_summary_rows = cursor.fetchall()
         events = tuple(
             RecentActivityEvent(
                 kind=str(row[0]),
                 market_id=str(row[1]),
                 outcome_id=str(row[2]) if row[2] is not None else None,
                 pnl_micros=int(str(row[3])) if row[0] == "settlement" else None,
-                created_at=_aware(cast(datetime, row[4])),
-                detail=str(row[5]),
+                occurred_at=_aware(cast(datetime, row[4])),
+                detail=(
+                    _canonical_rejection_code(row[5])
+                    if row[0] == "rejection"
+                    else ""
+                ),
+                stable_id=str(row[6]) if len(row) > 6 else "",
             )
             for row in rows
         )
@@ -320,7 +378,8 @@ class ProductionPromptPort:
             sorted(
                 events,
                 key=lambda item: (
-                    item.created_at,
+                    item.occurred_at,
+                    item.stable_id,
                     item.kind,
                     item.market_id,
                     item.outcome_id or "",
@@ -328,9 +387,26 @@ class ProductionPromptPort:
                 reverse=True,
             )
         )
+        settlement_count = 0
+        settlement_pnl_micros = 0
+        if settlement_summary is not None:
+            settlement_count = int(str(settlement_summary[0]))
+            settlement_pnl_micros = int(str(settlement_summary[1]))
+        rejection_counts: dict[str, int] = {}
+        for row in rejection_summary_rows:
+            code = _canonical_rejection_code(row[0])
+            rejection_counts[code] = rejection_counts.get(code, 0) + int(str(row[1]))
         return {
-            "events": [self._activity_event_payload(event) for event in ordered[:25]],
-            "truncated": len(ordered) > 25,
+            "since_last_cycle": [
+                self._activity_event_payload(event)
+                for event in ordered[: self._RECENT_ACTIVITY_LIMIT]
+            ],
+            "since_last_cycle_truncated": len(ordered) > self._RECENT_ACTIVITY_LIMIT,
+            "summary_24h": {
+                "settlements": settlement_count,
+                "settlement_pnl_micros": settlement_pnl_micros,
+                "rejections": dict(sorted(rejection_counts.items())),
+            },
         }
 
     @staticmethod
@@ -339,12 +415,12 @@ class ProductionPromptPort:
             "type": event.kind,
             "market_id": event.market_id,
             "outcome_id": event.outcome_id,
-            "created_at": event.created_at.isoformat(),
+            "occurred_at": event.occurred_at.isoformat(),
         }
         if event.kind == "settlement":
             payload["realized_pnl_micros"] = event.pnl_micros
         else:
-            payload["rejection_code"] = event.detail
+            payload["rejection_code"] = _canonical_rejection_code(event.detail)
         return payload
 
     def _account_context(
@@ -2590,6 +2666,11 @@ def _cutoff(claim: CycleClaim) -> datetime:
     if claim.data_cutoff is None:
         raise ProductionCompositionUnavailable("cycle cutoff is not finalized")
     return _aware(claim.data_cutoff)
+
+
+def _canonical_rejection_code(value: object) -> str:
+    code = "" if value is None else str(value).strip()
+    return code or "unknown"
 
 
 def _aware(value: datetime) -> datetime:

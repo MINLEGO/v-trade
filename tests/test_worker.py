@@ -22,6 +22,7 @@ from vtrade.broker import (
 )
 from vtrade.config import ConfigurationError
 from vtrade.domain.types import MarketStatus, MicroDollars, Side
+from vtrade.harness import RecentActivityEvent
 from vtrade.providers import ProviderTelemetry
 from vtrade.runtime import (
     ArtifactRegistration,
@@ -93,12 +94,29 @@ class _PromptCursor:
         position_rows: list[tuple[object, ...]],
         settlement_rows: list[tuple[object, ...]] | None = None,
         rejection_rows: list[tuple[object, ...]] | None = None,
+        previous_cutoff: datetime | None = None,
+        settlement_summary: tuple[object, ...] | None = None,
+        rejection_summary_rows: list[tuple[object, ...]] | None = None,
     ) -> None:
         self.account_row = account_row
         self.position_rows = position_rows
         self.settlement_rows = settlement_rows or []
         self.rejection_rows = rejection_rows or []
+        self.previous_cutoff = previous_cutoff
+        self.settlement_summary = settlement_summary or (
+            len(self.settlement_rows),
+            sum(int(str(row[3])) for row in self.settlement_rows),
+        )
+        if rejection_summary_rows is None:
+            counts: dict[str, int] = {}
+            for row in self.rejection_rows:
+                code = "" if row[5] is None else str(row[5]).strip()
+                code = code or "unknown"
+                counts[code] = counts.get(code, 0) + 1
+            rejection_summary_rows = [(code, count) for code, count in counts.items()]
+        self.rejection_summary_rows = rejection_summary_rows
         self.rows: list[tuple[object, ...]] = []
+        self.queries: list[tuple[str, tuple[object, ...]]] = []
 
     def __enter__(self):
         return self
@@ -106,15 +124,22 @@ class _PromptCursor:
     def __exit__(self, *_args):
         return None
 
-    def execute(self, query, _params=()):
+    def execute(self, query, params=()):
+        self.queries.append((query, tuple(params)))
         if query.startswith("SELECT COALESCE(sum(lp.amount_micros)"):
             self.rows = [self.account_row]
         elif query.startswith("SELECT m.id::text"):
             self.rows = self.position_rows
+        elif query.startswith("SELECT previous.data_cutoff"):
+            self.rows = [(self.previous_cutoff,)] if self.previous_cutoff is not None else []
         elif query.startswith("SELECT 'settlement'"):
             self.rows = self.settlement_rows
         elif query.startswith("SELECT 'rejection'"):
             self.rows = self.rejection_rows
+        elif query.startswith("SELECT count(*), COALESCE(sum(s.realized_pnl_micros)"):
+            self.rows = [self.settlement_summary]
+        elif query.startswith("SELECT COALESCE(NULLIF(BTRIM(o.rejection_code)"):
+            self.rows = self.rejection_summary_rows
         else:
             raise AssertionError(query)
 
@@ -203,7 +228,7 @@ class PromptContextTests(unittest.TestCase):
         self.assertIsNone(summary["unrealized_pnl_micros"])
         self.assertIsNone(summary["attention_positions"][0]["position_weight"])
 
-    def test_recent_activity_is_merged_newest_first_and_capped(self) -> None:
+    def test_recent_activity_has_delta_and_complete_24_hour_summary(self) -> None:
         settlements = [
             (
                 "settlement",
@@ -212,6 +237,7 @@ class PromptContextTests(unittest.TestCase):
                 index,
                 NOW - timedelta(minutes=index),
                 "",
+                f"settlement-{index:02d}",
             )
             for index in range(13)
         ]
@@ -223,8 +249,128 @@ class PromptContextTests(unittest.TestCase):
                 0,
                 NOW - timedelta(minutes=index + 1),
                 "stale_book",
+                f"rejection-{index:02d}",
             )
             for index in range(13)
+        ]
+        cursor = _PromptCursor(
+            account_row=(100_000_000, 3, 100_000_000, 0),
+            position_rows=[],
+            settlement_rows=settlements,
+            rejection_rows=rejections,
+            settlement_summary=(30, -1_250),
+            rejection_summary_rows=[("stale_book", 26)],
+        )
+
+        activity = self._port(cursor)._recent_activity(uuid.uuid4(), NOW)
+
+        self.assertEqual(len(activity["since_last_cycle"]), 25)
+        self.assertTrue(activity["since_last_cycle_truncated"])
+        self.assertEqual(activity["since_last_cycle"][0]["occurred_at"], NOW.isoformat())
+        self.assertEqual(activity["since_last_cycle"][0]["type"], "settlement")
+        self.assertNotIn("events", activity)
+        self.assertNotIn("truncated", activity)
+        self.assertEqual(
+            activity["summary_24h"],
+            {
+                "settlements": 30,
+                "settlement_pnl_micros": -1_250,
+                "rejections": {"stale_book": 26},
+            },
+        )
+
+    def test_recent_activity_bootstraps_at_24_hours_without_previous_context(self) -> None:
+        cursor = _PromptCursor(
+            account_row=(100_000_000, 3, 100_000_000, 0),
+            position_rows=[],
+        )
+
+        activity = self._port(cursor)._recent_activity(uuid.uuid4(), NOW)
+
+        delta_query = next(query for query in cursor.queries if "SELECT 'settlement'" in query[0])
+        self.assertEqual(delta_query[1][1], NOW - timedelta(hours=24))
+        self.assertEqual(delta_query[1][2], NOW)
+        self.assertFalse(activity["since_last_cycle_truncated"])
+
+    def test_recent_activity_uses_last_exposed_cutoff_and_separate_24_hour_bounds(self) -> None:
+        previous_cutoff = NOW - timedelta(hours=48)
+        cycle_id = uuid.uuid4()
+        cursor = _PromptCursor(
+            account_row=(100_000_000, 3, 100_000_000, 0),
+            position_rows=[],
+            previous_cutoff=previous_cutoff,
+            settlement_summary=(3, -10),
+            rejection_summary_rows=[("", 2), (None, 1), ("stale_book", 4)],
+        )
+
+        activity = self._port(cursor)._recent_activity(
+            uuid.uuid4(),
+            NOW,
+            current_cycle_id=cycle_id,
+        )
+
+        settlement_query = next(
+            query for query in cursor.queries if "SELECT 'settlement'" in query[0]
+        )
+        rejection_query = next(
+            query for query in cursor.queries if "SELECT 'rejection'" in query[0]
+        )
+        settlement_summary_query = next(
+            query for query in cursor.queries if query[0].startswith("SELECT count(*)")
+        )
+        rejection_summary_query = next(
+            query
+            for query in cursor.queries
+            if query[0].startswith("SELECT COALESCE(NULLIF(BTRIM(o.rejection_code)")
+        )
+        self.assertEqual(settlement_query[1][1:3], (previous_cutoff, NOW))
+        self.assertEqual(rejection_query[1][1:3], (previous_cutoff, NOW))
+        self.assertEqual(
+            settlement_summary_query[1][1:3],
+            (NOW - timedelta(hours=24), NOW),
+        )
+        self.assertEqual(
+            rejection_summary_query[1][1:3],
+            (NOW - timedelta(hours=24), NOW),
+        )
+        self.assertIn("settled_at > %s", settlement_query[0])
+        self.assertIn("settled_at <= %s", settlement_query[0])
+        self.assertIn("COALESCE(o.rejected_at, o.created_at) > %s", rejection_query[0])
+        self.assertIn("COALESCE(o.rejected_at, o.created_at) <= %s", rejection_query[0])
+        self.assertEqual(activity["summary_24h"]["rejections"], {"stale_book": 4, "unknown": 3})
+
+    def test_recent_activity_uses_rejection_fallback_and_stable_id_tie_breaking(self) -> None:
+        settlements = [
+            (
+                "settlement",
+                f"market-{index}",
+                f"outcome-{index}",
+                -index,
+                NOW,
+                "",
+                f"settlement-{index:02d}",
+            )
+            for index in range(26)
+        ]
+        rejections = [
+            (
+                "rejection",
+                "market-rejection",
+                "outcome-rejection",
+                0,
+                NOW - timedelta(minutes=1),
+                None,
+                "order-01",
+            ),
+            (
+                "rejection",
+                "market-rejection-2",
+                "outcome-rejection-2",
+                0,
+                NOW - timedelta(minutes=2),
+                "",
+                "order-02",
+            ),
         ]
         cursor = _PromptCursor(
             account_row=(100_000_000, 3, 100_000_000, 0),
@@ -234,11 +380,33 @@ class PromptContextTests(unittest.TestCase):
         )
 
         activity = self._port(cursor)._recent_activity(uuid.uuid4(), NOW)
+        delta = activity["since_last_cycle"]
 
-        self.assertEqual(len(activity["events"]), 25)
-        self.assertTrue(activity["truncated"])
-        self.assertEqual(activity["events"][0]["created_at"], NOW.isoformat())
-        self.assertEqual(activity["events"][0]["type"], "settlement")
+        self.assertEqual(len(delta), 25)
+        self.assertTrue(activity["since_last_cycle_truncated"])
+        self.assertEqual(delta[0]["market_id"], "market-25")
+        self.assertEqual(delta[-1]["market_id"], "market-1")
+        self.assertNotIn("created_at", delta[0])
+        self.assertEqual(
+            ProductionPromptPort._activity_event_payload(
+                RecentActivityEvent(
+                    "rejection",
+                    "market",
+                    NOW,
+                    "outcome",
+                    None,
+                    "",
+                    "order",
+                )
+            ),
+            {
+                "type": "rejection",
+                "market_id": "market",
+                "outcome_id": "outcome",
+                "occurred_at": NOW.isoformat(),
+                "rejection_code": "unknown",
+            },
+        )
 
 
 class WorkerFailClosedTests(unittest.TestCase):

@@ -11,7 +11,8 @@
       frozen-event evidence.
 - [ ] A missing fee policy or unverifiable net expected value blocks an order.
 - [ ] Beliefs remain tool-accessible but are not injected into the initial prompt.
-- [ ] The user context uses named `long_term_plan`, `next_cycle_plan` and bounded recent activity.
+- [ ] The user context uses named `long_term_plan`, `next_cycle_plan`, a bounded
+      `recent_activity.since_last_cycle` delta, and a complete `recent_activity.summary_24h`.
 - [ ] Paper-only internal liquidity controls are absent from agent-facing text.
 - [ ] Only canonical tool names are referenced.
 - [ ] No unresolved `{...}` template placeholder remains after rendering.

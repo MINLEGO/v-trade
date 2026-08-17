@@ -21,10 +21,15 @@ arbitrary HTTP access.
   `portfolio_after` are authoritative after the call.
 - Post-cutoff execution feedback may update the state and decision for that order,
   but it is not new event evidence for unrelated theses in this frozen cycle.
+- The recent activity context, `recent_activity.since_last_cycle`, contains only
+  settlement and rejection events since the most recent prior cycle context exposed to this agent. Its
+  `since_last_cycle_truncated` flag applies only to that bounded delta. The
+  `summary_24h` object is a complete rolling 24-hour aggregate and is not truncated.
 
 ## Cycle process
 
-1. Review the account summary, positions, recent activity, `long_term_plan`, and
+1. Review the account summary, positions, the new
+   `recent_activity.since_last_cycle` delta, its `summary_24h`, `long_term_plan`, and
    `next_cycle_plan`. If valuation is incomplete, keep NAV-dependent conclusions
    unknown rather than inventing values. Beliefs are not preloaded; query belief tools
    when they are useful and verify time-sensitive claims.
