@@ -9,7 +9,12 @@ from typing import Any
 
 import pytest
 
-from vtrade.bootstrap import BootstrapError, PostgresExperimentBootstrap, _parse_timestamp
+from vtrade.bootstrap import (
+    BootstrapError,
+    PostgresExperimentBootstrap,
+    _parse_timestamp,
+    read_prompt_body,
+)
 from vtrade.config import config_hash, load_experiment_config
 
 
@@ -50,7 +55,7 @@ def ready_config(tmp_path: Path) -> tuple[Path, str]:
     raw["status"] = "ready"
     for decision in raw["owner_decisions"].values():
         decision["status"] = "resolved"
-    prompt_body = Path(raw["artifacts"]["prompt"]["path"]).read_text(encoding="utf-8")
+    prompt_body = read_prompt_body(raw["artifacts"]["prompt"]["path"])
     raw["artifacts"]["prompt"]["sha256"] = hashlib.sha256(
         prompt_body.encode("utf-8")
     ).hexdigest()
@@ -58,6 +63,14 @@ def ready_config(tmp_path: Path) -> tuple[Path, str]:
     path.write_text(__import__("json").dumps(raw), encoding="utf-8")
     assert config_hash(raw) == load_experiment_config(path).sha256
     return path, prompt_body
+
+
+def test_read_prompt_body_preserves_frozen_artifact_bytes(tmp_path: Path) -> None:
+    path = tmp_path / "prompt.md"
+    expected = b"first line\r\nsecond line\r\n"
+    path.write_bytes(expected)
+
+    assert read_prompt_body(path).encode("utf-8") == expected
 
 
 def test_register_is_inert_and_inserts_all_frozen_records(tmp_path: Path) -> None:

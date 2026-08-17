@@ -5,12 +5,11 @@ import os
 import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import pytest
 
-from vtrade.bootstrap import PostgresExperimentBootstrap
+from vtrade.bootstrap import PostgresExperimentBootstrap, read_prompt_body
 from vtrade.config import ExperimentConfig, config_hash, load_experiment_config
 
 pytestmark = pytest.mark.skipif(
@@ -31,7 +30,7 @@ def test_real_postgres_bootstrap_is_explicit_and_agent_isolated() -> None:
     suffix = uuid.uuid4().hex
     raw["experiment_version"] = f"bootstrap-integration-{suffix}"
     config = ExperimentConfig(raw, config_hash(raw))
-    prompt = Path(str(raw["artifacts"]["prompt"]["path"])).read_text(encoding="utf-8")
+    prompt = read_prompt_body(str(raw["artifacts"]["prompt"]["path"]))
     now = datetime.now(UTC)
     with psycopg.connect(database_url) as connection:
 

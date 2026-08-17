@@ -427,6 +427,11 @@ def _aware(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
+def read_prompt_body(path: str | Path) -> str:
+    """Read a frozen UTF-8 prompt without translating its line endings."""
+    return Path(path).read_bytes().decode("utf-8")
+
+
 def _parse_timestamp(value: str) -> datetime:
     try:
         return _aware(datetime.fromisoformat(value.replace("Z", "+00:00")))
@@ -473,7 +478,7 @@ def main() -> None:
     service = PostgresExperimentBootstrap(database_url)
     if args.command == "register":
         config = load_experiment_config(args.config)
-        body = Path(args.prompt).read_text(encoding="utf-8")
+        body = read_prompt_body(args.prompt)
         service.register(
             config=config,
             prompt_body=body,

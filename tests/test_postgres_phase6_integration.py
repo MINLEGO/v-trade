@@ -5,11 +5,20 @@ import unittest
 import uuid
 from contextlib import AbstractContextManager, nullcontext
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from vtrade.admin import Page, PostgresAdminRepository
 
 RUN_POSTGRES = os.environ.get("VTRADE_RUN_POSTGRES_INTEGRATION") == "1"
+
+
+def _latest_migration() -> str:
+    migration_dir = Path(__file__).resolve().parents[1] / "migrations"
+    migrations = sorted(migration_dir.glob("[0-9][0-9][0-9][0-9]_*.sql"))
+    if not migrations:
+        raise AssertionError(f"no migration files found in {migration_dir}")
+    return migrations[-1].name
 
 
 @unittest.skipUnless(
@@ -26,12 +35,13 @@ class PhaseSixPostgresIntegrationTests(unittest.TestCase):
 
         marker = uuid.uuid4()
         now = datetime(2099, 1, 1, 12, tzinfo=UTC)
+        latest_migration = _latest_migration()
         connection = psycopg.connect(database_url)
         try:
             with connection.cursor() as cursor:
                 cursor.execute(
                     "SELECT count(*) FROM schema_migrations WHERE version = %s",
-                    ("0006_private_admin.sql",),
+                    (latest_migration,),
                 )
                 self.assertEqual(cursor.fetchone(), (1,))
             ids = self._insert_agent(connection, marker, now)
@@ -41,7 +51,7 @@ class PhaseSixPostgresIntegrationTests(unittest.TestCase):
 
             repository = PostgresAdminRepository(database_url, connect=connect)
             probe = repository.probe()
-            self.assertEqual(probe["latest_migration"], "0006_private_admin.sql")
+            self.assertEqual(probe["latest_migration"], latest_migration)
             repository.overview()
             for view in (
                 "leaderboard",
