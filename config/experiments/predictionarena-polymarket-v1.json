@@ -16,7 +16,7 @@
     },
     "tool_schemas": {
       "path": "spec/tool-schemas-v1-legacy.json",
-      "sha256": "8c0c3bc8c8279d92fffdba5d98d77d12ff1aada320f4a9e104b2f19daeb86776",
+      "sha256": "eb5b24220dcd1437e70222b8c8b9aa1fd597ed6fdd1483c97c90264c33de2498",
       "classification": "inferred"
     }
   },
