@@ -120,6 +120,8 @@ _PAGINATED_DISCOVERY_TOOLS = frozenset(
     }
 )
 
+MAX_PLAN_CONTENT_CHARACTERS = 4_000
+
 
 class ProductionToolRegistry:
     """Exact 28-name registry backed only by frozen DB state and real providers."""
@@ -873,12 +875,17 @@ class ProductionToolRegistry:
     def _create_plan(
         self, plan_type: PlanType, arguments: JsonObject, due_at: datetime | None
     ) -> JsonObject:
+        content = _required_string(
+            arguments,
+            "plan_content",
+            max_length=MAX_PLAN_CONTENT_CHARACTERS,
+        )
         now = self._context.now()
         plan = PlanRecord(
             str(self._mutation_id(f"plan:{plan_type.value}", arguments)),
             str(self._context.claim.agent_id),
             plan_type,
-            _required_string(arguments, "plan_content"),
+            content,
             due_at,
             now,
         )
@@ -1358,9 +1365,17 @@ def _named(row: Sequence[object], names: Sequence[str]) -> JsonObject:
     }
 
 
-def _required_string(arguments: Mapping[str, object], key: str) -> str:
+def _required_string(
+    arguments: Mapping[str, object], key: str, *, max_length: int | None = None
+) -> str:
     value = arguments.get(key)
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str):
+        raise ValueError(f"{key} is required")
+    if max_length is not None and len(value) > max_length:
+        raise ValueError(
+            f"{key} must not exceed {max_length} characters (received: {len(value)})"
+        )
+    if not value.strip():
         raise ValueError(f"{key} is required")
     return value.strip()
 

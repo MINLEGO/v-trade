@@ -36,6 +36,15 @@ class SpecificationTests(unittest.TestCase):
         self.assertEqual(len(names), 27)
         self.assertEqual(len(set(names)), 27)
 
+    def test_plan_tools_limit_content_to_4000_characters(self) -> None:
+        document = json.loads(Path("spec/tool-schemas-v1.json").read_text(encoding="utf-8"))
+        tools = {tool["name"]: tool for tool in document["tools"]}
+        for name in ("create_long_term_plan", "create_next_cycle_plan"):
+            with self.subTest(name=name):
+                content = tools[name]["input_schema"]["properties"]["plan_content"]
+                self.assertEqual(content["minLength"], 1)
+                self.assertEqual(content["maxLength"], 4_000)
+
     def test_active_order_output_keeps_private_liquidity_internal(self) -> None:
         active = json.loads(Path("spec/tool-schemas-v1.json").read_text(encoding="utf-8"))
         legacy = json.loads(

@@ -31,8 +31,8 @@ source establishes them.
 | `search_general_beliefs` | knowledge | cursor, keyword (string or tuple[str]), category, include_inactive, limit | calling agent only; newest-first paginated result |
 | `create_general_belief` | knowledge | belief_content, category, confidence, evidence | calling agent only |
 | `delete_general_belief` | knowledge | belief_id | calling agent only; deactivate, never erase |
-| `create_long_term_plan` | knowledge | plan_content | calling agent only |
-| `create_next_cycle_plan` | knowledge | plan_content, cycle_date | calling agent only |
+| `create_long_term_plan` | knowledge | plan_content (maximum 4000 characters) | calling agent only |
+| `create_next_cycle_plan` | knowledge | plan_content (maximum 4000 characters), cycle_date | calling agent only |
 | `place_market_order` | trading | token_id, side, amount, conviction | calling agent; frozen decision context plus target-market live quote, fee, metadata and depth refresh; deterministic validation |
 
 Trace counts and examples remain in `docs/predictionarena-cycle-analysis.json`; they are

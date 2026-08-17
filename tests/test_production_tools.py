@@ -124,6 +124,7 @@ class _Memory:
         self.beliefs = beliefs
         self.active_beliefs = beliefs if active_beliefs is None else active_beliefs
         self.appended_beliefs = []
+        self.appended_plans = []
 
     def read_beliefs(self, *, actor_id: uuid.UUID, target_agent_id: uuid.UUID):
         assert actor_id == target_agent_id
@@ -133,6 +134,11 @@ class _Memory:
         assert actor_id
         assert cycle_id
         self.appended_beliefs.append(belief)
+
+    def append_plan(self, plan, *, actor_id: uuid.UUID, cycle_id: uuid.UUID):
+        assert actor_id
+        assert cycle_id
+        self.appended_plans.append(plan)
 
 
 class _Exa:
@@ -232,6 +238,34 @@ class ProductionToolRegistryTests(unittest.TestCase):
             for tool in ProductionToolRegistry(_context(_Cursor())).tool_specs()
         }
         self.assertEqual(actual, expected)
+
+    def test_plan_content_limit_is_inclusive_and_rejects_without_persistence(self) -> None:
+        memory = _Memory([])
+        registry = ProductionToolRegistry(_context(_Cursor(), memory=memory))
+        tools = {tool.name: tool for tool in registry.tool_specs()}
+        cases = (
+            ("create_long_term_plan", {}),
+            ("create_next_cycle_plan", {"cycle_date": "2099-01-01"}),
+        )
+
+        for name, extra in cases:
+            with self.subTest(name=name):
+                handler = tools[name].handler
+                accepted = {"plan_content": "x" * 4_000, **extra}
+                output = handler(accepted)
+                self.assertIn("plan_id", output)
+                persisted = len(memory.appended_plans)
+                mutation_sequence = registry._mutation_sequence
+                self.assertEqual(len(memory.appended_plans[-1].content), 4_000)
+
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"plan_content must not exceed 4000 characters \(received: 4001\)",
+                ):
+                    handler({"plan_content": "x" * 4_001, **extra})
+
+                self.assertEqual(len(memory.appended_plans), persisted)
+                self.assertEqual(registry._mutation_sequence, mutation_sequence)
 
     def test_web_search_forwards_all_public_options_to_exa(self) -> None:
         exa = _Exa()

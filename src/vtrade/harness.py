@@ -619,6 +619,16 @@ def _format_validation_error(error: ValidationError) -> str:
             path = str(component)
         else:
             path += f".{component}"
+    if (
+        error.validator == "maxLength"
+        and isinstance(error.validator_value, int)
+        and not isinstance(error.validator_value, bool)
+        and isinstance(error.instance, str)
+    ):
+        return (
+            f"{path or '$'} must not exceed {error.validator_value} characters "
+            f"(received: {len(error.instance)})"
+        )
     return f"{path or '$'}: {error.message}"
 
 

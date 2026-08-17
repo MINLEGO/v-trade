@@ -136,6 +136,64 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(called, 0)
         self.assertFalse(result.tool_calls[0].success)
 
+    def test_max_length_validation_returns_an_explicit_error_without_calling_handler(self) -> None:
+        called = 0
+
+        def create_plan(_arguments):
+            nonlocal called
+            called += 1
+            return {"created": True}
+
+        schema = {
+            "type": "function",
+            "function": {
+                "name": "create_long_term_plan",
+                "parameters": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["plan_content"],
+                    "properties": {
+                        "plan_content": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4_000,
+                        }
+                    },
+                },
+            },
+        }
+        call = {
+            "id": "long-plan-too-long",
+            "function": {
+                "name": "create_long_term_plan",
+                "arguments": json.dumps({"plan_content": "x" * 4_001}),
+            },
+        }
+        gateway = RecordedModelGateway(
+            (
+                response({"role": "assistant", "tool_calls": [call]}),
+                response({"role": "assistant", "content": "done"}),
+            ),
+            self.store,
+        )
+        harness = BoundedToolHarness(
+            gateway,
+            (ToolSpec(schema, create_plan, "knowledge"),),
+            limits(),
+            monotonic=lambda: 0,
+        )
+
+        result = harness.run([], model_config=config())
+
+        self.assertEqual(called, 0)
+        self.assertFalse(result.tool_calls[0].success)
+        self.assertEqual(result.tool_calls[0].output["error"], "ToolValidationError")
+        self.assertEqual(
+            result.tool_calls[0].output["message"],
+            "invalid arguments for create_long_term_plan: "
+            "plan_content must not exceed 4000 characters (received: 4001)",
+        )
+
     def test_schema_valid_input_and_output_are_recorded_unchanged(self) -> None:
         called: list[dict[str, object]] = []
         schema = {
