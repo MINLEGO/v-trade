@@ -198,7 +198,7 @@ class PhaseFourPostgresIntegrationTests(unittest.TestCase):
                 (
                     ids["model"],
                     ids["definition"],
-                    "deepseek/deepseek-v4-flash",
+                    "deepseek/deepseek-v4-flash-0731",
                     ("1" + marker.hex).ljust(64, "0")[:64],
                 ),
             )
@@ -226,7 +226,7 @@ class PhaseFourPostgresIntegrationTests(unittest.TestCase):
         telemetry = ProviderTelemetry(
             provider="openrouter",
             usage_kind="model",
-            route="deepseek/deepseek-v4-flash",
+            route="deepseek/deepseek-v4-flash-0731",
             request_count=1,
             credit_count=Decimal(0),
             prompt_tokens=100,

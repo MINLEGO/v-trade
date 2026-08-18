@@ -207,45 +207,49 @@ class SearchResponse:
     telemetry: ProviderTelemetry
 
 
+_ACTIVE_MODEL_POLICIES: dict[str, tuple[tuple[str, ...] | None, str]] = {
+    "deepseek/deepseek-v4-flash-0731": (("fp8",), "max"),
+    "openai/gpt-5.6-luna": (None, "xhigh"),
+}
+
+
 @dataclass(frozen=True, slots=True)
 class OpenRouterRoute:
     model: str
-    quantizations: tuple[str, ...]
+    quantizations: tuple[str, ...] | None
     reasoning_effort: str
     allow_provider_fallbacks: bool = True
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any]) -> OpenRouterRoute:
         slug = config.get("slug")
+        if not isinstance(slug, str) or slug not in _ACTIVE_MODEL_POLICIES:
+            raise ProviderConfigurationError("model slug is outside the active model set")
+        expected_quantizations, expected_reasoning_effort = _ACTIVE_MODEL_POLICIES[slug]
         quantizations = config.get("allowed_quantizations")
-        if slug not in {
-            "deepseek/deepseek-v4-flash",
-            "xiaomi/mimo-v2.5-pro",
-        }:
-            raise ProviderConfigurationError("model slug is outside the frozen baseline")
-        if not isinstance(quantizations, list) or not all(
-            isinstance(item, str) for item in quantizations
-        ):
-            raise ProviderConfigurationError("allowed quantizations are required")
-        expected = {
-            "deepseek/deepseek-v4-flash": ("fp8",),
-            "xiaomi/mimo-v2.5-pro": ("fp8", "unknown"),
-        }[slug]
-        if tuple(quantizations) != expected:
-            raise ProviderConfigurationError("model quantizations differ from frozen baseline")
+        if expected_quantizations is None:
+            if quantizations is not None:
+                raise ProviderConfigurationError("model quantization policy must be unrestricted")
+        else:
+            if not isinstance(quantizations, list) or not all(
+                isinstance(item, str) for item in quantizations
+            ):
+                raise ProviderConfigurationError("allowed quantizations are required")
+            if tuple(quantizations) != expected_quantizations:
+                raise ProviderConfigurationError("model quantizations differ from active policy")
         if config.get("provider_allowlist") is not None:
-            raise ProviderConfigurationError("baseline must allow all compatible providers")
+            raise ProviderConfigurationError("active policy must allow all compatible providers")
         if config.get("provider_selection") != "all_compatible_sorted_by_price":
-            raise ProviderConfigurationError("baseline providers must be sorted by price")
+            raise ProviderConfigurationError("active providers must be sorted by price")
         if config.get("allow_provider_fallbacks") is not True:
             raise ProviderConfigurationError("same-model provider fallback must be enabled")
         if config.get("cross_model_fallback") is not False:
             raise ProviderConfigurationError("cross-model fallback is forbidden")
-        if config.get("reasoning_effort") != "max":
-            raise ProviderConfigurationError("baseline reasoning effort must be owner-fixed max")
+        if config.get("reasoning_effort") != expected_reasoning_effort:
+            raise ProviderConfigurationError("model reasoning effort differs from active policy")
         if config.get("reasoning_effort_policy") != "owner_fixed":
-            raise ProviderConfigurationError("baseline reasoning effort policy must be owner-fixed")
-        return cls(slug, expected, "max")
+            raise ProviderConfigurationError("active reasoning effort policy must be owner-fixed")
+        return cls(slug, expected_quantizations, expected_reasoning_effort)
 
 
 class OpenRouterModelGateway:
@@ -300,6 +304,14 @@ class OpenRouterModelGateway:
         if assembled_tokens + maximum_output_tokens > maximum_context_tokens:
             raise ProviderConfigurationError("request plus reserved output exceeds model context")
         reservation = self._budget.reserve("openrouter", estimate)
+        provider_preferences: JsonObject = {
+            "sort": "price",
+            "allow_fallbacks": route.allow_provider_fallbacks,
+            "require_parameters": bool(tools),
+            "max_price": maximum_prices,
+        }
+        if route.quantizations is not None:
+            provider_preferences["quantizations"] = list(route.quantizations)
         payload: JsonObject = {
             "model": route.model,
             "messages": list(messages),
@@ -310,13 +322,7 @@ class OpenRouterModelGateway:
             "max_tokens": maximum_output_tokens,
             "reasoning": {"effort": route.reasoning_effort},
             "stream": False,
-            "provider": {
-                "quantizations": list(route.quantizations),
-                "sort": "price",
-                "allow_fallbacks": route.allow_provider_fallbacks,
-                "require_parameters": bool(tools),
-                "max_price": maximum_prices,
-            },
+            "provider": provider_preferences,
         }
         if "models" in payload or "models" in model_config:
             raise ProviderConfigurationError("models[] cross-model fallback is forbidden")

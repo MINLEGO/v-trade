@@ -127,7 +127,7 @@ class PhaseSixPostgresIntegrationTests(unittest.TestCase):
                 (
                     ids["model"],
                     ids["definition"],
-                    "deepseek/deepseek-v4-flash",
+                    "deepseek/deepseek-v4-flash-0731",
                     ("1" + marker.hex).ljust(64, "0")[:64],
                 ),
             )

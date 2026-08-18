@@ -1,17 +1,17 @@
 # Owner decisions
 
 Recorded: 2026-07-18.
+Updated: 2026-08-18 for the active liquidity-aware model routing.
 
 ## Resolved
 
-- DeepSeek model slug: `deepseek/deepseek-v4-flash`.
-- MiMo model slug: `xiaomi/mimo-v2.5-pro`.
+- DeepSeek model slug: `deepseek/deepseek-v4-flash-0731`.
+- GPT model slug: `openai/gpt-5.6-luna`.
 - DeepSeek quantization: `fp8` only.
-- MiMo quantizations: `fp8` and `unknown` (its only published route is accepted even
-  when OpenRouter reports no more precise quantization label).
-- Reasoning effort: explicitly request the owner-fixed maximum effort for both models.
-- Provider routing: allow every compatible provider, sort by price, and permit
-  OpenRouter to fall back between those providers.
+- GPT quantization: unrestricted; omit the OpenRouter quantization filter.
+- Reasoning effort: explicitly request owner-fixed `max` for DeepSeek and `xhigh` for GPT.
+- Provider routing: allow every compatible provider under each model's maximum price,
+  sort by price, and permit OpenRouter to fall back between those providers.
 - Cross-model fallback: forbidden.
 - Prompt, transcript and reasoning retention: six months.
 - Prompt, transcript and reasoning visibility: operator-only.
@@ -28,12 +28,12 @@ Recorded: 2026-07-18.
   8 searches on average conditional on a cycle using search, and 3.5 searches on
   average across all cycles. These are owner-provided empirical expectations and were
   not independently verified by this workstream.
-- OpenRouter request bounds: reserve at most $0.014 (14,000 micro-dollars) for
-  `deepseek/deepseek-v4-flash`, using provider maximum prices of $0.12 prompt and $0.24
-  completion per million tokens with no request fee; reserve at most $0.050 (50,000
-  micro-dollars) for `xiaomi/mimo-v2.5-pro`, using $0.44 prompt and $0.88 completion
-  per million tokens with no request fee. These request reservations round the exact
-  88,000-input/12,000-output upper bounds of $0.01344 and $0.04928 upward.
+- OpenRouter request bounds: reserve at most $0.016 (16,000 micro-dollars) for
+  `deepseek/deepseek-v4-flash-0731`, using provider maximum prices of $0.14 prompt and
+  $0.28 completion per million tokens with no request fee; reserve at most $0.032
+  (32,000 micro-dollars) for `openai/gpt-5.6-luna`, using $0.20 prompt and $1.20
+  completion per million tokens with no request fee. These request reservations round
+  the exact 88,000-input/12,000-output upper bounds of $0.01568 and $0.032 upward.
 - Research request bounds: reserve at most $0.020 (20,000 micro-dollars) for every
   Exa search and $0.008 (8,000 micro-dollars) for every Tavily basic search before the
   provider call.

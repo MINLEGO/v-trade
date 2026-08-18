@@ -22,6 +22,7 @@ from vtrade.providers import (
     BudgetReservation,
     ExaResearchProvider,
     OpenRouterModelGateway,
+    OpenRouterRoute,
     ProviderConfigurationError,
     ProviderDisabled,
     ProviderPayloadError,
@@ -31,6 +32,8 @@ from vtrade.providers import (
 )
 
 NOW = datetime(2026, 7, 16, 15, 0, tzinfo=UTC)
+DEEPSEEK_MODEL = "deepseek/deepseek-v4-flash-0731"
+LUNA_MODEL = "openai/gpt-5.6-luna"
 
 
 class CapturingBudget:
@@ -68,17 +71,14 @@ class CapturingBudget:
         )
 
 
-def model_config(slug: str = "deepseek/deepseek-v4-flash") -> dict:
-    return {
+def model_config(slug: str = DEEPSEEK_MODEL) -> dict:
+    config = {
         "slug": slug,
-        "allowed_quantizations": ["fp8"]
-        if slug.startswith("deepseek/")
-        else ["fp8", "unknown"],
         "provider_allowlist": None,
         "provider_selection": "all_compatible_sorted_by_price",
         "allow_provider_fallbacks": True,
         "cross_model_fallback": False,
-        "reasoning_effort": "max",
+        "reasoning_effort": "xhigh" if slug == LUNA_MODEL else "max",
         "reasoning_effort_policy": "owner_fixed",
         "estimated_max_cost_micros": 100_000,
         "maximum_context_tokens": 100_000,
@@ -86,9 +86,12 @@ def model_config(slug: str = "deepseek/deepseek-v4-flash") -> dict:
         "maximum_output_tokens": 1_000,
         "provider_max_price": {"prompt": "0.1", "completion": "0.1", "request": "0"},
     }
+    if slug == DEEPSEEK_MODEL:
+        config["allowed_quantizations"] = ["fp8"]
+    return config
 
 
-def model_payload(*, model: str = "deepseek/deepseek-v4-flash") -> bytes:
+def model_payload(*, model: str = DEEPSEEK_MODEL) -> bytes:
     return json.dumps(
         {
             "id": "generation-1",
@@ -134,7 +137,7 @@ class ProviderTests(unittest.TestCase):
         )
         self.assertEqual(requests[0].url, OPENROUTER_URL)
         body = json.loads(requests[0].content)
-        self.assertEqual(body["model"], "deepseek/deepseek-v4-flash")
+        self.assertEqual(body["model"], DEEPSEEK_MODEL)
         self.assertNotIn("models", body)
         self.assertNotIn("max_completion_tokens", body)
         self.assertEqual(body["max_tokens"], 1_000)
@@ -152,11 +155,35 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(response.telemetry.billed_cost_micros, 10_000)
         self.assertEqual(response.telemetry.nominal_cost_micros, 20_000)
 
+    def test_openrouter_luna_uses_xhigh_without_quantization_filter(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, content=model_payload(model=LUNA_MODEL))
+
+        gateway = OpenRouterModelGateway(
+            "secret-key",
+            self.store,
+            self.budget,
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        gateway.complete([], [], model_config(LUNA_MODEL))
+
+        body = json.loads(requests[0].content)
+        self.assertEqual(body["model"], LUNA_MODEL)
+        self.assertEqual(body["reasoning"], {"effort": "xhigh"})
+        self.assertNotIn("quantizations", body["provider"])
+
+    def test_openrouter_rejects_models_outside_active_set(self) -> None:
+        with self.assertRaisesRegex(ProviderConfigurationError, "outside the active model set"):
+            OpenRouterRoute.from_config(model_config("deepseek/deepseek-v4-flash"))
+
     def test_openrouter_cross_model_response_fails_closed(self) -> None:
         client = httpx.Client(
             transport=httpx.MockTransport(
                 lambda _request: httpx.Response(
-                    200, content=model_payload(model="xiaomi/mimo-v2.5-pro")
+                    200, content=model_payload(model=LUNA_MODEL)
                 )
             )
         )

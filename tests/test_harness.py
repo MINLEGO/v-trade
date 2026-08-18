@@ -31,7 +31,7 @@ NOW = datetime(2026, 7, 16, 15, 0, tzinfo=UTC)
 
 def config() -> dict:
     return {
-        "slug": "deepseek/deepseek-v4-flash",
+        "slug": "deepseek/deepseek-v4-flash-0731",
         "allowed_quantizations": ["fp8"],
         "provider_allowlist": None,
         "provider_selection": "all_compatible_sorted_by_price",
@@ -52,7 +52,7 @@ def response(
 ) -> bytes:
     return json.dumps(
         {
-            "model": "deepseek/deepseek-v4-flash",
+            "model": "deepseek/deepseek-v4-flash-0731",
             "choices": [{"message": message}],
             "usage": {
                 "prompt_tokens": prompt_tokens,

@@ -59,6 +59,66 @@ class ConfigTests(unittest.TestCase):
             models["xiaomi/mimo-v2.5-pro"]["allowed_quantizations"], ["fp8", "unknown"]
         )
 
+    def test_active_model_routing_decisions_use_new_models(self) -> None:
+        config = load_experiment_config(
+            Path("config/experiments/predictionarena-polymarket-v1-liquidity-aware.json")
+        )
+        models = {model["slug"]: model for model in config.raw["models"]}
+        self.assertEqual(
+            set(models),
+            {"deepseek/deepseek-v4-flash-0731", "openai/gpt-5.6-luna"},
+        )
+        deepseek = models["deepseek/deepseek-v4-flash-0731"]
+        luna = models["openai/gpt-5.6-luna"]
+        self.assertEqual(deepseek["label"], "DeepSeek V4 Flash 0731")
+        self.assertEqual(deepseek["allowed_quantizations"], ["fp8"])
+        self.assertEqual(deepseek["reasoning_effort"], "max")
+        self.assertEqual(deepseek["estimated_max_cost_micros"], 16_000)
+        self.assertEqual(
+            deepseek["provider_max_price"],
+            {"prompt": "0.14", "completion": "0.28", "request": "0"},
+        )
+        self.assertEqual(luna["label"], "GPT-5.6 Luna")
+        self.assertNotIn("maximum_quantization_bits", luna)
+        self.assertNotIn("allowed_quantizations", luna)
+        self.assertEqual(luna["reasoning_effort"], "xhigh")
+        self.assertEqual(luna["estimated_max_cost_micros"], 32_000)
+        self.assertEqual(
+            luna["provider_max_price"],
+            {"prompt": "0.2", "completion": "1.2", "request": "0"},
+        )
+        for model in models.values():
+            self.assertEqual(model["maximum_context_tokens"], 100_000)
+            self.assertEqual(model["maximum_prompt_tokens"], 88_000)
+            self.assertEqual(model["maximum_output_tokens"], 12_000)
+            self.assertEqual(model["reasoning_effort_policy"], "owner_fixed")
+            self.assertIsNone(model["provider_allowlist"])
+            self.assertEqual(model["provider_selection"], "all_compatible_sorted_by_price")
+            self.assertTrue(model["allow_provider_fallbacks"])
+            self.assertFalse(model["cross_model_fallback"])
+            self.assertEqual(model["status"], "ready")
+        self.assertEqual(
+            config.raw["owner_decisions"]["model_routing"]["resolved"],
+            {
+                "exact_slugs": True,
+                "model_policies": {
+                    "deepseek/deepseek-v4-flash-0731": {
+                        "allowed_quantizations": ["fp8"],
+                        "reasoning_effort": "max",
+                    },
+                    "openai/gpt-5.6-luna": {
+                        "quantization_policy": "unrestricted",
+                        "reasoning_effort": "xhigh",
+                    },
+                },
+                "reasoning_effort_policy": "owner_fixed",
+                "provider_allowlist": "all_compatible",
+                "provider_sort": "price",
+                "allow_provider_fallbacks": True,
+                "cross_model_fallback": False,
+            },
+        )
+
     def test_execution_audit_and_exa_limits_are_frozen(self) -> None:
         config = load_experiment_config(
             Path("config/experiments/predictionarena-polymarket-v1.json")
@@ -206,6 +266,29 @@ class ConfigTests(unittest.TestCase):
             {
                 "exa_maximum_cost_per_search_micros": 20_000,
                 "tavily_basic_maximum_cost_per_search_micros": 8_000,
+            },
+        )
+
+    def test_active_openrouter_price_bounds_are_frozen(self) -> None:
+        config = load_experiment_config(
+            Path("config/experiments/predictionarena-polymarket-v1-liquidity-aware.json")
+        )
+        prices = config.raw["owner_decisions"]["provider_request_cost_estimates"]
+        self.assertEqual(
+            prices["resolved_openrouter"],
+            {
+                "deepseek/deepseek-v4-flash-0731": {
+                    "maximum_request_cost_micros": 16_000,
+                    "maximum_prompt_price_per_million_usd": "0.14",
+                    "maximum_completion_price_per_million_usd": "0.28",
+                    "maximum_request_fee_usd": "0",
+                },
+                "openai/gpt-5.6-luna": {
+                    "maximum_request_cost_micros": 32_000,
+                    "maximum_prompt_price_per_million_usd": "0.2",
+                    "maximum_completion_price_per_million_usd": "1.2",
+                    "maximum_request_fee_usd": "0",
+                },
             },
         )
 
