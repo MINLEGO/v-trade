@@ -121,6 +121,17 @@ worker recovers expired work and reuses completed checkpoints; downstream financ
 operations must retain their existing idempotency keys, so a crash after a side effect
 cannot authorize a duplicate trade or settlement.
 
+Critical runtime alerts are also scheduler controls. Stale market data, ledger
+mismatches, and consecutive cycle failures pause only the affected agent; projected
+budget overruns and critical alerts without an agent target pause the whole system.
+The alert row records the requested scope, reason, and stable automatic-action key, and
+the corresponding `operator_actions` row links the pause to the originating alert.
+The alert transaction shares the scheduler advisory lock with due-slot and lease
+recovery claims, so no claim can commit after its pause. An active cycle is allowed to
+finish or lose its lease naturally; the pause never force-kills it. Re-delivery of the
+same open alert is idempotent, and neither alert recovery nor repeated delivery resumes
+anything automatically.
+
 OpenRouter retries only explicit pre-inference 429 and 503 responses, at most three
 total attempts, while respecting numeric `Retry-After` delays up to 60 seconds. Other
 HTTP and transport failures remain fail-closed because their billing/side-effect state
@@ -167,8 +178,12 @@ missing. The dashboard/API expose leaderboard and PnL, drawdown, positions with 
 active 1,800-second archived-bid status (historical definitions retain 300 seconds),
 live order-context freshness, trades, settlements, rejections, cycles, provider usage
 and cost, alerts, and decision versions. Global and per-agent pause/resume
-are the only control mutations; each requires an operator identity and idempotency key
-and is committed with an append-only `operator_actions` audit record.
+are the only manual control mutations; each requires an operator identity and
+idempotency key and is committed with an append-only `operator_actions` audit record.
+Automatic critical-alert pauses use the same persisted control state and audit history,
+but their actor, reason, and originating alert are recorded as runtime metadata.
+Resumption always remains an authenticated manual action. Warnings, including abnormal
+drawdown, do not pause the scheduler.
 
 Freshness and valuation intentionally use different thresholds. The 300-second value
 comes from `execution.maximum_order_book_age_seconds` and governs current order-book

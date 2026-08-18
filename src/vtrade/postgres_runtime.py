@@ -8,19 +8,26 @@ from datetime import UTC, datetime, timedelta
 from typing import Protocol, cast
 
 from vtrade.runtime import (
+    HOURLY_SCHEDULER_LOCK_NAME,
     AlertEvent,
+    AlertPauseScope,
     ArtifactRegistration,
     CycleClaim,
     CycleStage,
     ExpiredArtifact,
     LeaseLost,
     ProjectionInputs,
+    RuntimeAlertPolicy,
     RuntimeProjection,
     StageResult,
     restore_stage,
     six_month_retain_until,
     stage_checkpoint,
 )
+
+
+class RuntimePersistenceError(RuntimeError):
+    pass
 
 
 class _Cursor(Protocol):
@@ -79,7 +86,7 @@ class PostgresRuntimeRepository:
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
             cursor.execute(
                 "SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0))",
-                ("vtrade:hourly-scheduler",),
+                (HOURLY_SCHEDULER_LOCK_NAME,),
             )
             lock = cursor.fetchone()
             if lock is None or not bool(lock[0]):
@@ -147,10 +154,23 @@ class PostgresRuntimeRepository:
         claims: list[CycleClaim] = []
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
             cursor.execute(
-                "SELECT id, agent_id, scheduled_at, data_cutoff FROM agent_cycles "
-                "WHERE status IN ('running', 'interrupted') "
-                "AND (lease_expires_at IS NULL OR lease_expires_at <= %s) "
-                "ORDER BY scheduled_at FOR UPDATE SKIP LOCKED LIMIT %s",
+                "SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0))",
+                (HOURLY_SCHEDULER_LOCK_NAME,),
+            )
+            lock = cursor.fetchone()
+            if lock is None or not bool(lock[0]):
+                return ()
+            cursor.execute(
+                "SELECT cycles.id, cycles.agent_id, cycles.scheduled_at, cycles.data_cutoff "
+                "FROM agent_cycles cycles "
+                "JOIN agents ON agents.id = cycles.agent_id "
+                "JOIN experiment_runs runs ON runs.id = agents.run_id "
+                "CROSS JOIN system_controls controls "
+                "WHERE cycles.status IN ('running', 'interrupted') "
+                "AND (cycles.lease_expires_at IS NULL OR cycles.lease_expires_at <= %s) "
+                "AND controls.singleton = true AND controls.globally_paused = false "
+                "AND agents.paused_at IS NULL AND runs.status = 'running' "
+                "ORDER BY cycles.scheduled_at FOR UPDATE OF cycles SKIP LOCKED LIMIT %s",
                 (now, limit),
             )
             for row in cursor.fetchall():
@@ -348,23 +368,7 @@ class PostgresRuntimeRepository:
 
     def open_alert(self, alert: AlertEvent) -> None:
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
-            cursor.execute(
-                "INSERT INTO alerts (id, run_id, agent_id, severity, code, details, opened_at, "
-                "dedupe_key) VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s) "
-                "ON CONFLICT (dedupe_key) WHERE resolved_at IS NULL DO UPDATE SET "
-                "details = EXCLUDED.details, severity = EXCLUDED.severity, "
-                "opened_at = EXCLUDED.opened_at",
-                (
-                    uuid.uuid4(),
-                    alert.run_id,
-                    alert.agent_id,
-                    alert.severity,
-                    alert.code,
-                    json.dumps(alert.details, sort_keys=True, default=str),
-                    alert.opened_at,
-                    alert.dedupe_key,
-                ),
-            )
+            persist_alert_in_transaction(cursor, alert)
 
     def projection_inputs(self, *, since: datetime, until: datetime) -> ProjectionInputs:
         since, until = _aware(since), _aware(until)
@@ -557,6 +561,196 @@ class PostgresRuntimeRepository:
         return uuid.UUID(str(row[0])) if row else None
 
 
+_AUTOMATIC_ALERT_ACTOR = "runtime-alert"
+
+
+def persist_alert_in_transaction(cursor: _Cursor, alert: AlertEvent) -> None:
+    """Open an alert and its automatic pause without starting another transaction."""
+    pause_scope = RuntimeAlertPolicy.pause_scope_for(alert)
+    # Serialize alert-triggered controls with both due-slot and recovery claims.
+    # A scheduler that already owns this lock commits before the pause can be
+    # committed; a scheduler starting afterward sees the committed control.
+    cursor.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        (HOURLY_SCHEDULER_LOCK_NAME,),
+    )
+    cursor.execute(
+        "INSERT INTO alerts (id, run_id, agent_id, severity, code, details, opened_at, "
+        "dedupe_key) VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s) "
+        "ON CONFLICT (dedupe_key) WHERE resolved_at IS NULL DO UPDATE SET "
+        "details = EXCLUDED.details, severity = EXCLUDED.severity, "
+        "opened_at = EXCLUDED.opened_at RETURNING id",
+        (
+            uuid.uuid4(),
+            alert.run_id,
+            alert.agent_id,
+            alert.severity,
+            alert.code,
+            json.dumps(alert.details, sort_keys=True, default=str),
+            alert.opened_at,
+            alert.dedupe_key,
+        ),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        raise RuntimePersistenceError("alert upsert returned no id")
+    alert_id = uuid.UUID(str(row[0]))
+    action_key = (
+        _automatic_pause_key(alert_id) if pause_scope is not AlertPauseScope.NONE else None
+    )
+    details = _alert_details(alert, alert_id, pause_scope, action_key)
+    cursor.execute(
+        "UPDATE alerts SET details = %s::jsonb WHERE id = %s",
+        (json.dumps(details, sort_keys=True, default=str), alert_id),
+    )
+    if cursor.rowcount != 1:
+        raise RuntimePersistenceError("alert outcome update returned no row")
+    if pause_scope is not AlertPauseScope.NONE:
+        assert action_key is not None
+        _apply_automatic_pause(
+            cursor,
+            alert,
+            alert_id=alert_id,
+            pause_scope=pause_scope,
+            idempotency_key=action_key,
+        )
+
+
+def _automatic_pause_key(alert_id: uuid.UUID) -> str:
+    return f"runtime-alert-pause:{alert_id}"
+
+
+def _alert_details(
+    alert: AlertEvent,
+    alert_id: uuid.UUID,
+    pause_scope: AlertPauseScope,
+    idempotency_key: str | None,
+) -> dict[str, object]:
+    details = dict(alert.details)
+    requested = pause_scope is not AlertPauseScope.NONE
+    details["automatic_pause"] = {
+        "requested": requested,
+        "scope": pause_scope.value,
+        "reason": f"critical alert: {alert.code}" if requested else "alert is not critical",
+        "alert_id": str(alert_id),
+        "idempotency_key": idempotency_key,
+        "resume": "manual_only" if requested else "not_applicable",
+    }
+    return details
+
+
+def _apply_automatic_pause(
+    cursor: _Cursor,
+    alert: AlertEvent,
+    *,
+    alert_id: uuid.UUID,
+    pause_scope: AlertPauseScope,
+    idempotency_key: str | None,
+) -> None:
+    if pause_scope is AlertPauseScope.NONE or idempotency_key is None:
+        raise RuntimePersistenceError("automatic pause requires a scoped critical alert")
+    target_type = "system" if pause_scope is AlertPauseScope.SYSTEM else "agent"
+    target_id = None if target_type == "system" else alert.agent_id
+    if target_type == "agent" and target_id is None:
+        raise RuntimePersistenceError("agent-scoped alert has no agent target")
+
+    cursor.execute(
+        "SELECT actor_id, action, target_type, target_id "
+        "FROM operator_actions WHERE idempotency_key = %s FOR UPDATE",
+        (idempotency_key,),
+    )
+    existing = cursor.fetchone()
+    if existing is not None:
+        existing_target = None if existing[3] is None else uuid.UUID(str(existing[3]))
+        if (
+            str(existing[0]) != _AUTOMATIC_ALERT_ACTOR
+            or str(existing[1]) != "pause"
+            or str(existing[2]) != target_type
+            or existing_target != target_id
+        ):
+            raise RuntimePersistenceError("automatic pause idempotency key conflicts")
+        return
+
+    if target_type == "system":
+        cursor.execute(
+            "SELECT globally_paused, version, updated_at, updated_by "
+            "FROM system_controls WHERE singleton = true FOR UPDATE"
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise RuntimePersistenceError("system control row is missing")
+        before: dict[str, object] = {
+            "globally_paused": bool(row[0]),
+            "version": int(str(row[1])),
+            "updated_at": str(row[2]),
+            "updated_by": str(row[3]),
+        }
+        cursor.execute(
+            "UPDATE system_controls SET globally_paused = true, "
+            "version = CASE WHEN globally_paused THEN version ELSE version + 1 END, "
+            "updated_at = CASE WHEN globally_paused THEN updated_at ELSE %s END, "
+            "updated_by = CASE WHEN globally_paused THEN updated_by ELSE %s END "
+            "WHERE singleton = true "
+            "RETURNING globally_paused, version, updated_at, updated_by",
+            (alert.opened_at, _AUTOMATIC_ALERT_ACTOR),
+        )
+        changed = cursor.fetchone()
+        if changed is None:
+            raise RuntimePersistenceError("automatic system pause update returned no row")
+        after: dict[str, object] = {
+            "globally_paused": bool(changed[0]),
+            "version": int(str(changed[1])),
+            "updated_at": str(changed[2]),
+            "updated_by": str(changed[3]),
+        }
+    else:
+        assert target_id is not None
+        cursor.execute(
+            "SELECT paused_at FROM agents WHERE id = %s FOR UPDATE",
+            (target_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise KeyError("agent not found")
+        before = {"agent_id": str(target_id), "paused_at": _optional_text(row[0])}
+        cursor.execute(
+            "UPDATE agents SET paused_at = COALESCE(paused_at, %s) "
+            "WHERE id = %s RETURNING paused_at",
+            (alert.opened_at, target_id),
+        )
+        changed = cursor.fetchone()
+        if changed is None:
+            raise RuntimePersistenceError("automatic agent pause update returned no row")
+        after = {"agent_id": str(target_id), "paused_at": _optional_text(changed[0])}
+
+    after.update(
+        {
+            "automatic": True,
+            "alert_id": str(alert_id),
+            "alert_code": alert.code,
+            "alert_dedupe_key": alert.dedupe_key,
+            "pause_scope": pause_scope.value,
+            "reason": f"critical alert: {alert.code}",
+        }
+    )
+    cursor.execute(
+        "INSERT INTO operator_actions "
+        "(id, actor_id, action, target_type, target_id, before_state, after_state, "
+        "occurred_at, idempotency_key) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (
+            uuid.uuid4(),
+            _AUTOMATIC_ALERT_ACTOR,
+            "pause",
+            target_type,
+            target_id,
+            json.dumps(before, sort_keys=True, default=str),
+            json.dumps(after, sort_keys=True, default=str),
+            alert.opened_at,
+            idempotency_key,
+        ),
+    )
+
+
 def _register_artifact(
     cursor: _Cursor,
     claim: CycleClaim,
@@ -617,6 +811,10 @@ def _aware(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("timestamps must be timezone-aware")
     return value.astimezone(UTC)
+
+
+def _optional_text(value: object) -> str | None:
+    return None if value is None else str(value)
 
 
 def _default_connect(database_url: str) -> AbstractContextManager[_Connection]:

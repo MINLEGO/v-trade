@@ -7,6 +7,7 @@ from typing import Any, cast
 
 from vtrade.runtime import (
     AlertEvent,
+    AlertPauseScope,
     BrokerExecutionResult,
     CycleClaim,
     CycleOrchestrator,
@@ -19,6 +20,7 @@ from vtrade.runtime import (
     ProjectionInputs,
     PromptResult,
     RetentionCleaner,
+    RuntimeAlertPolicy,
     RuntimeConfigurationError,
     RuntimeProjection,
     SettlementValuationResult,
@@ -146,6 +148,23 @@ def claim() -> CycleClaim:
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_alert_pause_policy_scopes_critical_alerts_and_ignores_warnings(self) -> None:
+        agent_id = uuid.uuid4()
+        policy = RuntimeAlertPolicy()
+        agent_alert = AlertEvent(
+            None, agent_id, "critical", "stale_market_data", {}, NOW, "stale:agent"
+        )
+        global_alert = AlertEvent(
+            None, None, "critical", "projected_budget_exceeded", {}, NOW, "budget:month"
+        )
+        future_global = AlertEvent(None, None, "critical", "future_system_alert", {}, NOW, "future")
+        warning = AlertEvent(None, agent_id, "warning", "abnormal_drawdown", {}, NOW, "drawdown")
+
+        self.assertEqual(policy.pause_scope(agent_alert), AlertPauseScope.AGENT)
+        self.assertEqual(policy.pause_scope(global_alert), AlertPauseScope.SYSTEM)
+        self.assertEqual(policy.pause_scope(future_global), AlertPauseScope.SYSTEM)
+        self.assertEqual(policy.pause_scope(warning), AlertPauseScope.NONE)
+
     def test_runtime_rejects_a_lease_shorter_than_the_cycle_wall_clock(self) -> None:
         repository = MemoryRuntimeRepository()
         ports = Ports()

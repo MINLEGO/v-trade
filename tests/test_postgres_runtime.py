@@ -9,6 +9,7 @@ from pathlib import Path
 
 from vtrade.postgres_runtime import PostgresRuntimeRepository
 from vtrade.runtime import (
+    AlertEvent,
     ArtifactRegistration,
     CycleClaim,
     CycleStage,
@@ -71,9 +72,158 @@ class SchedulingConnection:
 
 AGENT_ID = uuid.UUID("00000000-0000-0000-0000-000000000051")
 CYCLE_ID = uuid.UUID("00000000-0000-0000-0000-000000000052")
+ALERT_ID = uuid.UUID("00000000-0000-0000-0000-000000000053")
+
+
+class AlertCursor(SchedulingCursor):
+    def __init__(self) -> None:
+        super().__init__()
+        self.actions: dict[str, tuple[object, ...]] = {}
+
+    def execute(self, query: str, params: Sequence[object] = ()) -> AlertCursor:
+        values = tuple(params)
+        self.queries.append((query, values))
+        self.rows = []
+        normalized = " ".join(query.split())
+        if normalized.startswith("INSERT INTO alerts"):
+            self.rows = [(ALERT_ID,)]
+        elif normalized.startswith("SELECT actor_id, action, target_type, target_id"):
+            key = str(values[0])
+            if key in self.actions:
+                self.rows = [self.actions[key]]
+        elif normalized.startswith("SELECT globally_paused"):
+            self.rows = [(False, 1, NOW, "migration")]
+        elif normalized.startswith("UPDATE system_controls"):
+            self.rows = [(True, 2, NOW, "runtime-alert")]
+        elif normalized.startswith("SELECT paused_at FROM agents"):
+            self.rows = [(None,)]
+        elif normalized.startswith("UPDATE agents SET paused_at"):
+            self.rows = [(NOW,)]
+        elif normalized.startswith("INSERT INTO operator_actions"):
+            self.actions[str(values[8])] = (values[1], values[2], values[3], values[4])
+        return self
+
+
+class AlertConnection:
+    def __init__(self) -> None:
+        self.cursor_instance = AlertCursor()
+
+    def __enter__(self) -> AlertConnection:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def cursor(self) -> AlertCursor:
+        return self.cursor_instance
 
 
 class PostgresSchedulingTests(unittest.TestCase):
+    def test_critical_alert_atomically_records_a_scoped_pause_and_audit_origin(self) -> None:
+        connection = AlertConnection()
+        repository = PostgresRuntimeRepository(
+            "postgresql://unused", connect=lambda _url: connection
+        )
+        alert = AlertEvent(
+            None,
+            AGENT_ID,
+            "critical",
+            "ledger_mismatch",
+            {"mismatch_micros": 25},
+            NOW,
+            "ledger-mismatch:agent-1",
+        )
+
+        repository.open_alert(alert)
+        queries = connection.cursor_instance.queries
+        lock_index = next(
+            i for i, (query, _params) in enumerate(queries) if "advisory_xact_lock" in query
+        )
+        insert_index = next(
+            i for i, (query, _params) in enumerate(queries)
+            if query.startswith("INSERT INTO alerts")
+        )
+        action_index = next(
+            i for i, (query, _params) in enumerate(queries)
+            if query.startswith("INSERT INTO operator_actions")
+        )
+        self.assertLess(lock_index, insert_index)
+        self.assertLess(insert_index, action_index)
+
+        detail_params = next(
+            params for query, params in queries if query.startswith("UPDATE alerts SET details")
+        )
+        details = json.loads(str(detail_params[0]))
+        self.assertEqual(details["automatic_pause"]["scope"], "agent")
+        self.assertIn("ledger_mismatch", details["automatic_pause"]["reason"])
+        action_params = next(
+            params for query, params in queries
+            if query.startswith("INSERT INTO operator_actions")
+        )
+        audit = json.loads(str(action_params[6]))
+        self.assertTrue(audit["automatic"])
+        self.assertEqual(audit["alert_id"], str(ALERT_ID))
+        self.assertEqual(audit["alert_code"], "ledger_mismatch")
+
+    def test_repeated_alert_delivery_is_idempotent_and_warnings_do_not_pause(self) -> None:
+        connection = AlertConnection()
+        repository = PostgresRuntimeRepository(
+            "postgresql://unused", connect=lambda _url: connection
+        )
+        critical = AlertEvent(
+            None,
+            None,
+            "critical",
+            "projected_budget_exceeded",
+            {"projected_micros": 41},
+            NOW,
+            "projected-budget:2026-07",
+        )
+        warning = AlertEvent(
+            None,
+            AGENT_ID,
+            "warning",
+            "abnormal_drawdown",
+            {"fraction": "0.25"},
+            NOW,
+            "drawdown:agent-1",
+        )
+
+        repository.open_alert(critical)
+        repository.open_alert(critical)
+        repository.open_alert(warning)
+
+        action_inserts = [
+            query for query, _params in connection.cursor_instance.queries
+            if query.startswith("INSERT INTO operator_actions")
+        ]
+        self.assertEqual(len(action_inserts), 1)
+        warning_details = [
+            params for query, params in connection.cursor_instance.queries
+            if query.startswith("UPDATE alerts SET details")
+        ][-1]
+        self.assertFalse(json.loads(str(warning_details[0]))["automatic_pause"]["requested"])
+
+    def test_expired_recovery_query_observes_global_and_agent_pauses(self) -> None:
+        connection = SchedulingConnection()
+        repository = PostgresRuntimeRepository(
+            "postgresql://unused", connect=lambda _url: connection
+        )
+
+        repository.recover_expired_cycles(
+            now=NOW,
+            lease_owner="worker-1",
+            lease_duration=timedelta(minutes=10),
+            limit=1,
+        )
+        query = next(
+            query for query, _params in connection.cursor_instance.queries
+            if query.startswith("SELECT cycles.id, cycles.agent_id")
+        )
+        self.assertIn("controls.globally_paused = false", query)
+        self.assertIn("agents.paused_at IS NULL", query)
+        self.assertIn("runs.status = 'running'", query)
+
     def test_cycle_completion_binds_timestamp_summary_and_termination_in_order(self) -> None:
         connection = SchedulingConnection()
         repository = PostgresRuntimeRepository(

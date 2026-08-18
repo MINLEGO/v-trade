@@ -10,6 +10,7 @@ from decimal import Decimal
 from typing import Protocol, cast
 
 from vtrade.harness import BeliefRecord, HarnessResult, PlanRecord
+from vtrade.postgres_runtime import persist_alert_in_transaction
 from vtrade.providers import (
     EXA_MAX_CREDITS_PER_SEARCH,
     EXA_RESEARCH_TOOL_NAMES,
@@ -17,13 +18,17 @@ from vtrade.providers import (
     BudgetReservation,
     ProviderTelemetry,
 )
-from vtrade.runtime import ArtifactRegistration
+from vtrade.runtime import AlertEvent, ArtifactRegistration
 
 
 class _Cursor(Protocol):
+    rowcount: int
+
     def execute(self, query: str, params: Sequence[object] = ()) -> object: ...
 
     def fetchone(self) -> Sequence[object] | None: ...
+
+    def fetchall(self) -> Sequence[Sequence[object]]: ...
 
 
 class _Connection(Protocol):
@@ -343,52 +348,58 @@ class PostgresBudgetGuard:
                 raise RuntimeError("monthly Exa quota row missing during reconciliation")
             halted = bool(quota[0])
             if billed_cost_micros > 0:
-                cursor.execute(
-                    "INSERT INTO alerts (severity, code, details, opened_at) "
-                    "VALUES ('critical', 'exa_unexpected_billed_cost', %s, %s)",
-                    (
-                        json.dumps(
-                            {
-                                "month": month.isoformat(),
-                                "billed_cost_micros": billed_cost_micros,
-                                "reservation_id": reservation.id,
-                            }
-                        ),
+                _open_alert(
+                    cursor,
+                    AlertEvent(
+                        None,
+                        None,
+                        "critical",
+                        "exa_unexpected_billed_cost",
+                        {
+                            "month": month.isoformat(),
+                            "billed_cost_micros": billed_cost_micros,
+                            "reservation_id": reservation.id,
+                        },
                         now,
+                        f"exa-unexpected-billed:{reservation.id}",
                     ),
                 )
             if credit_overrun:
-                cursor.execute(
-                    "INSERT INTO alerts (severity, code, details, opened_at) "
-                    "VALUES ('critical', 'exa_credit_reservation_exceeded', %s, %s)",
-                    (
-                        json.dumps(
-                            {
-                                "month": month.isoformat(),
-                                "actual_credit_count": str(credit_count),
-                                "reserved_credit_count": str(reservation.reserved_credit_count),
-                                "reservation_id": reservation.id,
-                            }
-                        ),
+                _open_alert(
+                    cursor,
+                    AlertEvent(
+                        None,
+                        None,
+                        "critical",
+                        "exa_credit_reservation_exceeded",
+                        {
+                            "month": month.isoformat(),
+                            "actual_credit_count": str(credit_count),
+                            "reserved_credit_count": str(reservation.reserved_credit_count),
+                            "reservation_id": reservation.id,
+                        },
                         now,
+                        f"exa-credit-overrun:{reservation.id}",
                     ),
                 )
             over_quota = int(str(quota[1])) + pending_requests > 18_000 or Decimal(
                 str(quota[2])
             ) + pending_credits > Decimal(18_000)
             if over_quota:
-                cursor.execute(
-                    "INSERT INTO alerts (severity, code, details, opened_at) "
-                    "VALUES ('critical', 'exa_monthly_quota_exceeded', %s, %s)",
-                    (
-                        json.dumps(
-                            {
-                                "month": month.isoformat(),
-                                "request_count": int(str(quota[1])),
-                                "credit_count": str(quota[2]),
-                            }
-                        ),
+                _open_alert(
+                    cursor,
+                    AlertEvent(
+                        None,
+                        None,
+                        "critical",
+                        "exa_monthly_quota_exceeded",
+                        {
+                            "month": month.isoformat(),
+                            "request_count": int(str(quota[1])),
+                            "credit_count": str(quota[2]),
+                        },
                         now,
+                        f"exa-monthly-quota:{month.isoformat()}",
                     ),
                 )
         if halted:
@@ -724,6 +735,10 @@ def _ensure_exa_quota_row(cursor: _Cursor, month: date, now: datetime) -> None:
     )
 
 
+def _open_alert(cursor: _Cursor, alert: AlertEvent) -> None:
+    persist_alert_in_transaction(cursor, alert)
+
+
 def _open_budget_alerts(
     cursor: _Cursor,
     month: date,
@@ -739,13 +754,16 @@ def _open_budget_alerts(
                 f"UPDATE monthly_provider_budgets SET {column} = true WHERE month_start = %s",
                 (month,),
             )
-            cursor.execute(
-                "INSERT INTO alerts (severity, code, details, opened_at) VALUES (%s, %s, %s, %s)",
-                (
+            _open_alert(
+                cursor,
+                AlertEvent(
+                    None,
+                    None,
                     "critical" if threshold == thresholds[-1] else "warning",
                     f"monthly_api_budget_{threshold}",
-                    json.dumps({"month": month.isoformat(), "projected_micros": projected}),
+                    {"month": month.isoformat(), "projected_micros": projected},
                     now,
+                    f"monthly-api-budget:{month.isoformat()}:{threshold}",
                 ),
             )
 

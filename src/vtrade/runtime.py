@@ -42,6 +42,7 @@ STAGE_ORDER = (
 
 MINIMUM_CYCLE_LEASE_DURATION = timedelta(seconds=3_300)
 DEFAULT_CYCLE_LEASE_DURATION = timedelta(minutes=70)
+HOURLY_SCHEDULER_LOCK_NAME = "vtrade:hourly-scheduler"
 
 
 @dataclass(frozen=True, slots=True)
@@ -304,6 +305,18 @@ class ArtifactDeletionPort(Protocol):
     def delete(self, uri: str, sha256: str) -> None: ...
 
 
+class AlertPauseScope(StrEnum):
+    NONE = "none"
+    AGENT = "agent"
+    SYSTEM = "system"
+
+
+CRITICAL_AGENT_ALERT_CODES = frozenset(
+    {"stale_market_data", "ledger_mismatch", "consecutive_cycle_failures"}
+)
+CRITICAL_GLOBAL_ALERT_CODES = frozenset({"projected_budget_exceeded"})
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeAlertPolicy:
     maximum_data_age: timedelta = timedelta(minutes=5)
@@ -311,6 +324,25 @@ class RuntimeAlertPolicy:
     maximum_drawdown_fraction: Decimal = Decimal("0.25")
     monthly_budget_micros: int = 40_000_000
     storage_alert_bytes: int = 2_000_000_000
+
+    @classmethod
+    def pause_scope_for(cls, alert: AlertEvent) -> AlertPauseScope:
+        """Return the one scheduler scope affected by an alert.
+
+        Critical alerts with no agent are system-wide by construction, which keeps
+        future system-wide alert codes fail-safe. Unknown critical alerts that carry
+        an agent remain scoped to that agent; warnings never pause scheduling.
+        """
+        if alert.severity != "critical":
+            return AlertPauseScope.NONE
+        if alert.code in CRITICAL_GLOBAL_ALERT_CODES or alert.agent_id is None:
+            return AlertPauseScope.SYSTEM
+        if alert.code in CRITICAL_AGENT_ALERT_CODES or alert.agent_id is not None:
+            return AlertPauseScope.AGENT
+        return AlertPauseScope.NONE
+
+    def pause_scope(self, alert: AlertEvent) -> AlertPauseScope:
+        return self.pause_scope_for(alert)
 
     def cycle_alerts(
         self,

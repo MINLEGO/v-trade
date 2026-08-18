@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import Protocol, cast
 
 from vtrade.dashboard.policy import POSITION_VALUATION_MAX_AGE_SQL
+from vtrade.runtime import HOURLY_SCHEDULER_LOCK_NAME
 
 
 class AdminRepositoryError(RuntimeError):
@@ -412,6 +413,12 @@ class PostgresAdminRepository:
         when = _aware(occurred_at or datetime.now(UTC))
         action = "pause" if paused else "resume"
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
+            # Manual controls must serialize with due-slot/recovery claims and
+            # alert-triggered automatic controls at the same scheduler boundary.
+            cursor.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (HOURLY_SCHEDULER_LOCK_NAME,),
+            )
             cursor.execute(
                 "SELECT actor_id, action, target_type, target_id, after_state "
                 "FROM operator_actions WHERE idempotency_key = %s",
