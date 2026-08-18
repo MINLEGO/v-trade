@@ -1,12 +1,25 @@
-FROM python:3.12-slim AS runtime
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+FROM ghcr.io/astral-sh/uv:0.11.2 AS uv
+
+FROM python:3.12.11-slim-bookworm AS runtime
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_NO_CACHE=1
 WORKDIR /app
-COPY pyproject.toml README.md ./
+
+# Keep the dependency installer versioned with the image contract.
+COPY --from=uv /uv /uvx /bin/
+
+COPY pyproject.toml uv.lock README.md ./
+RUN uv lock --check
+
 COPY src ./src
-RUN pip install --no-cache-dir .
+RUN uv sync --frozen --no-dev --no-editable --compile-bytecode
+
 COPY config ./config
 COPY migrations ./migrations
 COPY spec ./spec
+RUN python -c "import vtrade, vtrade.api, vtrade.worker"
 RUN python -m vtrade.frozen_artifacts
 USER 65532:65532
 EXPOSE 8000

@@ -18,6 +18,21 @@ class DeploymentShapeTests(unittest.TestCase):
         dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
         self.assertIn("RUN python -m vtrade.frozen_artifacts", dockerfile)
 
+    def test_image_installs_only_locked_runtime_dependencies(self) -> None:
+        dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("FROM ghcr.io/astral-sh/uv:0.11.2 AS uv", dockerfile)
+        self.assertIn("FROM python:3.12.11-slim-bookworm AS runtime", dockerfile)
+        self.assertIn("COPY pyproject.toml uv.lock README.md ./", dockerfile)
+        self.assertIn("RUN uv lock --check", dockerfile)
+        self.assertIn("RUN uv sync --frozen --no-dev --no-editable --compile-bytecode", dockerfile)
+        self.assertIn('ENV PATH="/app/.venv/bin:$PATH"', dockerfile)
+        self.assertNotIn("pip install", dockerfile)
+
+    def test_image_smoke_checks_runtime_entrypoint_imports(self) -> None:
+        dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+        self.assertIn('RUN python -c "import vtrade, vtrade.api, vtrade.worker"', dockerfile)
+        self.assertIn("USER 65532:65532", dockerfile)
+
     def test_services_wait_for_successful_migrations_and_are_hardened(self) -> None:
         compose = Path("compose.coolify.yaml").read_text(encoding="utf-8")
         self.assertIn('command: ["python", "-m", "vtrade.migrate"]', compose)

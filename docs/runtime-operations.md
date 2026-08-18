@@ -10,6 +10,13 @@ the API starts only after that service exits successfully, and the worker starts
 after the API's authenticated `/health/ready` check reports healthy. A migration
 failure therefore prevents both runtime services from starting.
 
+The image uses the pinned Python `3.12.11-slim-bookworm` base and `uv 0.11.2` installer.
+The Dockerfile copies `pyproject.toml` and `uv.lock` before installing the application,
+fails at `uv lock --check` when project metadata is stale, and installs with
+`uv sync --frozen --no-dev --no-editable`. The resulting `/app/.venv` is first on
+`PATH`, so the Compose migration, API, and worker commands all use the locked runtime
+environment without installing development dependencies.
+
 For a manual deployment, export the real environment resources and run:
 
 ```powershell
