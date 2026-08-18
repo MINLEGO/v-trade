@@ -539,6 +539,7 @@ SELECT a.id AS agent_id, a.run_id, a.name AS agent_name, a.initial_cash_micros, 
               CASE WHEN quote.best_bid IS NULL
                          OR quote.cutoff < now()
                             - make_interval(secs => valuation_policy.max_age_seconds)
+                   THEN NULL
                    ELSE round(p.shares * quote.best_bid * 1000000)::bigint END,
           'unrealized_pnl_micros',
               CASE WHEN quote.best_bid IS NULL
