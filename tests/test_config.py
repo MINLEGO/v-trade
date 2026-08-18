@@ -300,7 +300,9 @@ class ConfigTests(unittest.TestCase):
             config = load_experiment_config(Path("config/experiments") / filename)
             for artifact in config.raw["artifacts"].values():
                 body = Path(artifact["path"]).read_bytes()
-                self.assertEqual(hashlib.sha256(body).hexdigest(), artifact["sha256"])
+                canonical = body.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+                self.assertEqual(body, canonical, f"{artifact['path']} must use LF bytes")
+                self.assertEqual(hashlib.sha256(canonical).hexdigest(), artifact["sha256"])
 
     def test_experiment_execution_policies_are_distinct_and_versioned(self) -> None:
         baseline = load_experiment_config(

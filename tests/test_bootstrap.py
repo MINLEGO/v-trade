@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import hashlib
+import json
 import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -49,18 +49,18 @@ def connector(cursor: Cursor) -> Any:
     return connect
 
 
-def ready_config(tmp_path: Path) -> tuple[Path, str]:
-    source = Path("config/experiments/predictionarena-polymarket-v1.json")
-    raw = __import__("json").loads(source.read_text(encoding="utf-8"))
+def ready_config(
+    tmp_path: Path,
+    filename: str = "predictionarena-polymarket-v1.json",
+) -> tuple[Path, str]:
+    source = Path("config/experiments") / filename
+    raw = json.loads(source.read_text(encoding="utf-8"))
     raw["status"] = "ready"
     for decision in raw["owner_decisions"].values():
         decision["status"] = "resolved"
     prompt_body = read_prompt_body(raw["artifacts"]["prompt"]["path"])
-    raw["artifacts"]["prompt"]["sha256"] = hashlib.sha256(
-        prompt_body.encode("utf-8")
-    ).hexdigest()
     path = tmp_path / "experiment.json"
-    path.write_text(__import__("json").dumps(raw), encoding="utf-8")
+    path.write_text(json.dumps(raw), encoding="utf-8")
     assert config_hash(raw) == load_experiment_config(path).sha256
     return path, prompt_body
 
@@ -73,8 +73,18 @@ def test_read_prompt_body_preserves_frozen_artifact_bytes(tmp_path: Path) -> Non
     assert read_prompt_body(path).encode("utf-8") == expected
 
 
-def test_register_is_inert_and_inserts_all_frozen_records(tmp_path: Path) -> None:
-    path, prompt = ready_config(tmp_path)
+@pytest.mark.parametrize(
+    "filename",
+    (
+        "predictionarena-polymarket-v1.json",
+        "predictionarena-polymarket-v1-liquidity-aware.json",
+    ),
+)
+def test_register_is_inert_and_inserts_all_frozen_records(
+    tmp_path: Path,
+    filename: str,
+) -> None:
+    path, prompt = ready_config(tmp_path, filename)
     cursor = Cursor([None, None, None, None, None])
     service = PostgresExperimentBootstrap(
         "postgres://test",

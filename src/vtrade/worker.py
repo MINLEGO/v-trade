@@ -46,6 +46,7 @@ from vtrade.domain.types import (
     RawArtifact,
     Side,
 )
+from vtrade.frozen_artifacts import FrozenArtifactError, canonical_artifact_file_sha256
 from vtrade.harness import (
     BoundedToolHarness,
     HarnessLimits,
@@ -2683,9 +2684,14 @@ def _verify_frozen_artifact(raw: Mapping[str, object], name: str) -> None:
     if not isinstance(path, str) or not isinstance(expected, str) or len(expected) != 64:
         raise ProductionCompositionUnavailable(f"frozen artifact {name} is malformed")
     try:
-        actual = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        actual = canonical_artifact_file_sha256(
+            path,
+            label=f"frozen artifact {name}",
+        )
     except OSError as exc:
         raise ProductionCompositionUnavailable(f"cannot read frozen artifact {name}") from exc
+    except FrozenArtifactError as exc:
+        raise ProductionCompositionUnavailable(str(exc)) from exc
     if actual != expected:
         raise ProductionCompositionUnavailable(f"frozen artifact {name} hash mismatch")
 

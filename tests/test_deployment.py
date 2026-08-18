@@ -14,6 +14,10 @@ class DeploymentShapeTests(unittest.TestCase):
         self.assertNotIn("spec", ignored)
         self.assertIn(".env", ignored)
 
+    def test_image_runs_the_frozen_artifact_smoke_check_at_build_time(self) -> None:
+        dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("RUN python -m vtrade.frozen_artifacts", dockerfile)
+
     def test_services_wait_for_successful_migrations_and_are_hardened(self) -> None:
         compose = Path("compose.coolify.yaml").read_text(encoding="utf-8")
         self.assertIn('command: ["python", "-m", "vtrade.migrate"]', compose)

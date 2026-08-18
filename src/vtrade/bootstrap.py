@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Protocol, cast
 
 from vtrade.config import ExperimentConfig, canonical_json, load_experiment_config
+from vtrade.frozen_artifacts import FrozenArtifactError, canonical_artifact_sha256
 
 
 class BootstrapError(RuntimeError):
@@ -73,7 +74,15 @@ class PostgresExperimentBootstrap:
         if not code_version or not run_label or version_number <= 0:
             raise ValueError("code version, run label, and positive version number are required")
         prompt = config.raw["artifacts"]["prompt"]
-        prompt_sha256 = hashlib.sha256(prompt_body.encode("utf-8")).hexdigest()
+        try:
+            prompt_sha256 = canonical_artifact_sha256(
+                prompt_body.encode("utf-8"),
+                label="frozen prompt",
+            )
+        except FrozenArtifactError as exc:
+            raise BootstrapError(
+                "prompt bytes differ from the hash frozen in experiment config"
+            ) from exc
         if prompt_sha256 != str(prompt["sha256"]):
             raise BootstrapError("prompt bytes differ from the hash frozen in experiment config")
         now = _aware(self._clock())
