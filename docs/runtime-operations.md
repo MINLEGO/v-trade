@@ -1,12 +1,14 @@
 # Runtime and private administration
 
-Checked: 2026-07-18.
+Checked: 2026-08-18.
 
 ## Deployment order
 
 The container image includes `config/`, `migrations/`, and the prompt/tool contracts in
 `spec/`. It never includes `.env`. Coolify starts a one-shot migration service first;
-the API and worker start only after that service exits successfully.
+the API starts only after that service exits successfully, and the worker starts only
+after the API's authenticated `/health/ready` check reports healthy. A migration
+failure therefore prevents both runtime services from starting.
 
 For a manual deployment, export the real environment resources and run:
 
@@ -15,6 +17,44 @@ python -m vtrade.migrate
 python -m uvicorn vtrade.api:create_app --factory --host 0.0.0.0 --port 8000
 python -m vtrade.worker
 ```
+
+## Liveness, readiness, and operator preflight
+
+Both health endpoints remain private and require the same Bearer or Basic
+authentication as the rest of the API:
+
+- `/health/live` is the cheap process/liveness probe. It confirms that the HTTP process
+  is serving requests and does not contact PostgreSQL, Supabase, or a provider. Use it
+  for restart diagnostics.
+- `/health/ready` is the dependency/readiness probe. It checks the PostgreSQL schema,
+  the private Supabase artifact bucket, and that the selected experiment configuration
+  is runnable. It returns `200` only when every check passes and `503` otherwise.
+
+The Compose API healthcheck calls `/health/ready` with
+`VTRADE_ADMIN_AUTH_SECRET`. Python's HTTP client returns a failed healthcheck for a
+`503`, so the worker dependency cannot become healthy while any readiness component
+is unavailable. Readiness never calls OpenRouter, Exa, or Tavily.
+
+Before starting a manual deployment, validate the rendered Compose configuration with
+the real environment resources and then check both endpoints without putting the
+secret in a URL:
+
+```powershell
+docker compose -f compose.coolify.yaml config --quiet
+$headers = @{ Authorization = "Bearer $env:VTRADE_ADMIN_AUTH_SECRET" }
+Invoke-WebRequest http://127.0.0.1:8000/health/live -Headers $headers -UseBasicParsing
+try {
+  $ready = Invoke-WebRequest http://127.0.0.1:8000/health/ready -Headers $headers -UseBasicParsing
+} catch {
+  throw "V-Trade is not ready: $($_.Exception.Message)"
+}
+$ready.Content
+```
+
+If migrations fail, or if the database, private bucket, or experiment configuration
+fails its readiness check, keep the API/worker deployment stopped and resolve the
+reported owner or infrastructure resource before retrying. No billed provider call
+belongs in this preflight.
 
 ## Explicit experiment and agent registration
 

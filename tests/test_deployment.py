@@ -26,6 +26,18 @@ class DeploymentShapeTests(unittest.TestCase):
         self.assertGreaterEqual(compose.count("cap_drop: [ALL]"), 3)
         self.assertIn("VTRADE_ADMIN_AUTH_SECRET", compose)
 
+    def test_worker_starts_only_after_private_api_readiness(self) -> None:
+        compose = Path("compose.coolify.yaml").read_text(encoding="utf-8")
+        api = compose.split("\n  api:\n", 1)[1].split("\n  worker:\n", 1)[0]
+        worker = compose.split("\n  worker:\n", 1)[1]
+
+        self.assertIn("/health/ready", api)
+        self.assertNotIn("/health/live", api)
+        self.assertIn("VTRADE_ADMIN_AUTH_SECRET", api)
+        self.assertIn("migrate:\n        condition: service_completed_successfully", api)
+        self.assertIn("migrate:\n        condition: service_completed_successfully", worker)
+        self.assertIn("api:\n        condition: service_healthy", worker)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -123,6 +123,18 @@ class PrivateAdminApiTests(unittest.TestCase):
             self.assertEqual(response.headers["x-content-type-options"], "nosniff")
             self.assertIn("default-src 'none'", response.headers["content-security-policy"])
 
+    def test_liveness_is_independent_of_runtime_dependencies(self) -> None:
+        app = create_app(
+            settings=_settings(),
+            repository=FakeAdminRepository(fail_probe=True),
+            storage=FakeStorage(fail=True),
+        )
+        response = TestClient(app).get("/health/live", headers=self.auth)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "ok")
+        self.assertEqual(response.headers["cache-control"], "no-store")
+
     def test_dashboard_contains_the_canonical_python_views(self) -> None:
         response = self.client.get("/admin", headers=self.auth)
         self.assertEqual(response.status_code, 200)
@@ -186,6 +198,30 @@ class PrivateAdminApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertNotIn("secret detail", encoded)
         self.assertEqual(response.json()["checks"]["database"], {"status": "failed"})
+
+    def test_readiness_rejects_non_runnable_configuration(self) -> None:
+        source = json.loads(
+            Path("config/experiments/predictionarena-polymarket-v1.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        for decision in source["owner_decisions"].values():
+            decision["status"] = "owner_pending"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(json.dumps(source), encoding="utf-8")
+            storage = FakeStorage()
+            app = create_app(
+                settings=_settings(path),
+                repository=FakeAdminRepository(),
+                storage=storage,
+            )
+            response = TestClient(app).get("/health/ready", headers=self.auth)
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["status"], "not_ready")
+        self.assertEqual(response.json()["checks"]["configuration"]["status"], "failed")
+        self.assertEqual(storage.calls, 1)
 
     def test_readiness_can_succeed_with_resolved_configuration(self) -> None:
         source = json.loads(

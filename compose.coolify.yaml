@@ -43,7 +43,7 @@ services:
         - -c
         - >-
           import os,urllib.request;
-          r=urllib.request.Request('http://127.0.0.1:8000/health/live',headers={'Authorization':'Bearer '+os.environ['VTRADE_ADMIN_AUTH_SECRET']});
+          r=urllib.request.Request('http://127.0.0.1:8000/health/ready',headers={'Authorization':'Bearer '+os.environ['VTRADE_ADMIN_AUTH_SECRET']});
           urllib.request.urlopen(r)
       interval: 30s
       timeout: 5s
