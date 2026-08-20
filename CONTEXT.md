@@ -14,17 +14,37 @@ _Avoid_: Provider, platform
 A user-facing occurrence that groups one or more related markets.
 _Avoid_: Market, contract
 
+**Series**:
+A venue-defined recurring family of related markets and rules; its identity is retained as an
+opaque venue reference and is never inferred by parsing a market reference.
+_Avoid_: Event, market
+
 **Market**:
 One binary proposition whose mutually exclusive outcomes are YES and NO.
 _Avoid_: Event, token
+
+**Market reference**:
+The exact opaque venue reference for one Market, stable across live and historical reads and not
+derived from a label, slug, or ticker structure.
+_Avoid_: Token ID, condition ID, slug
 
 **Outcome**:
 The YES or NO side of a market that determines a position's payoff.
 _Avoid_: Token, market
 
+**Outcome side**:
+Exactly one of YES or NO for a Market; its identity is owned by the Market and side, not by a
+venue-specific token or leg.
+_Avoid_: Token, leg
+
 **Contract**:
 The quantity-bearing claim on one outcome of a market; contract quantities may be fractional.
 _Avoid_: Share, token
+
+**Canonical order book**:
+A frozen two-sided view of executable bids and complementary asks for both outcome sides, with
+exact prices and contract quantities observed at one cutoff.
+_Avoid_: Raw venue book, quote
 
 **Discovery universe**:
 The bounded set of active, tradeable markets made available for an agent to investigate during a
