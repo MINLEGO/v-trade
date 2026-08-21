@@ -617,7 +617,7 @@ class PostgresHarnessRepository:
                     raise ValueError("plan idempotency key reused with different content")
                 return
             cursor.execute(
-                "UPDATE plans SET status = 'superseded' "
+                "UPDATE plans SET status = 'archived' "
                 "WHERE agent_id = %s AND plan_type = %s AND status = 'active'",
                 (uuid.UUID(plan.agent_id), plan.plan_type.value),
             )

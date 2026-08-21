@@ -344,7 +344,7 @@ class PostgresSchedulingTests(unittest.TestCase):
         )
         self.assertLess(checkpoint, cutoff)
         cutoff_params = connection.cursor_instance.queries[cutoff][1]
-        self.assertEqual(cutoff_params, (NOW, CYCLE_ID, "worker-1"))
+        self.assertEqual(cutoff_params, (NOW, CYCLE_ID, "worker-1", NOW))
 
     def test_registering_an_existing_deleted_artifact_reactivates_it(self) -> None:
         connection = SchedulingConnection()

@@ -264,7 +264,7 @@ class PostgresHarnessRepositoryTests(unittest.TestCase):
         self.assertEqual(len(inserts), 2)
         self.assertTrue(
             any(
-                query.startswith("UPDATE plans SET status = 'superseded'")
+                query.startswith("UPDATE plans SET status = 'archived'")
                 for query, _params in self.connection.cursor_instance.queries
             )
         )

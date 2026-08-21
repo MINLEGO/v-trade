@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import tempfile
 import unittest
@@ -17,7 +16,6 @@ from vtrade.broker import (
     LiquidityTimeInForce,
     PaperOrder,
     PaperPolicy,
-    PendingOrder,
     PortfolioState,
     PredictionArenaPaperBroker,
 )
@@ -60,30 +58,13 @@ NOW = datetime(2026, 7, 16, 15, 0, tzinfo=UTC)
 
 
 def _write_config(directory: str, *, pending: bool) -> Path:
-    tool_path = Path("spec/tool-schemas-v1.json")
+    raw = json.loads(Path("config/experiments/vtrade-kalshi-v1.json").read_text(encoding="utf-8"))
+    raw["owner_decisions"]["pagination"] = {
+        "status": "owner_pending" if pending else "resolved",
+        "required": True,
+    }
     path = Path(directory) / "experiment.json"
-    path.write_text(
-        json.dumps(
-            {
-                "experiment_version": "worker-test-v1",
-                "classifications": {},
-                "limits": {},
-                "artifacts": {
-                    "tool_schemas": {
-                        "path": str(tool_path),
-                        "sha256": hashlib.sha256(tool_path.read_bytes()).hexdigest(),
-                    }
-                },
-                "owner_decisions": {
-                    "pagination": {
-                        "status": "owner_pending" if pending else "resolved",
-                        "required": True,
-                    }
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
+    path.write_text(json.dumps(raw), encoding="utf-8")
     return path
 
 
@@ -129,7 +110,7 @@ class _PromptCursor:
         self.queries.append((query, tuple(params)))
         if query.startswith("SELECT COALESCE(sum(lp.amount_micros)"):
             self.rows = [self.account_row]
-        elif query.startswith("SELECT m.id::text"):
+        elif query.startswith("SELECT m.market_ref"):
             self.rows = self.position_rows
         elif query.startswith("SELECT previous.data_cutoff"):
             self.rows = [(self.previous_cutoff,)] if self.previous_cutoff is not None else []
@@ -139,7 +120,7 @@ class _PromptCursor:
             self.rows = self.rejection_rows
         elif query.startswith("SELECT count(*), COALESCE(sum(s.realized_pnl_micros)"):
             self.rows = [self.settlement_summary]
-        elif query.startswith("SELECT COALESCE(NULLIF(BTRIM(o.rejection_code)"):
+        elif query.startswith("SELECT COALESCE(NULLIF(BTRIM(lifecycle.reason)"):
             self.rows = self.rejection_summary_rows
         else:
             raise AssertionError(query)
@@ -179,17 +160,14 @@ class PromptContextTests(unittest.TestCase):
         return (
             "market-1",
             "outcome-1",
-            "token-1",
             "Question",
-            "YES",
             NOW + timedelta(days=2),
-            "10",
-            "0.5",
+            1_000,
             5_000_000,
             10_000,
             100_000,
             NOW,
-            Decimal(bid) if bid is not None else None,
+            int(Decimal(bid) * 1_000_000) if bid is not None else None,
             NOW,
         )
 
@@ -218,33 +196,17 @@ class PromptContextTests(unittest.TestCase):
             position_rows=[self._position_row(bid="0.60")],
         )
         pending_orders = (
-            PendingOrder(
-                "pending-same-1",
-                "market-1",
-                "outcome-1",
-                Side.BUY,
-                reserved_cost_basis_micros=MicroDollars(1_000_000),
+            SimpleNamespace(
+                market_ref="market-1", side=Side.BUY, reserved_cost_basis_micros=1_000_000
             ),
-            PendingOrder(
-                "pending-same-2",
-                "market-1",
-                "outcome-1",
-                Side.BUY,
-                reserved_cost_basis_micros=MicroDollars(2_000_000),
+            SimpleNamespace(
+                market_ref="market-1", side=Side.BUY, reserved_cost_basis_micros=2_000_000
             ),
-            PendingOrder(
-                "pending-other",
-                "market-2",
-                "outcome-2",
-                Side.BUY,
-                reserved_cost_basis_micros=MicroDollars(4_000_000),
+            SimpleNamespace(
+                market_ref="market-2", side=Side.BUY, reserved_cost_basis_micros=4_000_000
             ),
-            PendingOrder(
-                "pending-sell",
-                "market-1",
-                "outcome-1",
-                Side.SELL,
-                reserved_cost_basis_micros=MicroDollars(99_000_000),
+            SimpleNamespace(
+                market_ref="market-1", side=Side.SELL, reserved_cost_basis_micros=99_000_000
             ),
         )
 
@@ -259,14 +221,14 @@ class PromptContextTests(unittest.TestCase):
             summary["market_capacities"],
             [
                 {
-                    "market_id": "market-1",
+                    "market_ref": "market-1",
                     "held_cost_basis_micros": 5_000_000,
                     "pending_buy_reserved_cost_basis_micros": 3_000_000,
                     "market_limit_micros": 15_900_000,
                     "remaining_capacity_micros": 7_900_000,
                 },
                 {
-                    "market_id": "market-2",
+                    "market_ref": "market-2",
                     "held_cost_basis_micros": 0,
                     "pending_buy_reserved_cost_basis_micros": 4_000_000,
                     "market_limit_micros": 15_900_000,
@@ -389,7 +351,7 @@ class PromptContextTests(unittest.TestCase):
         rejection_summary_query = next(
             query
             for query in cursor.queries
-            if query[0].startswith("SELECT COALESCE(NULLIF(BTRIM(o.rejection_code)")
+            if query[0].startswith("SELECT COALESCE(NULLIF(BTRIM(lifecycle.reason)")
         )
         self.assertEqual(settlement_query[1][1:3], (previous_cutoff, NOW))
         self.assertEqual(rejection_query[1][1:3], (previous_cutoff, NOW))
@@ -403,8 +365,8 @@ class PromptContextTests(unittest.TestCase):
         )
         self.assertIn("settled_at > %s", settlement_query[0])
         self.assertIn("settled_at <= %s", settlement_query[0])
-        self.assertIn("COALESCE(o.rejected_at, o.created_at) > %s", rejection_query[0])
-        self.assertIn("COALESCE(o.rejected_at, o.created_at) <= %s", rejection_query[0])
+        self.assertIn("oo.created_at > %s", rejection_query[0])
+        self.assertIn("oo.created_at <= %s", rejection_query[0])
         self.assertEqual(activity["summary_24h"]["rejections"], {"stale_book": 4, "unknown": 3})
 
     def test_recent_activity_uses_rejection_fallback_and_stable_id_tie_breaking(self) -> None:
@@ -452,8 +414,8 @@ class PromptContextTests(unittest.TestCase):
 
         self.assertEqual(len(delta), 25)
         self.assertTrue(activity["since_last_cycle_truncated"])
-        self.assertEqual(delta[0]["market_id"], "market-25")
-        self.assertEqual(delta[-1]["market_id"], "market-1")
+        self.assertEqual(delta[0]["market_ref"], "market-25")
+        self.assertEqual(delta[-1]["market_ref"], "market-1")
         self.assertNotIn("created_at", delta[0])
         self.assertEqual(
             ProductionPromptPort._activity_event_payload(
@@ -469,8 +431,8 @@ class PromptContextTests(unittest.TestCase):
             ),
             {
                 "type": "rejection",
-                "market_id": "market",
-                "outcome_id": "outcome",
+                "market_ref": "market",
+                "outcome": "outcome",
                 "occurred_at": NOW.isoformat(),
                 "rejection_code": "unknown",
             },
@@ -624,7 +586,7 @@ class WorkerFailClosedTests(unittest.TestCase):
 
     def test_harness_recovery_reuses_only_a_completed_persisted_run(self) -> None:
         now = datetime(2026, 7, 18, 10, tzinfo=UTC)
-        run_id, intent_id = uuid.uuid4(), uuid.uuid4()
+        run_id, operation_id = uuid.uuid4(), uuid.uuid4()
 
         class Cursor:
             rowcount = 0
@@ -646,8 +608,8 @@ class WorkerFailClosedTests(unittest.TestCase):
                         ("transcript", "a" * 64, 41, now),
                         ("provider", "b" * 64, 73, now),
                     ]
-                elif "FROM order_intents" in query:
-                    self.rows = [(intent_id,)]
+                elif "FROM order_operations" in query:
+                    self.rows = [(operation_id,)]
                 else:
                     raise AssertionError(query)
 
@@ -681,7 +643,7 @@ class WorkerFailClosedTests(unittest.TestCase):
         )
         result = port.run(claim, {}, {})
         self.assertEqual(result.payload["harness_run_id"], str(run_id))
-        self.assertEqual(result.payload["intent_ids"], [str(intent_id)])
+        self.assertEqual(result.payload["operation_ids"], [str(operation_id)])
         self.assertEqual((result.tool_calls, result.exa_searches), (7, 3))
         self.assertEqual({item.uri for item in result.artifacts}, {"transcript", "provider"})
         self.assertEqual(
@@ -898,7 +860,7 @@ class WorkerFailClosedTests(unittest.TestCase):
             frozen,
             {"harness_run_id": str(uuid.uuid4()), "intent_ids": [str(intent_id)]},
         )
-        self.assertEqual(result.accepted_trades, 1)
+        self.assertEqual(result.accepted_operations, 1)
         self.assertEqual(state.seen_books, (book_id,))
         self.assertEqual(market_repository.seen_fees, (fee_id,))
         self.assertEqual(port._broker.seen_order.liquidity_time_in_force, LiquidityTimeInForce.FAK)
@@ -1083,13 +1045,15 @@ class WorkerFailClosedTests(unittest.TestCase):
             def run(self, claim, frozen, prompt):
                 calls["harness"] += 1
                 self.inputs = (claim, frozen, prompt)
-                return HarnessExecutionResult({"intent_ids": [str(intent_id)]}, (artifact,), 1, 2)
+                return HarnessExecutionResult(
+                    {"operation_ids": [str(intent_id)]}, (artifact,), 1, 2
+                )
 
         class Broker:
             def execute(self, claim, frozen, harness):
                 calls["broker"] += 1
-                self.assert_intent = harness["intent_ids"]
-                return BrokerExecutionResult({"order_ids": [str(uuid.uuid4())]}, (), 1)
+                self.assert_operation = harness["operation_ids"]
+                return BrokerExecutionResult({"operation_ids": [str(uuid.uuid4())]}, (), 1)
 
         class Settlement:
             def settle_before_prompt(self, claim, frozen):
@@ -1134,7 +1098,7 @@ class WorkerFailClosedTests(unittest.TestCase):
             now.replace(minute=10),
         )
         summary = orchestrator.run(initial)
-        self.assertEqual(summary[CycleStage.HARNESS.value]["intent_ids"], [str(intent_id)])
+        self.assertEqual(summary[CycleStage.HARNESS.value]["operation_ids"], [str(intent_id)])
         self.assertEqual(
             calls,
             {
@@ -1175,8 +1139,8 @@ class WorkerFailClosedTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = _write_config(directory, pending=False)
             with self.assertRaisesRegex(
-                ProductionCompositionUnavailable,
-                "missing REQUIRED environment resources",
+                ConfigurationError,
+                "reviewed Kalshi fixture capture",
             ):
                 run_worker(path)
 

@@ -621,7 +621,7 @@ class TavilyResearchProvider:
         now: datetime | None = None,
     ) -> SearchResponse:
         if not self._enabled:
-            raise ProviderDisabled("Tavily is disabled in predictionarena-polymarket-v1")
+            raise ProviderDisabled("Tavily is disabled in the active Kalshi experiment")
         normalized = _search_options(query, options, now=now)
         payload: JsonObject = {
             "query": query,

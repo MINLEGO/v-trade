@@ -504,18 +504,12 @@ class PromptBuilder:
 @dataclass(frozen=True, slots=True)
 class RecentActivityEvent:
     kind: str
-    market_id: str
+    market_ref: str
     occurred_at: datetime
-    outcome_id: str | None = None
+    outcome: str | None = None
     pnl_micros: int | None = None
     detail: str = ""
     stable_id: str = ""
-
-    @property
-    def created_at(self) -> datetime:
-        """Keep the old internal name readable while payloads use occurred_at."""
-        return self.occurred_at
-
 
 def _assistant_message(response: JsonObject) -> JsonObject:
     choices = response.get("choices")

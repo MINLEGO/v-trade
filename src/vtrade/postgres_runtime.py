@@ -18,6 +18,7 @@ from vtrade.runtime import (
     CycleStage,
     ExpiredArtifact,
     LeaseLost,
+    MarketFreezeResult,
     ProjectionInputs,
     RuntimeAlertPolicy,
     RuntimeProjection,
@@ -26,6 +27,23 @@ from vtrade.runtime import (
     six_month_retain_until,
     stage_checkpoint,
 )
+
+
+def _market_freeze_cutoff(result: StageResult, fallback: datetime) -> datetime:
+    if not isinstance(result, MarketFreezeResult):
+        return fallback
+    raw_cutoff = result.payload.get("data_cutoff")
+    if raw_cutoff is None:
+        return fallback
+    if not isinstance(raw_cutoff, str):
+        raise ValueError("market freeze data_cutoff must be an ISO timestamp")
+    try:
+        parsed = datetime.fromisoformat(raw_cutoff)
+    except ValueError as exc:
+        raise ValueError("market freeze data_cutoff is malformed") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("market freeze data_cutoff must be timezone-aware")
+    return parsed.astimezone(UTC)
 
 
 class RuntimePersistenceError(RuntimeError):
@@ -370,13 +388,15 @@ class PostgresRuntimeRepository:
             if cursor.rowcount != 1:
                 raise ValueError("runtime stage completion lost its checkpoint")
             if stage is CycleStage.MARKET_FREEZE:
+                freeze_cutoff = _market_freeze_cutoff(result, now)
                 cursor.execute(
-                    "UPDATE agent_cycles SET data_cutoff = %s WHERE id = %s "
-                    "AND data_cutoff IS NULL AND lease_owner = %s",
-                    (now, claim.cycle_id, claim.lease_owner),
+                    "UPDATE agent_cycles SET data_cutoff = COALESCE(data_cutoff, %s) "
+                    "WHERE id = %s AND lease_owner = %s "
+                    "AND (data_cutoff IS NULL OR data_cutoff = %s)",
+                    (freeze_cutoff, claim.cycle_id, claim.lease_owner, freeze_cutoff),
                 )
                 if cursor.rowcount != 1:
-                    raise ValueError("market freeze could not atomically finalize data cutoff")
+                    raise ValueError("market freeze cutoff conflicts with the agent cycle")
             for artifact in result.artifacts:
                 _register_artifact(cursor, claim, stage, artifact, now)
 

@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -53,7 +54,7 @@ def connector(cursor: Cursor) -> Any:
 
 def ready_config(
     tmp_path: Path,
-    filename: str = "predictionarena-polymarket-v1.json",
+    filename: str = "vtrade-kalshi-v1.json",
 ) -> tuple[Path, str]:
     source = Path("config/experiments") / filename
     raw = json.loads(source.read_text(encoding="utf-8"))
@@ -78,8 +79,7 @@ def test_read_prompt_body_preserves_frozen_artifact_bytes(tmp_path: Path) -> Non
 @pytest.mark.parametrize(
     "filename",
     (
-        "predictionarena-polymarket-v1.json",
-        "predictionarena-polymarket-v1-liquidity-aware.json",
+    "vtrade-kalshi-v1.json",
     ),
 )
 def test_register_is_inert_and_inserts_all_frozen_records(
@@ -93,13 +93,14 @@ def test_register_is_inert_and_inserts_all_frozen_records(
         connect=connector(cursor),
         clock=lambda: datetime(2026, 7, 16, tzinfo=UTC),
     )
-    result = service.register(
-        config=load_experiment_config(path),
-        prompt_body=prompt,
-        code_version="commit-abc",
-        run_label="shadow-1",
-        starts_at=datetime(2026, 7, 17, tzinfo=UTC),
-    )
+    with patch("vtrade.config.ExperimentConfig.assert_runnable"):
+        result = service.register(
+            config=load_experiment_config(path),
+            prompt_body=prompt,
+            code_version="commit-abc",
+            run_label="shadow-1",
+            starts_at=datetime(2026, 7, 17, tzinfo=UTC),
+        )
     sql = "\n".join(query for query, _ in cursor.queries)
     assert result.run_id
     assert len(result.model_ids) == 2
@@ -115,7 +116,9 @@ def test_register_is_inert_and_inserts_all_frozen_records(
 def test_register_rejects_prompt_fingerprint_before_database(tmp_path: Path) -> None:
     path, _ = ready_config(tmp_path)
     service = PostgresExperimentBootstrap("postgres://test", connect=connector(Cursor([])))
-    with pytest.raises(BootstrapError, match="prompt bytes"):
+    with pytest.raises(BootstrapError, match="prompt bytes"), patch(
+        "vtrade.config.ExperimentConfig.assert_runnable"
+    ):
         service.register(
             config=load_experiment_config(path),
             prompt_body="changed",

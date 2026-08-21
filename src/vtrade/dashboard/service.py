@@ -15,7 +15,7 @@ def build_cycle_diagnostics(detail: Mapping[str, DashboardValue]) -> list[dict[s
 
     The function deliberately makes no judgement about belief confidence: beliefs are
     agent memory and are not trade probabilities.  Trade-probability review belongs to
-    ``order_intents`` where the recorded ``estimated_probability`` is available.
+    ``operations`` where the recorded semantic order request is available.
     """
 
     diagnostics: list[dict[str, object]] = []
@@ -23,7 +23,7 @@ def build_cycle_diagnostics(detail: Mapping[str, DashboardValue]) -> list[dict[s
     model_turns = _rows(detail.get("model_turns"))
     tool_calls = _rows(detail.get("tool_calls"))
     research = _rows(detail.get("research"))
-    order_intents = _rows(detail.get("order_intents"))
+    operations = _rows(detail.get("operations"))
 
     failed_calls = [row for row in tool_calls if row.get("success") is False]
     if failed_calls:
@@ -65,12 +65,12 @@ def build_cycle_diagnostics(detail: Mapping[str, DashboardValue]) -> list[dict[s
                 [],
             )
         )
-    if not order_intents:
+    if not operations:
         diagnostics.append(
             _diagnostic(
                 "no_action",
                 "info",
-                "No order intent was recorded for this cycle.",
+                "No semantic order operation was recorded for this cycle.",
                 [],
             )
         )

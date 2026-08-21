@@ -28,13 +28,13 @@ from vtrade.broker import (
     SettlementEngine,
     SettlementObservation,
 )
-from vtrade.broker_repository import PostgresBrokerRepository
 from vtrade.config import (
     ConfigurationError,
     ExperimentConfig,
     load_experiment_config,
     required_environment,
 )
+from vtrade.domain.execution import OrderRequest
 from vtrade.domain.ports import ArtifactStore, JsonObject
 from vtrade.domain.types import (
     Market,
@@ -57,6 +57,9 @@ from vtrade.harness import (
     RecentActivityEvent,
 )
 from vtrade.harness_repository import PostgresBudgetGuard, PostgresHarnessRepository
+from vtrade.kalshi import KalshiPublicRestAdapter
+from vtrade.kalshi_freeze import KalshiFreezeRequest, KalshiMarketFreezeService
+from vtrade.kalshi_persistence import PostgresKalshiFreezeRepository
 from vtrade.liquidity import (
     LIQUIDITY_HAIRCUT_RULE_VERSION,
     VirtualLiquidityLevel,
@@ -68,13 +71,6 @@ from vtrade.liquidity import (
     metrics_for_fills,
     private_snapshot,
 )
-from vtrade.market_data import (
-    PolymarketFreezeService,
-    PostgresLiveOrderContextProvider,
-    PostgresMarketDataRepository,
-)
-from vtrade.order_execution import LiveOrderContextProvider, MarketOrderExecutor
-from vtrade.polymarket import PolymarketVenue
 from vtrade.postgres_runtime import PostgresRuntimeRepository
 from vtrade.production_tools import ProductionToolRegistry, production_tool_context
 from vtrade.providers import (
@@ -92,6 +88,7 @@ from vtrade.runtime import (
     CycleOrchestrator,
     HarnessExecutionResult,
     HourlyRuntime,
+    MarketFreezeResult,
     PreSettlementResult,
     ProjectionService,
     PromptResult,
@@ -100,6 +97,11 @@ from vtrade.runtime import (
     RuntimeTickResult,
     SettlementValuationResult,
     six_month_retain_until,
+)
+from vtrade.semantic_runtime import (
+    ProductionSemanticBrokerPort,
+    ProductionSemanticOrderExecutor,
+    ProductionSemanticSettlementPort,
 )
 
 
@@ -124,6 +126,12 @@ class _Connection(Protocol):
 _Connect = Callable[[str], AbstractContextManager[_Connection]]
 
 
+class _ImmediateSemanticExecutor(Protocol):
+    def submit_and_execute(
+        self, claim: CycleClaim, frozen: JsonObject, request: OrderRequest
+    ) -> Any: ...
+
+
 def _default_connect(database_url: str) -> AbstractContextManager[_Connection]:
     import psycopg
 
@@ -143,19 +151,16 @@ class _PromptSource:
 
 @dataclass(frozen=True, slots=True)
 class _PromptPosition:
-    market_id: str
-    outcome_id: str
-    venue_token_id: str
-    question: str
+    market_ref: str
     outcome: str
+    question: str
     closes_at: datetime | None
-    shares: Decimal
-    average_cost: Decimal
-    cost_basis_micros: int
+    contract_units: int
+    gross_cost_basis_micros: int
     entry_fees_micros: int
     realized_pnl_micros: int
     updated_at: datetime
-    bid: Decimal | None
+    bid_price_micros: int | None
     bid_observed_at: datetime | None
 
 
@@ -325,26 +330,27 @@ class ProductionPromptPort:
                     delta_oldest = _aware(cast(datetime, previous[0]))
 
             cursor.execute(
-                "SELECT 'settlement', m.id::text, p.outcome_id::text, "
+                "SELECT 'settlement', m.market_ref, s.outcome_side, "
                 "s.realized_pnl_micros, s.settled_at, '', s.id::text "
-                "FROM settlements s JOIN positions p ON p.id = s.position_id "
-                "JOIN outcomes o ON o.id = p.outcome_id "
-                "JOIN markets m ON m.id = o.market_id "
+                "FROM settlements s JOIN markets m ON m.id = s.market_id "
                 "WHERE s.agent_id = %s AND s.settled_at > %s AND s.settled_at <= %s "
                 "ORDER BY s.settled_at DESC, s.id DESC LIMIT %s",
                 (agent_id, delta_oldest, cutoff, self._RECENT_ACTIVITY_LIMIT + 1),
             )
             rows = list(cursor.fetchall())
             cursor.execute(
-                "SELECT 'rejection', oi.market_id::text, oi.outcome_id::text, "
-                "0, COALESCE(o.rejected_at, o.created_at), "
-                "COALESCE(NULLIF(BTRIM(o.rejection_code), ''), 'unknown'), o.id::text "
-                "FROM orders o JOIN order_intents oi ON oi.id = o.intent_id "
-                "JOIN agent_cycles ac ON ac.id = oi.agent_cycle_id "
-                "WHERE ac.agent_id = %s AND o.status = 'rejected' "
-                "AND COALESCE(o.rejected_at, o.created_at) > %s "
-                "AND COALESCE(o.rejected_at, o.created_at) <= %s "
-                "ORDER BY COALESCE(o.rejected_at, o.created_at) DESC, o.id DESC LIMIT %s",
+                "SELECT 'rejection', m.market_ref, oo.outcome_side, "
+                "0, oo.created_at, "
+                "COALESCE(NULLIF(BTRIM(lifecycle.reason), ''), 'unknown'), oo.id::text "
+                "FROM order_operations oo JOIN markets m ON m.id = oo.market_id "
+                "JOIN order_operation_current current_state "
+                "ON current_state.operation_id = oo.id "
+                "LEFT JOIN LATERAL (SELECT reason FROM order_lifecycle_events event "
+                "WHERE event.operation_id = oo.id AND event.state = 'REJECTED' "
+                "ORDER BY event.sequence_number DESC, event.id DESC LIMIT 1) lifecycle ON true "
+                "WHERE oo.agent_id = %s AND current_state.state = 'REJECTED' "
+                "AND oo.created_at > %s AND oo.created_at <= %s "
+                "ORDER BY oo.created_at DESC, oo.id DESC LIMIT %s",
                 (agent_id, delta_oldest, cutoff, self._RECENT_ACTIVITY_LIMIT + 1),
             )
             rows.extend(cursor.fetchall())
@@ -356,22 +362,24 @@ class ProductionPromptPort:
             )
             settlement_summary = cursor.fetchone()
             cursor.execute(
-                "SELECT COALESCE(NULLIF(BTRIM(o.rejection_code), ''), 'unknown'), count(*) "
-                "FROM orders o JOIN order_intents oi ON oi.id = o.intent_id "
-                "JOIN agent_cycles ac ON ac.id = oi.agent_cycle_id "
-                "WHERE ac.agent_id = %s AND o.status = 'rejected' "
-                "AND COALESCE(o.rejected_at, o.created_at) > %s "
-                "AND COALESCE(o.rejected_at, o.created_at) <= %s "
-                "GROUP BY COALESCE(NULLIF(BTRIM(o.rejection_code), ''), 'unknown') "
-                "ORDER BY COALESCE(NULLIF(BTRIM(o.rejection_code), ''), 'unknown')",
+                "SELECT COALESCE(NULLIF(BTRIM(lifecycle.reason), ''), 'unknown'), count(*) "
+                "FROM order_operations oo JOIN order_operation_current current_state "
+                "ON current_state.operation_id = oo.id "
+                "LEFT JOIN LATERAL (SELECT reason FROM order_lifecycle_events event "
+                "WHERE event.operation_id = oo.id AND event.state = 'REJECTED' "
+                "ORDER BY event.sequence_number DESC, event.id DESC LIMIT 1) lifecycle ON true "
+                "WHERE oo.agent_id = %s AND current_state.state = 'REJECTED' "
+                "AND oo.created_at > %s AND oo.created_at <= %s "
+                "GROUP BY COALESCE(NULLIF(BTRIM(lifecycle.reason), ''), 'unknown') "
+                "ORDER BY COALESCE(NULLIF(BTRIM(lifecycle.reason), ''), 'unknown')",
                 (agent_id, summary_oldest, cutoff),
             )
             rejection_summary_rows = cursor.fetchall()
         events = tuple(
             RecentActivityEvent(
                 kind=str(row[0]),
-                market_id=str(row[1]),
-                outcome_id=str(row[2]) if row[2] is not None else None,
+                market_ref=str(row[1]),
+                outcome=str(row[2]) if row[2] is not None else None,
                 pnl_micros=int(str(row[3])) if row[0] == "settlement" else None,
                 occurred_at=_aware(cast(datetime, row[4])),
                 detail=(
@@ -390,8 +398,8 @@ class ProductionPromptPort:
                     item.occurred_at,
                     item.stable_id,
                     item.kind,
-                    item.market_id,
-                    item.outcome_id or "",
+                    item.market_ref,
+                    item.outcome or "",
                 ),
                 reverse=True,
             )
@@ -422,8 +430,8 @@ class ProductionPromptPort:
     def _activity_event_payload(event: RecentActivityEvent) -> JsonObject:
         payload: JsonObject = {
             "type": event.kind,
-            "market_id": event.market_id,
-            "outcome_id": event.outcome_id,
+            "market_ref": event.market_ref,
+            "outcome": event.outcome,
             "occurred_at": event.occurred_at.isoformat(),
         }
         if event.kind == "settlement":
@@ -438,7 +446,7 @@ class ProductionPromptPort:
         *,
         cutoff: datetime,
         frozen: Mapping[str, object],
-        pending_orders: Sequence[PendingOrder] = (),
+        pending_orders: Sequence[object] = (),
     ) -> JsonObject:
         snapshot_ids = _uuids(frozen, "order_book_snapshot_ids")
         oldest_bid = cutoff - self._maximum_valuation_bid_age
@@ -456,21 +464,21 @@ class ProductionPromptPort:
             )
             account = cursor.fetchone()
             cursor.execute(
-                "SELECT m.id::text, p.outcome_id::text, o.venue_token_id, m.question, "
-                "o.name, m.closes_at, p.shares, p.average_cost, p.cost_basis_micros, "
-                "p.entry_fees_micros, p.realized_pnl_micros, p.updated_at, "
-                "book.best_bid, book.cutoff "
-                "FROM positions p JOIN outcomes o ON o.id = p.outcome_id "
-                "JOIN markets m ON m.id = o.market_id "
+                "SELECT m.market_ref, p.outcome_side, m.question, m.close_time, "
+                "p.contract_units, p.gross_cost_basis_micros, p.entry_fees_micros, "
+                "p.realized_pnl_micros, p.updated_at, book.price_micros, book.cutoff "
+                "FROM positions p JOIN markets m ON m.id = p.market_id "
                 "LEFT JOIN LATERAL ("
-                "SELECT obs.best_bid, obs.cutoff FROM order_book_snapshots obs "
-                "WHERE obs.outcome_id = p.outcome_id "
-                "AND obs.id = ANY(%s::uuid[]) AND obs.best_bid IS NOT NULL "
+                "SELECT obl.price_micros, obs.cutoff FROM order_book_snapshots obs "
+                "JOIN order_book_levels obl ON obl.snapshot_id = obs.id "
+                "WHERE obs.market_id = p.market_id AND obl.outcome_side = p.outcome_side "
+                "AND obl.book_side = 'bid' AND obs.id = ANY(%s::uuid[]) "
                 "AND obs.cutoff <= %s AND obs.cutoff >= %s "
-                "AND (obs.source_created_at IS NULL OR obs.source_created_at <= %s) "
-                "ORDER BY obs.cutoff DESC, obs.id DESC LIMIT 1"
+                "AND (obs.source_timestamp IS NULL OR obs.source_timestamp <= %s) "
+                "ORDER BY obs.cutoff DESC, obs.id DESC, obl.price_micros DESC LIMIT 1"
                 ") book ON TRUE "
-                "WHERE p.agent_id = %s AND p.shares > 0 ORDER BY p.outcome_id",
+                "WHERE p.agent_id = %s AND p.contract_units > 0 "
+                "ORDER BY m.market_ref, p.outcome_side",
                 (list(snapshot_ids), cutoff, oldest_bid, cutoff, agent_id),
             )
             rows = cursor.fetchall()
@@ -486,12 +494,13 @@ class ProductionPromptPort:
         liquidation_by_market: dict[str, int | None] = {}
         held_basis_by_market: dict[str, int] = {}
         for position in positions:
-            held_basis_by_market[position.market_id] = (
-                held_basis_by_market.get(position.market_id, 0) + position.cost_basis_micros
+            held_basis_by_market[position.market_ref] = (
+                held_basis_by_market.get(position.market_ref, 0)
+                + position.gross_cost_basis_micros
             )
             value = self._liquidation_value(position) if self._valid_bid(position) else None
-            previous = liquidation_by_market.get(position.market_id, 0)
-            liquidation_by_market[position.market_id] = (
+            previous = liquidation_by_market.get(position.market_ref, 0)
+            liquidation_by_market[position.market_ref] = (
                 None
                 if value is None or previous is None
                 else previous + value
@@ -505,17 +514,20 @@ class ProductionPromptPort:
         entry_fees_micros = sum(position.entry_fees_micros for position in positions)
         unrealized_pnl_micros = (
             total_liquidation
-            - sum(position.cost_basis_micros for position in positions)
+            - sum(position.gross_cost_basis_micros for position in positions)
             - entry_fees_micros
             if total_liquidation is not None
             else None
         )
         pending_basis_by_market: dict[str, int] = {}
         for pending in pending_orders:
-            if pending.side is Side.BUY:
-                pending_basis_by_market[pending.market_id] = (
-                    pending_basis_by_market.get(pending.market_id, 0)
-                    + int(pending.reserved_cost_basis_micros)
+            pending_side = getattr(pending, "side", None)
+            pending_market_ref = getattr(pending, "market_ref", None)
+            reserved_basis = getattr(pending, "reserved_cost_basis_micros", None)
+            if pending_side is Side.BUY and isinstance(pending_market_ref, str):
+                pending_basis_by_market[pending_market_ref] = (
+                    pending_basis_by_market.get(pending_market_ref, 0)
+                    + int(reserved_basis or 0)
                 )
         market_ids = sorted(set(held_basis_by_market) | set(pending_basis_by_market))
         capacity_by_market: dict[str, MarketCapacity | None] = {}
@@ -547,10 +559,10 @@ class ProductionPromptPort:
                 cutoff=cutoff,
                 nav_micros=nav_micros,
                 market_basis_micros=(
-                    held_basis_by_market[position.market_id]
-                    + pending_basis_by_market.get(position.market_id, 0)
+                    held_basis_by_market[position.market_ref]
+                    + pending_basis_by_market.get(position.market_ref, 0)
                 ),
-                market_capacity=capacity_by_market[position.market_id],
+                market_capacity=capacity_by_market[position.market_ref],
             )
             for position in positions
         ]
@@ -562,7 +574,7 @@ class ProductionPromptPort:
             capacity = capacity_by_market[market_id]
             market_capacities.append(
                 {
-                    "market_id": market_id,
+                    "market_ref": market_id,
                     "held_cost_basis_micros": held_basis_by_market.get(market_id, 0),
                     "pending_buy_reserved_cost_basis_micros": pending_basis_by_market.get(
                         market_id, 0
@@ -596,43 +608,36 @@ class ProductionPromptPort:
 
     @staticmethod
     def _prompt_position(row: Sequence[object]) -> _PromptPosition:
-        closes_at = _aware(cast(datetime, row[5])) if row[5] is not None else None
-        bid = Decimal(str(row[12])) if row[12] is not None else None
-        bid_observed_at = _aware(cast(datetime, row[13])) if row[13] is not None else None
+        closes_at = _aware(cast(datetime, row[3])) if row[3] is not None else None
+        bid = int(str(row[9])) if row[9] is not None else None
+        bid_observed_at = _aware(cast(datetime, row[10])) if row[10] is not None else None
         return _PromptPosition(
-            market_id=str(row[0]),
-            outcome_id=str(row[1]),
-            venue_token_id=str(row[2]),
-            question=str(row[3]),
-            outcome=str(row[4]),
+            market_ref=str(row[0]),
+            outcome=str(row[1]),
+            question=str(row[2]),
             closes_at=closes_at,
-            shares=Decimal(str(row[6])),
-            average_cost=Decimal(str(row[7])),
-            cost_basis_micros=int(str(row[8])),
-            entry_fees_micros=int(str(row[9])),
-            realized_pnl_micros=int(str(row[10])),
-            updated_at=_aware(cast(datetime, row[11])),
-            bid=bid,
+            contract_units=int(str(row[4])),
+            gross_cost_basis_micros=int(str(row[5])),
+            entry_fees_micros=int(str(row[6])),
+            realized_pnl_micros=int(str(row[7])),
+            updated_at=_aware(cast(datetime, row[8])),
+            bid_price_micros=bid,
             bid_observed_at=bid_observed_at,
         )
 
     def _valid_bid(self, position: _PromptPosition) -> bool:
         return (
-            position.bid is not None
-            and position.bid.is_finite()
-            and Decimal(0) <= position.bid <= Decimal(1)
+            position.bid_price_micros is not None
+            and 0 <= position.bid_price_micros <= 1_000_000
             and position.bid_observed_at is not None
         )
 
     @staticmethod
     def _liquidation_value(position: _PromptPosition) -> int:
-        if position.bid is None:
+        if position.bid_price_micros is None:
             raise ValueError("liquidation value requires a bid")
-        return int(
-            (position.shares * position.bid * Decimal(1_000_000)).to_integral_value(
-                rounding=ROUND_HALF_UP
-            )
-        )
+        numerator = position.contract_units * position.bid_price_micros
+        return (numerator + 50) // 100
 
     @staticmethod
     def _ratio(numerator: int, denominator: int | None) -> str | None:
@@ -676,7 +681,7 @@ class ProductionPromptPort:
         valid = self._valid_bid(position)
         liquidation = self._liquidation_value(position) if valid else None
         unrealized = (
-            liquidation - position.cost_basis_micros - position.entry_fees_micros
+            liquidation - position.gross_cost_basis_micros - position.entry_fees_micros
             if liquidation is not None
             else None
         )
@@ -686,16 +691,13 @@ class ProductionPromptPort:
             else None
         )
         return {
-            "market_id": position.market_id,
-            "outcome_id": position.outcome_id,
-            "venue_token_id": position.venue_token_id,
+            "market_ref": position.market_ref,
             "question": position.question,
             "outcome": position.outcome,
-            "shares": str(position.shares),
-            "average_cost": str(position.average_cost),
-            "cost_basis_micros": position.cost_basis_micros,
+            "contract_units": position.contract_units,
+            "gross_cost_basis_micros": position.gross_cost_basis_micros,
             "entry_fees_micros": position.entry_fees_micros,
-            "bid": str(position.bid) if valid and position.bid is not None else None,
+            "bid_price_micros": position.bid_price_micros if valid else None,
             "liquidation_value_micros": liquidation,
             "unrealized_pnl_micros": unrealized,
             "position_weight": self._ratio(liquidation or 0, nav_micros)
@@ -733,8 +735,8 @@ class ProductionPromptPort:
             close_soon,
             adverse,
             loss,
-            str(item["market_id"]),
-            str(item["outcome_id"]),
+            str(item["market_ref"]),
+            str(item["outcome"]),
         )
 
     @staticmethod
@@ -743,8 +745,10 @@ class ProductionPromptPort:
         unrealized_values = [item["unrealized_pnl_micros"] for item in positions]
         return {
             "count": len(positions),
-            "market_count": len({str(item["market_id"]) for item in positions}),
-            "cost_basis_micros": sum(int(item["cost_basis_micros"]) for item in positions),
+            "market_count": len({str(item["market_ref"]) for item in positions}),
+            "gross_cost_basis_micros": sum(
+                int(item["gross_cost_basis_micros"]) for item in positions
+            ),
             "entry_fees_micros": sum(int(item["entry_fees_micros"]) for item in positions),
             "liquidation_value_micros": (
                 sum(int(value) for value in liquidation_values)
@@ -777,7 +781,7 @@ class ProductionHarnessPort:
         maximum_beliefs_per_agent: int = 100,
         maximum_book_age: timedelta = timedelta(minutes=5),
         maximum_order_book_depth: int = 5,
-        immediate_order_executor: MarketOrderExecutor | None = None,
+        immediate_order_executor: _ImmediateSemanticExecutor | None = None,
         require_live_order_execution: bool = False,
     ) -> None:
         self._database_url = database_url
@@ -800,7 +804,10 @@ class ProductionHarnessPort:
         self._maximum_order_book_depth = maximum_order_book_depth
         self._repository = PostgresHarnessRepository(database_url, connect=connect)
         self._immediate_order_executor = immediate_order_executor
-        self._require_live_order_execution = require_live_order_execution
+        if require_live_order_execution:
+            raise ProductionCompositionUnavailable(
+                "real order execution is disabled in the active Kalshi paper composition"
+            )
 
     def run(
         self, claim: CycleClaim, frozen: JsonObject, prompt: JsonObject
@@ -828,12 +835,10 @@ class ProductionHarnessPort:
                 if immediate_executor is not None
                 else None
             ),
-            live_order_execution=(
-                immediate_executor is not None and immediate_executor.uses_live_context
-            ),
-            live_order_required=(
-                self._require_live_order_execution
-            ),
+            # The active release has no real execution adapter.  The callback
+            # is the semantic paper executor and never exposes venue credentials.
+            live_order_execution=False,
+            live_order_required=False,
         )
         registry = ProductionToolRegistry(context, schema_path=self._schema_path)
         result = BoundedToolHarness(
@@ -864,12 +869,12 @@ class ProductionHarnessPort:
         )
         self._persist_detailed_audit(claim, result, retained, completed)
         searches = sum(1 for item in result.tool_calls if item.name in EXA_RESEARCH_TOOL_NAMES)
-        intent_ids = self._cycle_intent_ids(claim.cycle_id)
+        operation_ids = self._cycle_operation_ids(claim.cycle_id)
         return HarnessExecutionResult(
             {
                 "harness_run_id": str(run_id),
                 "termination_status": result.termination_status,
-                "intent_ids": [str(value) for value in intent_ids],
+                "operation_ids": [str(value) for value in operation_ids],
                 "transcript_sha256": artifact.sha256,
             },
             registrations,
@@ -915,12 +920,12 @@ class ProductionHarnessPort:
             raise ProductionCompositionUnavailable(
                 "completed harness run lacks its atomic artifact inventory"
             )
-        intent_ids = self._cycle_intent_ids(claim.cycle_id)
+        operation_ids = self._cycle_operation_ids(claim.cycle_id)
         return HarnessExecutionResult(
             {
                 "harness_run_id": str(run[0]),
                 "termination_status": str(run[1]),
-                "intent_ids": [str(value) for value in intent_ids],
+                "operation_ids": [str(value) for value in operation_ids],
                 "transcript_sha256": str(run[5]),
                 "recovered_from_persisted_run": True,
             },
@@ -1128,10 +1133,10 @@ class ProductionHarnessPort:
                 ),
             )
 
-    def _cycle_intent_ids(self, cycle_id: uuid.UUID) -> tuple[uuid.UUID, ...]:
+    def _cycle_operation_ids(self, cycle_id: uuid.UUID) -> tuple[uuid.UUID, ...]:
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
             cursor.execute(
-                "SELECT id FROM order_intents WHERE agent_cycle_id = %s ORDER BY created_at, id",
+                "SELECT id FROM order_operations WHERE agent_cycle_id = %s ORDER BY created_at, id",
                 (cycle_id,),
             )
             return tuple(uuid.UUID(str(row[0])) for row in cursor.fetchall())
@@ -1952,7 +1957,7 @@ class ProductionBrokerPort:
     def __init__(
         self,
         database_url: str,
-        market_repository: PostgresMarketDataRepository,
+        market_repository: Any,
         *,
         clock: Callable[[], datetime],
         maximum_market_fraction: Decimal,
@@ -1964,13 +1969,15 @@ class ProductionBrokerPort:
         ignored_best_levels: int = 0,
         maximum_ignored_depth_fraction: Decimal = Decimal(0),
         liquidity_rule_version: str = LIQUIDITY_HAIRCUT_RULE_VERSION,
-        live_context_provider: LiveOrderContextProvider | None = None,
+        live_context_provider: Any | None = None,
         connect: _Connect | None = None,
     ) -> None:
         self._database_url = database_url
         self._market_repository = market_repository
         self._clock = clock
         self._state = _PostgresTradingState(database_url, connect=connect)
+        from vtrade.broker_repository import PostgresBrokerRepository
+
         self._repository = PostgresBrokerRepository(database_url, connect=connect)
         self._liquidity_time_in_force = liquidity_time_in_force
         self._live_context_provider = live_context_provider
@@ -1991,6 +1998,8 @@ class ProductionBrokerPort:
     def execute(
         self, claim: CycleClaim, frozen: JsonObject, harness: JsonObject
     ) -> BrokerExecutionResult:
+        from vtrade.order_execution import MarketOrderExecutor
+
         live_provider = getattr(self, "_live_context_provider", None)
         if (
             getattr(self._broker, "policy", None) is PaperPolicy.LIQUIDITY_AWARE
@@ -2019,10 +2028,10 @@ class ProductionBrokerPort:
             cancelled = executor.cancel_incomplete_on_restart(claim, frozen)
             return BrokerExecutionResult(
                 {
-                    "order_ids": [str(receipt.order_id) for receipt in cancelled],
+                    "operation_ids": [str(receipt.order_id) for receipt in cancelled],
                     "rejections": [
                         {
-                            "intent_id": str(receipt.result.order.id),
+                            "operation_id": str(receipt.result.order.id),
                             "code": receipt.result.rejection_code.value
                             if receipt.result.rejection_code
                             else None,
@@ -2035,7 +2044,7 @@ class ProductionBrokerPort:
             )
         allowed_intents = self._state.persisted_harness_intents(claim, harness)
         if not allowed_intents:
-            return BrokerExecutionResult({"order_ids": [], "rejections": []}, (), 0)
+            return BrokerExecutionResult({"operation_ids": [], "rejections": []}, (), 0)
         created: list[str] = []
         rejected: list[JsonObject] = []
         accepted = 0
@@ -2053,14 +2062,14 @@ class ProductionBrokerPort:
             if result.status is ExecutionStatus.REJECTED:
                 rejected.append(
                     {
-                        "intent_id": str(item.intent_id),
+                        "operation_id": str(item.intent_id),
                         "code": result.rejection_code.value if result.rejection_code else None,
                     }
                 )
             else:
                 accepted += 1
         return BrokerExecutionResult(
-            {"order_ids": created, "rejections": rejected},
+            {"operation_ids": created, "rejections": rejected},
             (),
             accepted,
         )
@@ -2079,6 +2088,8 @@ class ProductionSettlementValuationPort:
         self._clock = clock
         self._maximum_bid_age = maximum_bid_age
         self._connect = connect or _default_connect
+        from vtrade.broker_repository import PostgresBrokerRepository
+
         self._state = _PostgresTradingState(database_url, connect=connect)
         self._repository = PostgresBrokerRepository(database_url, connect=connect)
 
@@ -2328,6 +2339,219 @@ class ProductionWorker:
             self.sleeper(poll_seconds)
 
 
+class ProductionKalshiFreezePort:
+    """Publish one immutable, semantic Kalshi freeze for a cycle.
+
+    The adapter is deliberately read-only.  The port turns its typed result into
+    the checkpoint JSON consumed by the prompt and tools, while the runtime
+    repository records every content-addressed source reference before the
+    checkpoint becomes visible.
+    """
+
+    def __init__(
+        self,
+        service: KalshiMarketFreezeService,
+        repository: PostgresRuntimeRepository,
+        persistence: PostgresKalshiFreezeRepository,
+        *,
+        clock: Callable[[], datetime],
+        maximum_historical_markets: int = 20,
+        maximum_additional_markets: int = 80,
+    ) -> None:
+        if maximum_historical_markets < 0 or maximum_additional_markets < 0:
+            raise ValueError("Kalshi freeze retention limits cannot be negative")
+        self._service = service
+        self._repository = repository
+        self._persistence = persistence
+        self._clock = clock
+        self._maximum_historical_markets = maximum_historical_markets
+        self._maximum_additional_markets = maximum_additional_markets
+
+    def freeze(self, claim: CycleClaim) -> MarketFreezeResult:
+        held_markets = self._persistence.market_refs_for_agent(claim.agent_id)
+        result = self._service.freeze(
+            KalshiFreezeRequest(
+                held_markets=held_markets,
+                historical_markets=held_markets,
+                cutoff=claim.data_cutoff,
+                maximum_historical_markets=self._maximum_historical_markets,
+                maximum_additional_markets=self._maximum_additional_markets,
+            )
+            if claim.data_cutoff
+            else KalshiFreezeRequest(
+                held_markets=held_markets,
+                historical_markets=held_markets,
+                maximum_historical_markets=self._maximum_historical_markets,
+                maximum_additional_markets=self._maximum_additional_markets,
+            )
+        )
+        retained = six_month_retain_until(_aware(self._clock()))
+        registrations: list[ArtifactRegistration] = []
+        artifact_ids: dict[str, uuid.UUID] = {}
+        for artifact in result.artifacts:
+            artifact_ids[artifact.sha256] = self._repository.persist_raw_artifact(artifact)
+            registrations.append(
+                ArtifactRegistration(artifact.uri, artifact.sha256, artifact.byte_length, retained)
+            )
+        persisted = self._persistence.persist(
+            result,
+            agent_cycle_id=claim.cycle_id,
+            raw_artifact_ids=artifact_ids,
+            published_at=_aware(self._clock()),
+        )
+        payload = _kalshi_freeze_payload(
+            result,
+            cycle_id=claim.cycle_id,
+            market_snapshot_ids=persisted.market_snapshot_ids,
+            order_book_snapshot_ids=persisted.order_book_snapshot_ids,
+            resolution_ids=persisted.resolution_ids,
+        )
+        observed = [artifact.observed_at for artifact in result.artifacts if artifact.observed_at]
+        freshest = max(observed, default=result.data_cutoff)
+        return MarketFreezeResult(
+            payload,
+            tuple(registrations),
+            _aware(freshest),
+        )
+
+
+def _kalshi_freeze_payload(
+    result: Any,
+    *,
+    cycle_id: uuid.UUID,
+    market_snapshot_ids: Sequence[uuid.UUID] | None = None,
+    order_book_snapshot_ids: Sequence[uuid.UUID] | None = None,
+    resolution_ids: Sequence[uuid.UUID] | None = None,
+) -> JsonObject:
+    def timestamp(value: datetime | None) -> str | None:
+        return value.isoformat() if value is not None else None
+
+    def level(value: Any) -> JsonObject:
+        return {"price_micros": int(value.price), "contract_units": int(value.quantity)}
+
+    def market(value: Any) -> JsonObject:
+        return {
+            "market_ref": value.market_ref,
+            "series_ref": value.series_ref,
+            "event_ref": value.event_ref,
+            "question": value.question,
+            "resolution_rules": value.resolution_rules,
+            "resolution_source": value.resolution_source,
+            "open_time": timestamp(value.open_time),
+            "close_time": timestamp(value.close_time),
+            "expected_expiration_time": timestamp(value.expected_expiration_time),
+            "latest_expiration_time": timestamp(value.latest_expiration_time),
+            "status": str(value.status),
+            "eligible": value.eligible,
+            "tradeable": value.tradeable,
+            "volume_units": int(value.volume),
+            "liquidity_micros": int(value.liquidity_micros),
+            "observed_at": timestamp(value.observed_at),
+            "outcomes": [
+                {
+                    "outcome": str(item.side),
+                    "label": item.label,
+                    "eligible": item.eligible,
+                }
+                for item in value.outcomes
+            ],
+            "price_ranges": [
+                {"start": int(item.start), "end": int(item.end), "step": int(item.step)}
+                for item in value.price_grid.ranges
+            ],
+            "audit": {
+                "uri": value.audit.uri,
+                "sha256": value.audit.sha256,
+                "byte_length": value.audit.byte_length,
+            },
+        }
+
+    contexts: list[JsonObject] = []
+    for context in result.contexts:
+        book = context.order_book
+        contexts.append(
+            {
+                "market_ref": context.market.market_ref,
+                "market": market(context.market),
+                "order_book": {
+                    "yes_bids": [level(item) for item in book.yes_bids],
+                    "yes_asks": [level(item) for item in book.yes_asks],
+                    "no_bids": [level(item) for item in book.no_bids],
+                    "no_asks": [level(item) for item in book.no_asks],
+                    "observed_at": timestamp(book.observed_at),
+                    "cutoff": timestamp(book.cutoff),
+                    "source_timestamp": timestamp(book.source_timestamp),
+                    "snapshot_id": str(book.snapshot_id),
+                    "audit": {
+                        "uri": book.artifact.uri,
+                        "sha256": book.artifact.sha256,
+                        "byte_length": book.artifact.byte_length,
+                    },
+                },
+            }
+        )
+    resolutions = [
+        {
+            "market_ref": item.market_key.market_ref,
+            "status": str(item.status),
+            "result": str(item.result) if item.result is not None else None,
+            "observed_at": timestamp(item.observed_at),
+            "source_timestamp": timestamp(item.source_timestamp),
+            "settlement_ts": timestamp(item.settlement_ts),
+            "blocked": item.blocked,
+            "snapshot_id": str(item.snapshot_id),
+            "audit": {
+                "uri": item.audit.uri,
+                "sha256": item.audit.sha256,
+                "byte_length": item.audit.byte_length,
+            },
+        }
+        for item in result.resolutions
+    ]
+    return {
+        "venue": "kalshi",
+        "cycle_id": str(cycle_id),
+        "data_cutoff": timestamp(result.data_cutoff),
+        "historical_cutoff": timestamp(result.catalogue.historical_cutoff),
+        "discovery_market_refs": [item.market_ref for item in result.discovery_market_keys],
+        "resolution_market_refs": [item.market_ref for item in result.resolution_market_keys],
+        "market_snapshot_ids": [
+            str(value)
+            for value in (
+                market_snapshot_ids
+                if market_snapshot_ids is not None
+                else tuple(item.market.snapshot_id for item in result.contexts)
+            )
+        ],
+        "order_book_snapshot_ids": [
+            str(value)
+            for value in (
+                order_book_snapshot_ids
+                if order_book_snapshot_ids is not None
+                else tuple(item.order_book.snapshot_id for item in result.contexts)
+            )
+        ],
+        "resolution_ids": [
+            str(value)
+            for value in (
+                resolution_ids
+                if resolution_ids is not None
+                else tuple(
+                    uuid.uuid5(uuid.NAMESPACE_URL, f"vtrade:resolution:{item.snapshot_id}")
+                    for item in result.resolutions
+                )
+            )
+        ],
+        "markets": [market(item) for item in result.markets],
+        "contexts": contexts,
+        "resolutions": resolutions,
+        "audit_references": [
+            {"uri": item.uri, "sha256": item.sha256, "byte_length": item.byte_length}
+            for item in result.artifacts
+        ],
+    }
+
+
 def build_production_worker(
     config: ExperimentConfig,
     *,
@@ -2392,63 +2616,67 @@ def build_production_worker(
         values["VTRADE_OPENROUTER_API_KEY"], store, budget, clock=clock
     )
     exa = ExaResearchProvider(values["VTRADE_EXA_API_KEY"], store, budget, clock=clock)
-    source_skew = float(config.raw["limits"]["maximum_source_clock_skew_seconds"])
-    venue = PolymarketVenue(
+    discovery = config.raw.get("discovery")
+    if not isinstance(discovery, Mapping):
+        raise ProductionCompositionUnavailable("experiment discovery configuration is missing")
+    venue = KalshiPublicRestAdapter(
         store,
         clock=clock,
-        maximum_source_clock_skew_seconds=source_skew,
+        maximum_parallel_requests=_positive_integer(
+            discovery, "maximum_concurrent_orderbooks"
+        ),
+        request_timeout_seconds=float(discovery.get("request_timeout_seconds", 15)),
+        connect_timeout_seconds=float(discovery.get("connect_timeout_seconds", 5)),
+        freeze_deadline_seconds=float(discovery.get("freeze_deadline_seconds", 600)),
     )
-    market_repository = PostgresMarketDataRepository(database_url)
     repository = PostgresRuntimeRepository(database_url)
+    freeze_persistence = PostgresKalshiFreezeRepository(database_url)
+    try:
+        repository.migration_status()
+    except Exception as exc:
+        raise ProductionCompositionUnavailable(
+            "private PostgreSQL is not at the verified four-migration readiness point"
+        ) from exc
     maximum_valuation_bid_age = timedelta(
         seconds=_integer(config.raw["limits"], "maximum_archived_bid_age_seconds")
     )
     maximum_order_book_age = _maximum_order_book_age(config.raw)
     maximum_order_book_depth = _order_book_depth(config.raw)
-    ignored_best_levels = _ignored_best_levels(config.raw)
-    maximum_ignored_depth_fraction = _maximum_ignored_depth_fraction(config.raw)
-    paper_policy = _paper_policy(config.raw)
-    live_context_provider: LiveOrderContextProvider | None = None
-    if paper_policy is PaperPolicy.LIQUIDITY_AWARE:
-        live_context_provider = PostgresLiveOrderContextProvider(
-            market_repository,
-            venue,
-            clock=clock,
-            monotonic=monotonic,
-            maximum_book_age=maximum_order_book_age,
-            maximum_source_skew=timedelta(seconds=min(source_skew, 5.0)),
+    if _paper_policy(config.raw) is not PaperPolicy.LIQUIDITY_AWARE:
+        raise ProductionCompositionUnavailable(
+            "the active Kalshi composition requires liquidity-aware paper execution"
         )
-    settlement_valuation = ProductionSettlementValuationPort(
+    settlement_valuation = ProductionSemanticSettlementPort(
         database_url,
         clock=clock,
         maximum_bid_age=maximum_valuation_bid_age,
     )
-    immediate_order_executor = MarketOrderExecutor(
-        _PostgresTradingState(database_url),
-        market_repository,
-        PostgresBrokerRepository(database_url),
-        broker=PredictionArenaPaperBroker(
-            policy=paper_policy,
-            maximum_market_cost_basis_fraction=Decimal(
-                str(config.raw["limits"]["maximum_market_cost_basis_fraction"])
-            ),
-            maximum_book_age=maximum_order_book_age,
-            maximum_book_depth=maximum_order_book_depth,
-            ignored_best_levels=ignored_best_levels,
-            maximum_ignored_depth_fraction=maximum_ignored_depth_fraction,
-            liquidity_rule_version=LIQUIDITY_HAIRCUT_RULE_VERSION,
-            maximum_valuation_bid_age=maximum_valuation_bid_age,
-        ),
+    immediate_order_executor = ProductionSemanticOrderExecutor(
+        database_url,
         clock=clock,
-        live_context_provider=live_context_provider,
-        maximum_live_observation_age=maximum_order_book_age,
+        maximum_book_age=maximum_order_book_age,
+        maximum_market_fraction=Decimal(
+            str(config.raw["limits"]["maximum_market_cost_basis_fraction"])
+        ),
     )
     orchestrator = CycleOrchestrator(
         repository=repository,
-        market_freezer=PolymarketFreezeService(
-            venue,
-            market_repository,
+        market_freezer=ProductionKalshiFreezePort(
+            KalshiMarketFreezeService(
+                venue,
+                clock=clock,
+                maximum_parallel_book_requests=_positive_integer(
+                    discovery, "maximum_concurrent_orderbooks"
+                ),
+                freeze_deadline_seconds=float(discovery.get("freeze_deadline_seconds", 600)),
+            ),
+            repository,
+            freeze_persistence,
             clock=clock,
+            maximum_historical_markets=_nonnegative_integer(
+                discovery, "retained_historical_outcomes"
+            ),
+            maximum_additional_markets=_nonnegative_integer(discovery, "additional_markets"),
         ),
         pre_settlement=settlement_valuation,
         prompt=ProductionPromptPort(
@@ -2473,25 +2701,9 @@ def build_production_worker(
             maximum_book_age=maximum_order_book_age,
             maximum_order_book_depth=maximum_order_book_depth,
             immediate_order_executor=immediate_order_executor,
-            require_live_order_execution=paper_policy is PaperPolicy.LIQUIDITY_AWARE,
+            require_live_order_execution=False,
         ),
-        broker=ProductionBrokerPort(
-            database_url,
-            market_repository,
-            clock=clock,
-            maximum_market_fraction=Decimal(
-                str(config.raw["limits"]["maximum_market_cost_basis_fraction"])
-            ),
-            maximum_bid_age=maximum_order_book_age,
-            maximum_valuation_bid_age=maximum_valuation_bid_age,
-            maximum_book_depth=maximum_order_book_depth,
-            ignored_best_levels=ignored_best_levels,
-            maximum_ignored_depth_fraction=maximum_ignored_depth_fraction,
-            liquidity_rule_version=LIQUIDITY_HAIRCUT_RULE_VERSION,
-            paper_policy=paper_policy,
-            liquidity_time_in_force=_liquidity_time_in_force(config.raw),
-            live_context_provider=live_context_provider,
-        ),
+        broker=ProductionSemanticBrokerPort(database_url),
         settlement_valuation=settlement_valuation,
         clock=clock,
         alert_policy=RuntimeAlertPolicy(
@@ -2532,8 +2744,11 @@ def run_worker(
     forever: bool = False,
 ) -> RuntimeTickResult | None:
     config = load_experiment_config(config_path)
-    config.assert_runnable()
-    application = worker or build_production_worker(config, environment=environment)
+    if worker is None:
+        config.assert_runnable()
+        application = build_production_worker(config, environment=environment)
+    else:
+        application = worker
     if forever:
         application.run_forever(
             poll_seconds=float(os.getenv("VTRADE_WORKER_POLL_SECONDS", "30")),
@@ -2546,7 +2761,7 @@ def run_worker(
 def main() -> None:
     config_path = os.getenv(
         "VTRADE_EXPERIMENT_CONFIG",
-        "config/experiments/predictionarena-polymarket-v1-liquidity-aware.json",
+        "config/experiments/vtrade-kalshi-v1.json",
     )
     try:
         run_worker(config_path, forever=True)
@@ -2707,6 +2922,15 @@ def _positive_integer(value: Mapping[str, object], key: str) -> int:
     result = _integer(value, key)
     if result <= 0:
         raise ProductionCompositionUnavailable(f"configuration field {key} must be positive")
+    return result
+
+
+def _nonnegative_integer(value: Mapping[str, object], key: str) -> int:
+    result = _integer(value, key)
+    if result < 0:
+        raise ProductionCompositionUnavailable(
+            f"configuration field {key} must be non-negative"
+        )
     return result
 
 

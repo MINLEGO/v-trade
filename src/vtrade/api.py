@@ -19,7 +19,12 @@ from starlette.responses import Response
 from vtrade.admin import AdminRepositoryError, InvalidOperatorAction, Page
 from vtrade.admin import PostgresAdminRepository as AdminRepository
 from vtrade.artifacts import SupabaseArtifactStore
-from vtrade.config import ConfigurationError, load_experiment_config, required_environment
+from vtrade.config import (
+    ACTIVE_EXPERIMENT_CONFIG,
+    ConfigurationError,
+    load_experiment_config,
+    required_environment,
+)
 from vtrade.dashboard.repository import DashboardRepositoryError, PostgresDashboardRepository
 from vtrade.dashboard.web import DashboardDataSource, create_dashboard_router
 
@@ -82,7 +87,7 @@ class AdminSettings:
             experiment_config=Path(
                 os.getenv(
                     "VTRADE_EXPERIMENT_CONFIG",
-                    "config/experiments/predictionarena-polymarket-v1-liquidity-aware.json",
+                    str(ACTIVE_EXPERIMENT_CONFIG).replace("\\", "/"),
                 )
             ),
         )
@@ -140,8 +145,24 @@ def create_app(
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
-        dependencies=[Depends(authenticate)],
     )
+
+    @app.middleware("http")
+    async def private_authentication(
+        request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
+        # Kubernetes-style liveness must remain cheap and provider-independent.
+        # Every operational, dashboard, and readiness route remains private.
+        if request.url.path != "/health/live":
+            try:
+                authenticate(request.headers.get("authorization"))
+            except HTTPException as exc:
+                return JSONResponse(
+                    status_code=exc.status_code,
+                    content={"detail": exc.detail},
+                    headers=exc.headers,
+                )
+        return await call_next(request)
 
     @app.middleware("http")
     async def private_response_headers(
@@ -199,10 +220,10 @@ def create_app(
             failures.append("database")
         try:
             runtime_storage.validate()
-            checks["supabase_storage"] = {"status": "ok"}
+            checks["artifact_storage"] = {"status": "ok"}
         except Exception:
-            checks["supabase_storage"] = {"status": "failed"}
-            failures.append("supabase_storage")
+            checks["artifact_storage"] = {"status": "failed"}
+            failures.append("artifact_storage")
         try:
             config = load_experiment_config(runtime_settings.experiment_config)
             config.assert_runnable()

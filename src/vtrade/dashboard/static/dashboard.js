@@ -462,7 +462,7 @@ function positionsPanel(positions) {
       element(
         "span",
         "",
-        `${text(first(position.shares, position.quantity, "—"))} shares · ${valuation}`
+        `${text(first(position.contract_units, "—"))} contract units · ${valuation}`
           + (age === null ? "" : ` · last bid ≤ ${age}s`)
           + ` · entry fees ${fee}`,
       ),
@@ -559,7 +559,7 @@ function auditEvents(detail) {
   });
   list(detail.belief_revisions).forEach((item) => events.push({ kind: "belief", title: "Belief revised", summary: item.content, at: item.created_at, result: item }));
   list(detail.plan_revisions).forEach((item) => events.push({ kind: "plan", title: `${text(item.plan_type)} plan revised`, summary: item.content, at: item.created_at, result: item }));
-  list(detail.order_intents).forEach((item) => events.push({ kind: item.order_status === "rejected" ? "error" : "trade", title: `${text(item.side, "Trade")} ${text(item.outcome_name, "order intent")}`, summary: first(item.thesis, item.market_question, item.validation_status), at: first(item.filled_at, item.rejected_at, item.accepted_at, item.intent_created_at), trade: item }));
+  list(detail.operations).forEach((item) => events.push({ kind: item.lifecycle_state === "REJECTED" ? "error" : "trade", title: `${text(item.order_side, "Order")} ${text(item.outcome_side, "outcome")}`, summary: first(item.lifecycle_reason, item.market_question, item.lifecycle_state), at: first(item.filled_at, item.created_at), trade: item }));
   return events.sort((left, right) => {
     const timeDifference = new Date(first(left.at, 0)).valueOf() - new Date(first(right.at, 0)).valueOf();
     if (timeDifference) return timeDifference;
@@ -634,13 +634,10 @@ function renderFreshness(items) {
 }
 
 function providerUsageLabel(item) {
-  const legacyTotalTokens = numeric(first(item.total_tokens, item.tokens));
-  const totalTokens = legacyTotalTokens ?? (
-    (numeric(item.prompt_tokens) || 0)
+  const totalTokens = (numeric(item.prompt_tokens) || 0)
     + (numeric(item.completion_tokens) || 0)
-    + (numeric(item.reasoning_tokens) || 0)
-  );
-  const requestCount = numeric(first(item.request_count, item.requests)) || 0;
+    + (numeric(item.reasoning_tokens) || 0);
+  const requestCount = numeric(item.request_count) || 0;
   return `${number.format(totalTokens)} tokens / ${number.format(requestCount)} requests`;
 }
 

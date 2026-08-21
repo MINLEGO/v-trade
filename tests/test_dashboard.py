@@ -145,10 +145,10 @@ class _ScriptedCursor:
                 ("revision_id", "plan_id", "plan_type", "content"),
                 [(uuid.UUID(int=108), uuid.UUID(int=109), "next_cycle", "Check the next release")],
             )
-        elif "FROM order_intents oi" in query:
+        elif "FROM order_operations oo" in query:
             self._rows(
-                ("intent_id", "thesis", "estimated_probability", "fill_id", "fill_price"),
-                [(uuid.UUID(int=110), "Rates will fall", 0.67, uuid.UUID(int=111), 0.61)],
+                ("operation_id", "market_ref", "fill_price_micros"),
+                [(uuid.UUID(int=110), "KX-RATES", 610_000)],
             )
         elif "FROM runtime_cycle_steps" in query:
             self._rows(("id", "stage", "status"), [(uuid.UUID(int=112), "harness", "completed")])
@@ -217,18 +217,14 @@ class TestDashboardWindow:
             DashboardFilters().since(datetime(2026, 7, 30, 12, 0))
 
     def test_position_valuation_uses_the_experiment_definition_policy(self) -> None:
-        active = load_experiment_config(
-            "config/experiments/predictionarena-polymarket-v1-liquidity-aware.json"
-        ).raw
-        historical = load_experiment_config(
-            "config/experiments/predictionarena-polymarket-v1.json"
-        ).raw
+        active = load_experiment_config("config/experiments/vtrade-kalshi-v1.json").raw
+        historical = load_experiment_config("config/experiments/vtrade-kalshi-v1.json").raw
         assert (
             active["execution"]["maximum_order_book_age_seconds"]
             == freshness_max_age_seconds(active)
         )
         assert position_valuation_max_age_seconds(active) == 1800
-        assert position_valuation_max_age_seconds(historical) == 300
+        assert position_valuation_max_age_seconds(historical) == 1800
         assert position_valuation_max_age_seconds({}) == 300
 
     def test_freshness_query_reads_active_order_book_age_policy(self) -> None:
@@ -289,7 +285,7 @@ class TestDashboardRepository:
         assert detail["research"][0]["canonical_url"] == "https://example.test/rates"
         assert detail["belief_revisions"][0]["confidence"] == 0.7
         assert detail["plan_revisions"][0]["plan_type"] == "next_cycle"
-        assert detail["order_intents"][0]["fill_price"] == 0.61
+        assert detail["operations"][0]["fill_price_micros"] == 610_000
         assert detail["runtime_steps"][0]["stage"] == "harness"
         assert {item["code"] for item in detail["diagnostics"]} == {"failed_tools"}
         assert len(connection.cursor_instance.queries) == 9
@@ -322,7 +318,7 @@ class TestDashboardDiagnostics:
                 },
             ],
             "research": [{} for _ in range(9)],
-            "order_intents": [],
+            "operations": [],
         }
 
         diagnostics = build_cycle_diagnostics(detail)
@@ -343,7 +339,7 @@ class TestDashboardApi:
             settings=AdminSettings(
                 "postgresql://unused",
                 SECRET,
-                __import__("pathlib").Path("config/experiments/predictionarena-polymarket-v1.json"),
+                __import__("pathlib").Path("config/experiments/vtrade-kalshi-v1.json"),
             ),
             repository=_FakeAdminRepository(),
             dashboard_repository=repository,
@@ -399,7 +395,7 @@ class TestDashboardApi:
             settings=AdminSettings(
                 "postgresql://unused",
                 SECRET,
-                __import__("pathlib").Path("config/experiments/predictionarena-polymarket-v1.json"),
+                __import__("pathlib").Path("config/experiments/vtrade-kalshi-v1.json"),
             ),
             repository=_FakeAdminRepository(),
             dashboard_repository=_FakeDashboardRepository(),

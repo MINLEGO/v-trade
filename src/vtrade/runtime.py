@@ -13,6 +13,23 @@ from typing import Any, Protocol
 
 JsonObject = dict[str, Any]
 
+_REMOVED_STAGE_KEYS = frozenset(
+    {
+        "market_id",
+        "outcome_id",
+        "token_id",
+        "venue_token_id",
+        "condition_id",
+        "shares",
+        "order_id",
+        "order_ids",
+        "order_intent",
+        "order_intents",
+        "intent_id",
+        "intent_ids",
+    }
+)
+
 
 class RuntimeConfigurationError(RuntimeError):
     pass
@@ -85,6 +102,7 @@ class StageResult:
     artifacts: tuple[ArtifactRegistration, ...] = ()
 
     def __post_init__(self) -> None:
+        _reject_removed_stage_keys(self.payload)
         json.dumps(self.payload, sort_keys=True, separators=(",", ":"), default=str)
 
 
@@ -130,12 +148,12 @@ class HarnessExecutionResult(StageResult):
 
 @dataclass(frozen=True, slots=True)
 class BrokerExecutionResult(StageResult):
-    accepted_trades: int = 0
+    accepted_operations: int = 0
 
     def __post_init__(self) -> None:
         StageResult.__post_init__(self)
-        if self.accepted_trades < 0:
-            raise ValueError("accepted trade count cannot be negative")
+        if self.accepted_operations < 0:
+            raise ValueError("accepted operation count cannot be negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -480,7 +498,10 @@ class CycleOrchestrator:
                     active_claim, stage, fingerprint, result, now=completed
                 )
                 if stage is CycleStage.MARKET_FREEZE:
-                    active_claim = replace(active_claim, data_cutoff=completed)
+                    active_claim = replace(
+                        active_claim,
+                        data_cutoff=_market_freeze_cutoff(result, fallback=completed),
+                    )
                 outputs[stage] = result.payload
                 typed[stage] = result
             settlement = typed.get(CycleStage.SETTLEMENT_VALUATION)
@@ -694,7 +715,7 @@ def stage_checkpoint(result: StageResult) -> JsonObject:
         metadata.update(exa_searches=result.exa_searches, tool_calls=result.tool_calls)
     elif isinstance(result, BrokerExecutionResult):
         kind = CycleStage.BROKER.value
-        metadata["accepted_trades"] = result.accepted_trades
+        metadata["accepted_operations"] = result.accepted_operations
     elif isinstance(result, SettlementValuationResult):
         kind = CycleStage.SETTLEMENT_VALUATION.value
         metadata.update(
@@ -727,7 +748,7 @@ def restore_stage(stage: CycleStage, checkpoint: Mapping[str, object]) -> StageR
             payload, artifacts, int(metadata["exa_searches"]), int(metadata["tool_calls"])
         )
     if stage is CycleStage.BROKER:
-        return BrokerExecutionResult(payload, artifacts, int(metadata["accepted_trades"]))
+        return BrokerExecutionResult(payload, artifacts, int(metadata["accepted_operations"]))
     return SettlementValuationResult(
         payload,
         artifacts,
@@ -780,6 +801,34 @@ def _fingerprint_inputs(
         default=str,
     ).encode()
     return hashlib.sha256(raw).hexdigest()
+
+
+def _reject_removed_stage_keys(value: object) -> None:
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            if str(key) in _REMOVED_STAGE_KEYS:
+                raise ValueError(f"stage payload uses removed legacy key: {key}")
+            _reject_removed_stage_keys(child)
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            _reject_removed_stage_keys(child)
+
+
+def _market_freeze_cutoff(result: StageResult, *, fallback: datetime) -> datetime:
+    """Use the freeze's immutable evidence cutoff when the port publishes it."""
+
+    if not isinstance(result, MarketFreezeResult):
+        return _aware(fallback)
+    raw_cutoff = result.payload.get("data_cutoff")
+    if raw_cutoff is None:
+        return _aware(fallback)
+    if not isinstance(raw_cutoff, str):
+        raise ValueError("market freeze data_cutoff must be an ISO timestamp")
+    try:
+        parsed = datetime.fromisoformat(raw_cutoff)
+    except ValueError as exc:
+        raise ValueError("market freeze data_cutoff is malformed") from exc
+    return _aware(parsed)
 
 
 def _aware(value: datetime) -> datetime:

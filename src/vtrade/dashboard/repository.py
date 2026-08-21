@@ -202,7 +202,7 @@ class PostgresDashboardRepository:
             cursor.execute(_CYCLE_PLANS, (cycle_id,))
             plans = _mapped_rows(cursor)
             cursor.execute(_CYCLE_ORDERS, (cycle_id,))
-            order_intents = _mapped_rows(cursor)
+            operations = _mapped_rows(cursor)
             cursor.execute(_CYCLE_RUNTIME_STEPS, (cycle_id,))
             runtime_steps = _mapped_rows(cursor)
         detail: dict[str, object] = {
@@ -214,7 +214,7 @@ class PostgresDashboardRepository:
             "provider_usage": provider_usage,
             "belief_revisions": beliefs,
             "plan_revisions": plans,
-            "order_intents": order_intents,
+            "operations": operations,
             "runtime_steps": runtime_steps,
         }
         detail["diagnostics"] = build_cycle_diagnostics(detail)
@@ -422,11 +422,13 @@ WITH active_definition AS (
       SELECT 'market' AS source, max(observed_at) AS last_observed_at,
              count(*) AS record_count FROM markets
       UNION ALL
+      SELECT 'catalogue', max(observed_at), count(*)
+        FROM catalogue_page_observations
+      UNION ALL
       SELECT 'order_book', max(cutoff), count(*) FROM order_book_snapshots
       UNION ALL
-      SELECT 'resolution', max(observed_at), count(*) FROM resolutions
-      UNION ALL
-      SELECT 'venue_sync', max(observed_at), count(*) FROM venue_sync_pages
+      SELECT 'resolution', max(observed_at), count(*)
+        FROM resolution_observations
 )
 SELECT source, last_observed_at,
        CASE WHEN last_observed_at IS NULL THEN NULL
@@ -529,44 +531,54 @@ SELECT a.id AS agent_id, a.run_id, a.name AS agent_name, a.initial_cash_micros, 
   ) valuation_policy ON true
   LEFT JOIN LATERAL (
       SELECT jsonb_agg(jsonb_build_object(
-          'position_id', p.id, 'market_id', m.id, 'market_question', m.question,
-          'outcome_id', o.id, 'outcome', o.name, 'shares', p.shares,
-          'average_cost', p.average_cost, 'cost_basis_micros', p.cost_basis_micros,
+          'position_id', p.id, 'market_ref', m.market_ref, 'market_question', m.question,
+          'outcome', p.outcome_side, 'contract_units', p.contract_units,
+          'gross_cost_basis_micros', p.gross_cost_basis_micros,
           'entry_fees_micros', p.entry_fees_micros,
           'realized_pnl_micros', p.realized_pnl_micros,
-          'best_bid', quote.best_bid, 'quote_cutoff', quote.cutoff,
+          'bid_price_micros', quote.price_micros, 'quote_cutoff', quote.cutoff,
+          'bid_snapshot_id', quote.snapshot_id,
+          'bid_artifact_id', quote.raw_artifact_id,
+          'bid_artifact_sha256', quote.raw_sha256,
+          'bid_artifact_uri', quote.raw_uri,
+          'bid_artifact_observed_at', quote.raw_observed_at,
           'liquidation_value_micros',
-              CASE WHEN quote.best_bid IS NULL
+              CASE WHEN quote.price_micros IS NULL OR quote.cutoff IS NULL
                          OR quote.cutoff < now()
                             - make_interval(secs => valuation_policy.max_age_seconds)
                    THEN NULL
-                   ELSE round(p.shares * quote.best_bid * 1000000)::bigint END,
+                   ELSE round(p.contract_units::numeric * quote.price_micros / 100)::bigint END,
           'unrealized_pnl_micros',
-              CASE WHEN quote.best_bid IS NULL
+              CASE WHEN quote.price_micros IS NULL OR quote.cutoff IS NULL
                          OR quote.cutoff < now()
                             - make_interval(secs => valuation_policy.max_age_seconds)
                    THEN NULL
-                   ELSE round(p.shares * quote.best_bid * 1000000)::bigint
-                        - p.cost_basis_micros - p.entry_fees_micros END,
+                   ELSE round(p.contract_units::numeric * quote.price_micros / 100)::bigint
+                        - p.gross_cost_basis_micros - p.entry_fees_micros END,
           'valuation_max_age_seconds', valuation_policy.max_age_seconds,
           'valuation_status',
-              CASE WHEN quote.best_bid IS NULL THEN 'missing'
+              CASE WHEN quote.price_micros IS NULL OR quote.cutoff IS NULL THEN 'missing'
                    WHEN quote.cutoff < now()
                         - make_interval(secs => valuation_policy.max_age_seconds)
                         THEN 'stale'
                    ELSE 'fresh' END,
           'updated_at', p.updated_at
-      ) ORDER BY p.cost_basis_micros DESC, p.id) AS positions
+      ) ORDER BY p.gross_cost_basis_micros DESC, p.id) AS positions
         FROM positions p
-        JOIN outcomes o ON o.id = p.outcome_id
-        JOIN markets m ON m.id = o.market_id
+        JOIN markets m ON m.id = p.market_id
         LEFT JOIN LATERAL (
-            SELECT obs.best_bid, obs.cutoff
+            SELECT obl.price_micros, obs.cutoff, obs.id AS snapshot_id,
+                   obs.raw_artifact_id, ra.sha256 AS raw_sha256,
+                   ra.uri AS raw_uri, ra.observed_at AS raw_observed_at
               FROM order_book_snapshots obs
-             WHERE obs.outcome_id = p.outcome_id AND obs.best_bid IS NOT NULL
-             ORDER BY obs.cutoff DESC, obs.id DESC LIMIT 1
+              JOIN order_book_levels obl ON obl.snapshot_id = obs.id
+              JOIN raw_artifacts ra ON ra.id = obs.raw_artifact_id
+             WHERE obs.market_id = p.market_id
+               AND obl.outcome_side = p.outcome_side
+               AND obl.book_side = 'bid'
+             ORDER BY obs.cutoff DESC, obs.id DESC, obl.price_micros DESC LIMIT 1
         ) quote ON true
-       WHERE p.agent_id = a.id AND p.shares > 0
+       WHERE p.agent_id = a.id AND p.contract_units > 0
   ) position_snapshot ON true
  WHERE {_SCOPE}
  GROUP BY a.id, mc.id, latest.account_value_micros, latest.realized_pnl_micros,
@@ -586,7 +598,7 @@ SELECT ac.id AS cycle_id, ac.agent_id, a.run_id, a.name AS agent_name, mc.label 
        ps.account_value_micros, ps.realized_pnl_micros, ps.unrealized_pnl_micros,
        (ps.calculation ->> 'entry_fees_micros')::bigint AS entry_fees_micros,
        COALESCE(tool_summary.failed_tools, 0)::bigint AS failed_tools,
-       COALESCE(order_summary.order_intents, 0)::bigint AS order_intents
+       COALESCE(order_summary.operations, 0)::bigint AS operations
   FROM agent_cycles ac
   JOIN agents a ON a.id = ac.agent_id
   JOIN model_configs mc ON mc.id = a.model_config_id
@@ -598,7 +610,7 @@ SELECT ac.id AS cycle_id, ac.agent_id, a.run_id, a.name AS agent_name, mc.label 
        WHERE mt.agent_cycle_id = ac.id
   ) tool_summary ON true
   LEFT JOIN LATERAL (
-      SELECT count(*) AS order_intents FROM order_intents oi WHERE oi.agent_cycle_id = ac.id
+       SELECT count(*) AS operations FROM order_operations oo WHERE oo.agent_cycle_id = ac.id
   ) order_summary ON true
  WHERE {_SCOPE}
  ORDER BY ac.scheduled_at DESC, ac.id DESC
@@ -709,22 +721,38 @@ SELECT pr.id AS revision_id, p.id AS plan_id, p.plan_type, p.status, p.due_at,
 """
 
 _CYCLE_ORDERS = """
-SELECT oi.id AS intent_id, oi.created_at AS intent_created_at, oi.side, oi.amount_micros,
-       oi.shares AS intent_shares, oi.strategy, oi.thesis, oi.estimated_probability,
-       oi.expected_value_micros, oi.validation_status, oi.rejection_code AS intent_rejection_code,
-       m.id AS market_id, m.question AS market_question, o.id AS outcome_id,
-       o.name AS outcome_name, ord.id AS order_id, ord.policy, ord.liquidity_time_in_force,
-       ord.status AS order_status, ord.requested_shares, ord.accepted_at, ord.rejected_at,
-       ord.rejection_code AS order_rejection_code, f.id AS fill_id, f.fill_index,
-       f.shares AS fill_shares, f.price AS fill_price, f.gross_micros, f.fee_micros,
-       f.fee_rate, f.filled_at
-  FROM order_intents oi
-  JOIN markets m ON m.id = oi.market_id
-  JOIN outcomes o ON o.id = oi.outcome_id
-  LEFT JOIN orders ord ON ord.intent_id = oi.id
-  LEFT JOIN fills f ON f.order_id = ord.id
- WHERE oi.agent_cycle_id = %s::uuid
- ORDER BY oi.created_at ASC, oi.id ASC, ord.created_at ASC NULLS LAST, f.fill_index ASC NULLS LAST
+SELECT oo.id AS operation_id, oo.created_at, oo.outcome_side, oo.order_side,
+       oo.amount_kind, oo.cash_amount_micros, oo.contract_units,
+       oo.limit_price_micros, oo.time_in_force, oo.frozen_cutoff,
+       oo.execution_cutoff, m.market_ref, m.question AS market_question,
+       current_state.state AS lifecycle_state,
+       current_state.reconciliation_state, lifecycle.reason AS lifecycle_reason,
+       f.id AS fill_id, f.fill_id AS venue_fill_ref, f.contract_units AS filled_contract_units,
+       f.price_micros AS fill_price_micros, f.gross_cash_micros,
+       f.authoritative_fee_micros, f.net_cash_delta_micros, f.filled_at,
+       f.frozen_context_id, f.execution_context_id,
+       execution_book.raw_artifact_id AS execution_artifact_id,
+       execution_artifact.sha256 AS execution_artifact_sha256,
+       execution_artifact.uri AS execution_artifact_uri,
+       execution_artifact.observed_at AS execution_artifact_observed_at
+  FROM order_operations oo
+  JOIN markets m ON m.id = oo.market_id
+  LEFT JOIN order_operation_current current_state
+    ON current_state.operation_id = oo.id
+  LEFT JOIN LATERAL (
+      SELECT reason
+        FROM order_lifecycle_events event
+       WHERE event.operation_id = oo.id
+       ORDER BY event.sequence_number DESC, event.id DESC
+       LIMIT 1
+  ) lifecycle ON true
+  LEFT JOIN fills f ON f.operation_id = oo.id
+  LEFT JOIN order_book_snapshots execution_book
+    ON execution_book.id = f.execution_context_id
+  LEFT JOIN raw_artifacts execution_artifact
+    ON execution_artifact.id = execution_book.raw_artifact_id
+ WHERE oo.agent_cycle_id = %s::uuid
+ ORDER BY oo.created_at ASC, oo.id ASC, f.filled_at ASC NULLS LAST, f.id ASC
  LIMIT 500
 """
 

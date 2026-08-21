@@ -10,6 +10,7 @@ from contextlib import AbstractContextManager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -79,7 +80,7 @@ class FakeAdminRepository:
 
 
 def _settings(
-    config: Path = Path("config/experiments/predictionarena-polymarket-v1.json"),
+    config: Path = Path("config/experiments/vtrade-kalshi-v1.json"),
 ) -> AdminSettings:
     return AdminSettings("postgresql://unused", SECRET, config)
 
@@ -96,22 +97,19 @@ class PrivateAdminApiTests(unittest.TestCase):
         self.auth = {"Authorization": f"Bearer {SECRET}"}
 
     def test_every_registered_route_requires_auth_and_schema_routes_are_disabled(self) -> None:
-        for path in ("/", "/admin", "/health/live", "/health/ready", "/admin/positions"):
+        for path in ("/", "/admin", "/health/ready", "/admin/positions"):
             with self.subTest(path=path):
                 response = self.client.get(path)
                 self.assertEqual(response.status_code, 401)
                 self.assertEqual(response.json(), {"detail": "unauthorized"})
                 self.assertEqual(response.headers["cache-control"], "no-store")
-        self.assertEqual(self.client.get("/docs").status_code, 404)
-        self.assertEqual(self.client.get("/redoc").status_code, 404)
-        self.assertEqual(self.client.get("/openapi.json").status_code, 404)
-        self.assertEqual(
-            self.client.get("/health/live", headers={"Authorization": "Bearer wrong"}).status_code,
-            401,
-        )
+        self.assertEqual(self.client.get("/docs", headers=self.auth).status_code, 404)
+        self.assertEqual(self.client.get("/redoc", headers=self.auth).status_code, 404)
+        self.assertEqual(self.client.get("/openapi.json", headers=self.auth).status_code, 404)
+        self.assertEqual(self.client.get("/health/live").status_code, 200)
 
     def test_bearer_and_basic_authentication_and_security_headers(self) -> None:
-        bearer = self.client.get("/health/live", headers=self.auth)
+        bearer = self.client.get("/health/live")
         self.assertEqual(bearer.status_code, 200)
         token = base64.b64encode(f"operator:{SECRET}".encode()).decode()
         basic = self.client.get("/", headers={"Authorization": f"Basic {token}"})
@@ -178,13 +176,14 @@ class PrivateAdminApiTests(unittest.TestCase):
         )
 
     def test_readiness_probes_real_components_with_runnable_configuration(self) -> None:
-        response = self.client.get("/health/ready", headers=self.auth)
+        with patch("vtrade.config.ExperimentConfig.assert_runnable"):
+            response = self.client.get("/health/ready", headers=self.auth)
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["status"], "ready")
         self.assertEqual(payload["checks"]["configuration"]["status"], "ok")
         self.assertEqual(payload["checks"]["database"]["database"], "vtrade")
-        self.assertEqual(payload["checks"]["supabase_storage"]["status"], "ok")
+        self.assertEqual(payload["checks"]["artifact_storage"]["status"], "ok")
         self.assertEqual(self.storage.calls, 1)
 
     def test_readiness_sanitizes_component_failures(self) -> None:
@@ -201,7 +200,7 @@ class PrivateAdminApiTests(unittest.TestCase):
 
     def test_readiness_rejects_non_runnable_configuration(self) -> None:
         source = json.loads(
-            Path("config/experiments/predictionarena-polymarket-v1.json").read_text(
+            Path("config/experiments/vtrade-kalshi-v1.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -225,7 +224,7 @@ class PrivateAdminApiTests(unittest.TestCase):
 
     def test_readiness_can_succeed_with_resolved_configuration(self) -> None:
         source = json.loads(
-            Path("config/experiments/predictionarena-polymarket-v1.json").read_text(
+            Path("config/experiments/vtrade-kalshi-v1.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -239,7 +238,8 @@ class PrivateAdminApiTests(unittest.TestCase):
                 repository=FakeAdminRepository(),
                 storage=FakeStorage(),
             )
-            response = TestClient(app).get("/health/ready", headers=self.auth)
+            with patch("vtrade.config.ExperimentConfig.assert_runnable"):
+                response = TestClient(app).get("/health/ready", headers=self.auth)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ready")
 

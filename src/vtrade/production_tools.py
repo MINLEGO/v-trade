@@ -91,6 +91,10 @@ class ToolContext:
             or self.maximum_order_book_depth <= 0
         ):
             raise ToolContextUnavailable("order-book depth must be a positive integer")
+        if self.live_order_execution or self.live_order_required:
+            raise ToolContextUnavailable(
+                "real order execution is disabled in the active Kalshi paper composition"
+            )
 
     @property
     def cutoff(self) -> datetime:
@@ -534,7 +538,7 @@ class ProductionToolRegistry:
         row = rows[0]
         return {
             "contract_version": "vtrade-binary-fee-settlement-v1",
-            "schedule_version": str(row[0]),
+            "schedule_version": str(row[2]),
             "formula_version": str(row[1]),
             "participant_role": str(row[3]).upper(),
             "multiplier_numerator": _as_int(row[4]),
@@ -800,7 +804,10 @@ class ProductionToolRegistry:
             time_in_force=time_in_force,
             frozen_context_id=str(self._context.claim.cycle_id),
             frozen_cutoff=self._context.cutoff,
-            created_at=self._context.now(),
+            # Orders are decisions against the immutable cycle cutoff.  The
+            # database guard intentionally rejects an execution timestamp
+            # newer than that cutoff, even when the model call finished later.
+            created_at=self._context.cutoff,
         )
         executor = self._context.immediate_order_executor
         if executor is None:
@@ -813,7 +820,29 @@ class ProductionToolRegistry:
             raise ToolContextUnavailable("paper execution failed closed") from exc
         if not isinstance(result, OrderResult):
             raise ToolContextUnavailable("paper execution returned an invalid semantic result")
-        return _execution_output(result)
+        return _execution_output(result, audit=self._execution_audit(result))
+
+    def _execution_audit(self, result: OrderResult) -> JsonObject | None:
+        if result.execution_context_id is None:
+            return None
+        try:
+            execution_context_id = uuid.UUID(result.execution_context_id)
+        except ValueError:
+            return None
+        rows = self._query(
+            "SELECT obs.raw_artifact_id, ra.sha256, ra.observed_at "
+            "FROM order_book_snapshots obs JOIN raw_artifacts ra "
+            "ON ra.id = obs.raw_artifact_id WHERE obs.id = %s",
+            (execution_context_id,),
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "artifact_id": str(row[0]),
+            "sha256": str(row[1]),
+            "observed_at": _iso(row[2]),
+        }
 
     def _mutation_id(self, kind: str, arguments: Mapping[str, object]) -> uuid.UUID:
         sequence = self._mutation_sequence
@@ -1055,7 +1084,9 @@ def _cursor_offset(value: object, name: str, cutoff: datetime) -> int:
     return offset
 
 
-def _execution_output(result: OrderResult) -> JsonObject:
+def _execution_output(
+    result: OrderResult, *, audit: Mapping[str, object] | None = None
+) -> JsonObject:
     request = result.request
     fills = [
         {
@@ -1066,7 +1097,9 @@ def _execution_output(result: OrderResult) -> JsonObject:
             "fee_micros": int(fill.fee_micros),
             "net_cash_delta_micros": int(fill.net_cash_delta_micros),
             "filled_at": fill.filled_at.isoformat(),
-            "audit": {
+            "audit": dict(audit)
+            if audit is not None
+            else {
                 "artifact_id": None,
                 "sha256": fill.fingerprint,
                 "observed_at": fill.filled_at.isoformat(),
@@ -1106,7 +1139,7 @@ def _execution_output(result: OrderResult) -> JsonObject:
         "updated_at": result.updated_at.isoformat(),
         "error_code": None if error_code is None else str(error_code),
         "message": result.message,
-        "audit": [],
+        "audit": [dict(audit)] if audit is not None else [],
     }
 
 

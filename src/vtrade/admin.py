@@ -82,26 +82,30 @@ _VIEWS: dict[str, str] = {
          LIMIT %s OFFSET %s
     """,
     "positions": f"""
-        SELECT p.id, p.agent_id, a.name AS agent_name, m.id AS market_id,
-               m.question, o.id AS outcome_id, o.name AS outcome, p.shares,
-               p.average_cost, p.cost_basis_micros, p.entry_fees_micros,
-               p.realized_pnl_micros,
-               quote.best_bid, quote.cutoff AS quote_cutoff,
+        SELECT p.id, p.agent_id, a.name AS agent_name, m.market_ref,
+               m.question, p.outcome_side, p.contract_units,
+               p.gross_cost_basis_micros, p.entry_fees_micros,
+               p.realized_pnl_micros, quote.price_micros AS bid_price_micros,
+               quote.cutoff AS quote_cutoff, quote.snapshot_id AS bid_snapshot_id,
+               quote.raw_artifact_id AS bid_artifact_id,
+               quote.raw_sha256 AS bid_artifact_sha256,
+               quote.raw_uri AS bid_artifact_uri,
+               quote.raw_observed_at AS bid_artifact_observed_at,
                valuation_policy.max_age_seconds AS valuation_max_age_seconds,
-               CASE WHEN quote.best_bid IS NULL THEN NULL
-                    WHEN quote.cutoff < now()
-                         - make_interval(secs => valuation_policy.max_age_seconds)
-                        THEN NULL
-                    ELSE round(p.shares * quote.best_bid * 1000000)::bigint END
-                    AS liquidation_value_micros,
-               CASE WHEN quote.best_bid IS NULL
+               CASE WHEN quote.price_micros IS NULL OR quote.cutoff IS NULL
                           OR quote.cutoff < now()
                              - make_interval(secs => valuation_policy.max_age_seconds)
                     THEN NULL
-                    ELSE round(p.shares * quote.best_bid * 1000000)::bigint
-                         - p.cost_basis_micros - p.entry_fees_micros END
+                    ELSE round(p.contract_units::numeric * quote.price_micros / 100)::bigint END
+                    AS liquidation_value_micros,
+               CASE WHEN quote.price_micros IS NULL OR quote.cutoff IS NULL
+                          OR quote.cutoff < now()
+                             - make_interval(secs => valuation_policy.max_age_seconds)
+                    THEN NULL
+                    ELSE round(p.contract_units::numeric * quote.price_micros / 100)::bigint
+                         - p.gross_cost_basis_micros - p.entry_fees_micros END
                     AS unrealized_pnl_micros,
-               CASE WHEN quote.best_bid IS NULL THEN 'missing'
+               CASE WHEN quote.price_micros IS NULL OR quote.cutoff IS NULL THEN 'missing'
                     WHEN quote.cutoff < now()
                          - make_interval(secs => valuation_policy.max_age_seconds)
                         THEN 'stale'
@@ -114,69 +118,94 @@ _VIEWS: dict[str, str] = {
           JOIN agents a ON a.id = p.agent_id
           JOIN experiment_runs er ON er.id = a.run_id
           JOIN experiment_definitions ed ON ed.id = er.definition_id
-          JOIN outcomes o ON o.id = p.outcome_id
-          JOIN markets m ON m.id = o.market_id
+          JOIN markets m ON m.id = p.market_id
           CROSS JOIN LATERAL (
               SELECT {POSITION_VALUATION_MAX_AGE_SQL} AS max_age_seconds
           ) valuation_policy
           LEFT JOIN LATERAL (
-              SELECT obs.best_bid, obs.cutoff
+              SELECT obl.price_micros, obs.cutoff, obs.id AS snapshot_id,
+                     obs.raw_artifact_id, ra.sha256 AS raw_sha256,
+                     ra.uri AS raw_uri, ra.observed_at AS raw_observed_at
                 FROM order_book_snapshots obs
-               WHERE obs.outcome_id = p.outcome_id AND obs.best_bid IS NOT NULL
-               ORDER BY obs.cutoff DESC, obs.id DESC LIMIT 1
+                JOIN order_book_levels obl ON obl.snapshot_id = obs.id
+                JOIN raw_artifacts ra ON ra.id = obs.raw_artifact_id
+               WHERE obs.market_id = p.market_id
+                 AND obl.outcome_side = p.outcome_side
+                 AND obl.book_side = 'bid'
+               ORDER BY obs.cutoff DESC, obs.id DESC, obl.price_micros DESC
+               LIMIT 1
           ) quote ON true
          WHERE (%s::uuid IS NULL OR p.agent_id = %s::uuid)
+           AND p.contract_units > 0
          ORDER BY p.updated_at DESC, p.id
          LIMIT %s OFFSET %s
     """,
     "trades": """
-        SELECT f.id AS fill_id, f.filled_at, a.id AS agent_id, a.name AS agent_name,
-               m.id AS market_id, m.question, oc.id AS outcome_id, oc.name AS outcome,
-               oi.side, f.shares, f.price, f.gross_micros, f.fee_micros,
-               ord.policy, ord.liquidity_time_in_force, ac.id AS agent_cycle_id,
-               ac.data_cutoff
+        SELECT f.id AS fill_id, f.filled_at, oo.agent_id, a.name AS agent_name,
+               m.market_ref, m.question, oo.outcome_side, oo.order_side,
+               f.contract_units, f.price_micros, f.gross_cash_micros,
+               f.authoritative_fee_micros, f.net_cash_delta_micros,
+               oo.time_in_force, oo.id AS operation_id, oo.frozen_cutoff,
+               oo.execution_cutoff, oc.state AS lifecycle_state,
+               oc.reconciliation_state, oo.agent_cycle_id,
+               f.frozen_context_id, f.execution_context_id,
+               execution_book.raw_artifact_id AS execution_artifact_id,
+               execution_artifact.sha256 AS execution_artifact_sha256,
+               execution_artifact.uri AS execution_artifact_uri,
+               execution_artifact.observed_at AS execution_artifact_observed_at
           FROM fills f
-          JOIN orders ord ON ord.id = f.order_id
-          JOIN order_intents oi ON oi.id = ord.intent_id
-          JOIN agent_cycles ac ON ac.id = oi.agent_cycle_id
-          JOIN agents a ON a.id = ac.agent_id
-          JOIN outcomes oc ON oc.id = oi.outcome_id
-          JOIN markets m ON m.id = oi.market_id
-         WHERE (%s::uuid IS NULL OR a.id = %s::uuid)
+          JOIN order_operations oo ON oo.id = f.operation_id
+          JOIN agents a ON a.id = oo.agent_id
+          JOIN markets m ON m.id = oo.market_id
+          LEFT JOIN order_operation_current oc ON oc.operation_id = oo.id
+          LEFT JOIN order_book_snapshots execution_book
+            ON execution_book.id = f.execution_context_id
+          LEFT JOIN raw_artifacts execution_artifact
+            ON execution_artifact.id = execution_book.raw_artifact_id
+         WHERE (%s::uuid IS NULL OR oo.agent_id = %s::uuid)
          ORDER BY f.filled_at DESC, f.id DESC
          LIMIT %s OFFSET %s
     """,
     "settlements": """
-        SELECT s.id, s.settled_at, a.id AS agent_id, a.name AS agent_name,
-               m.id AS market_id, m.question, o.id AS outcome_id, o.name AS outcome,
-               s.shares, s.payout_micros, s.realized_pnl_micros,
-               r.result, r.source_created_at, r.observed_at, s.as_of_cutoff
+        SELECT s.id, s.settled_at, s.agent_id, a.name AS agent_name,
+               m.market_ref, m.question, s.outcome_side, s.contract_units,
+               s.gross_payout_micros, s.entry_fees_deducted_micros,
+               s.realized_pnl_micros, r.result, r.settlement_ts,
+               r.observed_at, s.resolution_id, r.raw_artifact_id,
+               ra.sha256 AS resolution_artifact_sha256,
+               ra.uri AS resolution_artifact_uri,
+               ra.observed_at AS resolution_artifact_observed_at
           FROM settlements s
           JOIN agents a ON a.id = s.agent_id
-          JOIN positions p ON p.id = s.position_id
-          JOIN outcomes o ON o.id = p.outcome_id
-          JOIN markets m ON m.id = o.market_id
-          JOIN resolutions r ON r.id = s.resolution_id
-         WHERE (%s::uuid IS NULL OR a.id = %s::uuid)
+          JOIN markets m ON m.id = s.market_id
+          JOIN resolution_observations r ON r.id = s.resolution_id
+          JOIN raw_artifacts ra ON ra.id = r.raw_artifact_id
+         WHERE (%s::uuid IS NULL OR s.agent_id = %s::uuid)
          ORDER BY s.settled_at DESC, s.id DESC
          LIMIT %s OFFSET %s
     """,
     "rejections": """
-        SELECT oi.id AS intent_id, ord.id AS order_id, oi.created_at,
-               a.id AS agent_id, a.name AS agent_name, m.id AS market_id, m.question,
-               o.id AS outcome_id, o.name AS outcome, oi.side,
-               oi.validation_status, COALESCE(ord.rejection_code, oi.rejection_code)
-                   AS rejection_code,
-               ord.status AS order_status, ac.id AS agent_cycle_id
-          FROM order_intents oi
-          JOIN agent_cycles ac ON ac.id = oi.agent_cycle_id
-          JOIN agents a ON a.id = ac.agent_id
-          JOIN markets m ON m.id = oi.market_id
-          JOIN outcomes o ON o.id = oi.outcome_id
-          LEFT JOIN orders ord ON ord.intent_id = oi.id
-         WHERE COALESCE(ord.rejection_code, oi.rejection_code) IS NOT NULL
-           AND (%s::uuid IS NULL OR a.id = %s::uuid)
-         ORDER BY oi.created_at DESC, oi.id DESC
+        SELECT oo.id AS operation_id, oo.created_at, oo.agent_id,
+               a.name AS agent_name, m.market_ref, m.question,
+               oo.outcome_side, oo.order_side, oo.amount_kind,
+               oo.cash_amount_micros, oo.contract_units, current_state.state,
+               current_state.reconciliation_state, lifecycle.reason,
+               oo.agent_cycle_id
+          FROM order_operations oo
+          JOIN agents a ON a.id = oo.agent_id
+          JOIN markets m ON m.id = oo.market_id
+          LEFT JOIN order_operation_current current_state
+            ON current_state.operation_id = oo.id
+          LEFT JOIN LATERAL (
+              SELECT reason
+                FROM order_lifecycle_events event
+               WHERE event.operation_id = oo.id AND event.state = 'REJECTED'
+               ORDER BY event.sequence_number DESC, event.id DESC
+               LIMIT 1
+          ) lifecycle ON true
+         WHERE current_state.state = 'REJECTED'
+           AND (%s::uuid IS NULL OR oo.agent_id = %s::uuid)
+         ORDER BY oo.created_at DESC, oo.id DESC
          LIMIT %s OFFSET %s
     """,
     "cycles": """
@@ -226,18 +255,19 @@ _VIEWS: dict[str, str] = {
               SELECT 'market' AS source, max(observed_at) AS last_observed_at,
                      count(*) AS record_count FROM markets
               UNION ALL
+              SELECT 'catalogue', max(observed_at), count(*)
+                FROM catalogue_page_observations
+              UNION ALL
               SELECT 'order_book', max(cutoff), count(*) FROM order_book_snapshots
               UNION ALL
-              SELECT 'resolution', max(observed_at), count(*) FROM resolutions
-              UNION ALL
-              SELECT 'venue_sync', max(observed_at), count(*) FROM venue_sync_pages
+              SELECT 'resolution', max(observed_at), count(*)
+                FROM resolution_observations
           ) observations
          ORDER BY source
     """,
     "config_versions": """
         SELECT ed.id, ed.experiment_version, ed.version_number, ed.status,
                ed.definition, ed.config_sha256, ed.code_version, ed.created_at,
-               ed.supersedes_id,
                jsonb_agg(DISTINCT jsonb_build_object(
                    'model_config_id', mc.id, 'label', mc.label,
                    'model_slug', mc.model_slug, 'provider_policy', mc.provider_policy,

@@ -782,7 +782,7 @@ class HarnessTests(unittest.TestCase):
     def test_recent_activity_event_keeps_occurred_at_and_optional_outcome(self) -> None:
         event = RecentActivityEvent("rejection", "market", NOW, "outcome", None, "stale")
         self.assertEqual(event.occurred_at, NOW)
-        self.assertEqual(event.outcome_id, "outcome")
+        self.assertEqual(event.outcome, "outcome")
 
     def test_plan_records_are_private_in_bound_view(self) -> None:
         memory = PrivateAgentMemory()

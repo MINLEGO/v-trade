@@ -21,7 +21,7 @@ from vtrade.kalshi import (
     KalshiPayloadError,
     KalshiPublicRestAdapter,
 )
-from vtrade.market_data import KalshiFreezeRequest, KalshiMarketFreezeService
+from vtrade.kalshi_freeze import KalshiFreezeRequest, KalshiMarketFreezeService
 
 NOW = datetime(2026, 8, 21, 10, 0, tzinfo=UTC)
 
