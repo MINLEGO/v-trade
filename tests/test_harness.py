@@ -731,7 +731,7 @@ class HarnessTests(unittest.TestCase):
 
     def test_rendered_predictionarena_prompt_delegates_policy_to_dynamic_context(self) -> None:
         system_prompt = Path(
-            "spec/prompt/predictionarena-polymarket-v1.md"
+            "spec/prompt/vtrade-kalshi-v1.md"
         ).read_text(encoding="utf-8")
         system, user = PromptBuilder(system_prompt).build(
             agent_id="alice",
@@ -768,8 +768,8 @@ class HarnessTests(unittest.TestCase):
         )
         self.assertNotIn("currently 15% of NAV per market", rendered_system_prompt)
         self.assertNotIn("Gas is relayer-sponsored", rendered_system_prompt)
-        self.assertNotIn("IOC", rendered_system_prompt)
-        self.assertNotIn("FOK", rendered_system_prompt)
+        self.assertIn("IOC", rendered_system_prompt)
+        self.assertIn("FOK", rendered_system_prompt)
 
         rendered_context = json.loads(str(user["content"]))
         self.assertEqual(

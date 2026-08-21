@@ -1,342 +1,50 @@
 from __future__ import annotations
 
-import hashlib
 import json
-import tempfile
-import unittest
 from pathlib import Path
+
+import pytest
 
 from vtrade.config import ConfigurationError, config_hash, load_experiment_config
 
+ACTIVE_CONFIG = Path("config/experiments/vtrade-kalshi-v1.json")
 
-class ConfigTests(unittest.TestCase):
-    def test_hash_is_stable_across_key_order(self) -> None:
-        self.assertEqual(config_hash({"a": 1, "b": 2}), config_hash({"b": 2, "a": 1}))
 
-    def test_external_policy_decisions_are_resolved(self) -> None:
-        config = load_experiment_config(
-            Path("config/experiments/predictionarena-polymarket-v1.json")
-        )
-        self.assertEqual(config.raw["status"], "ready")
-        self.assertEqual(config.pending_decisions, ())
+def test_hash_is_stable_across_key_order() -> None:
+    assert config_hash({"a": 1, "b": 2}) == config_hash({"b": 2, "a": 1})
+
+
+def test_active_configuration_is_kalshi_paper_only() -> None:
+    config = load_experiment_config(ACTIVE_CONFIG)
+    assert config.version == "vtrade-kalshi-v1"
+    assert config.raw["venue"] == "kalshi"
+    assert config.raw["execution_mode"] == "paper_only"
+    assert config.pending_decisions == ()
+    assert set(config.raw["artifacts"]) == {"prompt", "tool_schemas", "compatibility"}
+    assert config.raw["fixtures"]["manifest_path"] == "spec/fixtures/kalshi/manifest.json"
+
+
+def test_active_configuration_fails_closed_until_fixture_gate_is_ready() -> None:
+    config = load_experiment_config(ACTIVE_CONFIG)
+    with pytest.raises(ConfigurationError, match="reviewed Kalshi fixture capture"):
         config.assert_runnable()
-        self.assertEqual(
-            config.raw["owner_decisions"]["no_bid_valuation"],
-            {
-                "status": "resolved",
-                "required": True,
-                "policy": "last_known_bid",
-                "maximum_age_seconds": 300,
-                "on_missing_or_stale": "block_snapshot_and_scoring",
-            },
-        )
-
-    def test_resolved_model_and_scheduling_decisions_are_frozen(self) -> None:
-        config = load_experiment_config(
-            Path("config/experiments/predictionarena-polymarket-v1.json")
-        )
-        self.assertEqual(config.raw["schedule"]["mode"], "independent_per_agent")
-        self.assertFalse(config.raw["schedule"]["simultaneous_start_required"])
-        self.assertEqual(config.raw["retention"]["prompts_transcripts_reasoning_months"], 6)
-        self.assertEqual(
-            {model["slug"] for model in config.raw["models"]},
-            {"deepseek/deepseek-v4-flash", "xiaomi/mimo-v2.5-pro"},
-        )
-        models = {model["slug"]: model for model in config.raw["models"]}
-        for model in models.values():
-            self.assertEqual(model["maximum_quantization_bits"], 8)
-            self.assertFalse(model["cross_model_fallback"])
-            self.assertEqual(model["reasoning_effort"], "max")
-            self.assertEqual(model["reasoning_effort_policy"], "owner_fixed")
-            self.assertIsNone(model["provider_allowlist"])
-            self.assertEqual(model["provider_selection"], "all_compatible_sorted_by_price")
-            self.assertTrue(model["allow_provider_fallbacks"])
-            self.assertEqual(model["status"], "ready")
-        self.assertEqual(
-            models["deepseek/deepseek-v4-flash"]["allowed_quantizations"], ["fp8"]
-        )
-        self.assertEqual(
-            models["xiaomi/mimo-v2.5-pro"]["allowed_quantizations"], ["fp8", "unknown"]
-        )
-
-    def test_active_model_routing_decisions_use_new_models(self) -> None:
-        config = load_experiment_config(
-            Path("config/experiments/predictionarena-polymarket-v1-liquidity-aware.json")
-        )
-        models = {model["slug"]: model for model in config.raw["models"]}
-        self.assertEqual(
-            set(models),
-            {"deepseek/deepseek-v4-flash-0731", "openai/gpt-5.6-luna"},
-        )
-        deepseek = models["deepseek/deepseek-v4-flash-0731"]
-        luna = models["openai/gpt-5.6-luna"]
-        self.assertEqual(deepseek["label"], "DeepSeek V4 Flash 0731")
-        self.assertEqual(deepseek["allowed_quantizations"], ["fp8"])
-        self.assertEqual(deepseek["reasoning_effort"], "max")
-        self.assertEqual(deepseek["estimated_max_cost_micros"], 16_000)
-        self.assertEqual(
-            deepseek["provider_max_price"],
-            {"prompt": "0.14", "completion": "0.28", "request": "0"},
-        )
-        self.assertEqual(luna["label"], "GPT-5.6 Luna")
-        self.assertNotIn("maximum_quantization_bits", luna)
-        self.assertNotIn("allowed_quantizations", luna)
-        self.assertEqual(luna["reasoning_effort"], "xhigh")
-        self.assertEqual(luna["estimated_max_cost_micros"], 32_000)
-        self.assertEqual(
-            luna["provider_max_price"],
-            {"prompt": "0.2", "completion": "1.2", "request": "0"},
-        )
-        for model in models.values():
-            self.assertEqual(model["maximum_context_tokens"], 100_000)
-            self.assertEqual(model["maximum_prompt_tokens"], 88_000)
-            self.assertEqual(model["maximum_output_tokens"], 12_000)
-            self.assertEqual(model["reasoning_effort_policy"], "owner_fixed")
-            self.assertIsNone(model["provider_allowlist"])
-            self.assertEqual(model["provider_selection"], "all_compatible_sorted_by_price")
-            self.assertTrue(model["allow_provider_fallbacks"])
-            self.assertFalse(model["cross_model_fallback"])
-            self.assertEqual(model["status"], "ready")
-        self.assertEqual(
-            config.raw["owner_decisions"]["model_routing"]["resolved"],
-            {
-                "exact_slugs": True,
-                "model_policies": {
-                    "deepseek/deepseek-v4-flash-0731": {
-                        "allowed_quantizations": ["fp8"],
-                        "reasoning_effort": "max",
-                    },
-                    "openai/gpt-5.6-luna": {
-                        "quantization_policy": "unrestricted",
-                        "reasoning_effort": "xhigh",
-                    },
-                },
-                "reasoning_effort_policy": "owner_fixed",
-                "provider_allowlist": "all_compatible",
-                "provider_sort": "price",
-                "allow_provider_fallbacks": True,
-                "cross_model_fallback": False,
-            },
-        )
-
-    def test_execution_audit_and_exa_limits_are_frozen(self) -> None:
-        config = load_experiment_config(
-            Path("config/experiments/predictionarena-polymarket-v1.json")
-        )
-        self.assertEqual(
-            config.raw["execution"],
-            {
-                "paper_policy": "predictionarena_unconditional",
-                "buy_fill_price": "best_ask",
-                "sell_fill_price": "best_bid",
-                "counterparty_required": False,
-                "absent_required_quote": "reject",
-            },
-        )
-        self.assertEqual(config.raw["retention"]["visibility"], "operator_only")
-        self.assertEqual(
-            config.raw["retention"]["redaction_policy"]["always_redact"],
-            ["secrets", "tokens", "authorization_headers"],
-        )
-        self.assertEqual(config.raw["limits"]["maximum_web_searches_per_cycle"], 50)
-        self.assertEqual(config.raw["research"]["maximum_searches_per_agent_cycle"], 50)
-        self.assertEqual(config.raw["research"]["ceiling_enforcement"], "strict")
-        self.assertEqual(config.raw["research"]["maximum_results_per_search"], 10)
-        self.assertEqual(
-            config.raw["research"]["tavily"],
-            {"enabled": False, "policy": "future_only_no_runtime_calls"},
-        )
-        self.assertEqual(config.raw["research"]["monthly_request_cap"], 18_000)
-        self.assertEqual(config.raw["research"]["monthly_credit_cap"], 18_000)
-        self.assertTrue(config.raw["research"]["excluded_from_dollar_circuit_breaker"])
-        self.assertEqual(
-            config.raw["research"]["cost_dollars_semantics"],
-            "provider_estimated_nominal_not_actual_billing",
-        )
-        self.assertEqual(config.raw["research"]["maximum_exa_cost_per_search_micros"], 20_000)
-        self.assertEqual(
-            config.raw["research"]["maximum_tavily_basic_cost_per_search_micros"], 8_000
-        )
-        self.assertEqual(
-            config.raw["research"]["expected_searches_conditional_on_any_search"], 8
-        )
-        self.assertEqual(config.raw["research"]["expected_searches_across_all_cycles"], 3.5)
-        self.assertEqual(
-            config.raw["research"]["expected_searches_classification"],
-            "owner_provided_empirical_expectation_not_independently_verified",
-        )
-        self.assertEqual(config.raw["limits"]["maximum_source_clock_skew_seconds"], 5)
-        self.assertEqual(config.raw["limits"]["maximum_archived_bid_age_seconds"], 300)
-        self.assertEqual(config.raw["limits"]["maximum_beliefs_per_agent"], 100)
-        self.assertFalse(
-            config.raw["owner_decisions"]["tavily_runtime_policy"]["enabled"]
-        )
-
-    def test_liquidity_aware_execution_configuration(self) -> None:
-        config = load_experiment_config(
-            Path(
-                "config/experiments/"
-                "predictionarena-polymarket-v1-liquidity-aware.json"
-            )
-        )
-        self.assertEqual(config.version, "predictionarena-polymarket-v1-liquidity-aware")
-        execution = config.raw["execution"]
-        self.assertEqual(execution["paper_policy"], "liquidity_aware")
-        self.assertEqual(execution["liquidity_time_in_force"], "IOC")
-        self.assertEqual(execution["buy_fill_price"], "walk_asks")
-        self.assertEqual(execution["sell_fill_price"], "walk_bids")
-        self.assertEqual(execution["order_book_depth"], 5)
-        self.assertEqual(execution["ignored_best_levels"], 1)
-        self.assertEqual(execution["maximum_ignored_depth_fraction"], 0.5)
-        self.assertEqual(execution["maximum_order_book_age_seconds"], 300)
-        self.assertTrue(execution["counterparty_required"])
-        self.assertEqual(execution["insufficient_depth"], "partial_fill")
-        self.assertEqual(
-            config.raw["classifications"]["execution.paper_fill_rule"],
-            "vtrade_deviation",
-        )
-        self.assertEqual(
-            config.raw["owner_decisions"]["paper_fill_rule"]["policy"],
-            "walk_displayed_book_ioc_partial_fill",
-        )
-        self.assertEqual(
-            config.raw["owner_decisions"]["liquidity_haircut"]["rule_version"],
-            "best-level-haircut-v1",
-        )
-
-    def test_fee_configuration_is_explicit_and_zeroes_optional_costs(self) -> None:
-        for filename in (
-            "predictionarena-polymarket-v1.json",
-            "predictionarena-polymarket-v1-liquidity-aware.json",
-        ):
-            config = load_experiment_config(Path("config/experiments") / filename)
-            self.assertEqual(
-                config.raw["fees"],
-                {
-                    "gas_policy": "relayer_sponsored",
-                    "builder_taker_fee_bps": 0,
-                },
-            )
-
-    def test_owner_token_limits_are_frozen(self) -> None:
-        config = load_experiment_config(
-            Path("config/experiments/predictionarena-polymarket-v1.json")
-        )
-        limits = config.raw["limits"]
-        self.assertEqual(limits["maximum_model_context_tokens"], 100_000)
-        self.assertEqual(limits["reserved_model_output_tokens"], 12_000)
-        self.assertEqual(limits["maximum_assembled_input_tokens"], 88_000)
-        self.assertEqual(limits["maximum_tool_call_argument_tokens"], 4_000)
-        self.assertEqual(limits["default_maximum_tool_result_tokens"], 4_000)
-        self.assertEqual(limits["get_portfolio_maximum_tool_result_tokens"], 24_000)
-        self.assertTrue(limits["get_portfolio_pagination_required_beyond_limit"])
-        self.assertTrue(limits["general_beliefs_pagination_required_beyond_limit"])
-        belief_pagination = config.raw["owner_decisions"]["general_beliefs_pagination_contract"]
-        self.assertEqual(belief_pagination["maximum_result_tokens"], 4_000)
-        self.assertEqual(
-            belief_pagination["response"],
-            ["beliefs", "next_cursor", "has_more", "payload_truncated"],
-        )
-        for model in config.raw["models"]:
-            self.assertEqual(model["maximum_context_tokens"], 100_000)
-            self.assertEqual(model["maximum_prompt_tokens"], 88_000)
-            self.assertEqual(model["maximum_output_tokens"], 12_000)
-
-    def test_openrouter_owner_price_bounds_are_frozen(self) -> None:
-        config = load_experiment_config(
-            Path("config/experiments/predictionarena-polymarket-v1.json")
-        )
-        models = {model["slug"]: model for model in config.raw["models"]}
-        deepseek = models["deepseek/deepseek-v4-flash"]
-        self.assertEqual(deepseek["estimated_max_cost_micros"], 14_000)
-        self.assertEqual(
-            deepseek["provider_max_price"],
-            {"prompt": "0.12", "completion": "0.24", "request": "0"},
-        )
-        mimo = models["xiaomi/mimo-v2.5-pro"]
-        self.assertEqual(mimo["estimated_max_cost_micros"], 50_000)
-        self.assertEqual(
-            mimo["provider_max_price"],
-            {"prompt": "0.44", "completion": "0.88", "request": "0"},
-        )
-        prices = config.raw["owner_decisions"]["provider_request_cost_estimates"]
-        self.assertEqual(prices["status"], "resolved")
-        self.assertEqual(
-            prices["resolved_research"],
-            {
-                "exa_maximum_cost_per_search_micros": 20_000,
-                "tavily_basic_maximum_cost_per_search_micros": 8_000,
-            },
-        )
-
-    def test_active_openrouter_price_bounds_are_frozen(self) -> None:
-        config = load_experiment_config(
-            Path("config/experiments/predictionarena-polymarket-v1-liquidity-aware.json")
-        )
-        prices = config.raw["owner_decisions"]["provider_request_cost_estimates"]
-        self.assertEqual(
-            prices["resolved_openrouter"],
-            {
-                "deepseek/deepseek-v4-flash-0731": {
-                    "maximum_request_cost_micros": 16_000,
-                    "maximum_prompt_price_per_million_usd": "0.14",
-                    "maximum_completion_price_per_million_usd": "0.28",
-                    "maximum_request_fee_usd": "0",
-                },
-                "openai/gpt-5.6-luna": {
-                    "maximum_request_cost_micros": 32_000,
-                    "maximum_prompt_price_per_million_usd": "0.2",
-                    "maximum_completion_price_per_million_usd": "1.2",
-                    "maximum_request_fee_usd": "0",
-                },
-            },
-        )
-
-    def test_versioned_artifact_hashes_match_files(self) -> None:
-        for filename in (
-            "predictionarena-polymarket-v1.json",
-            "predictionarena-polymarket-v1-liquidity-aware.json",
-        ):
-            config = load_experiment_config(Path("config/experiments") / filename)
-            for artifact in config.raw["artifacts"].values():
-                body = Path(artifact["path"]).read_bytes()
-                canonical = body.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
-                self.assertEqual(body, canonical, f"{artifact['path']} must use LF bytes")
-                self.assertEqual(hashlib.sha256(canonical).hexdigest(), artifact["sha256"])
-
-    def test_experiment_execution_policies_are_distinct_and_versioned(self) -> None:
-        baseline = load_experiment_config(
-            Path("config/experiments/predictionarena-polymarket-v1.json")
-        )
-        conservative = load_experiment_config(
-            Path("config/experiments/predictionarena-polymarket-v1-liquidity-aware.json")
-        )
-
-        self.assertNotEqual(baseline.version, conservative.version)
-        self.assertEqual(
-            baseline.raw["execution"]["paper_policy"], "predictionarena_unconditional"
-        )
-        self.assertEqual(conservative.raw["execution"]["paper_policy"], "liquidity_aware")
-        self.assertEqual(
-            baseline.raw["artifacts"]["tool_schemas"]["path"],
-            "spec/tool-schemas-v1-legacy.json",
-        )
-        self.assertEqual(
-            conservative.raw["artifacts"]["tool_schemas"]["path"],
-            "spec/tool-schemas-v1.json",
-        )
-        self.assertNotEqual(
-            baseline.raw["artifacts"]["tool_schemas"]["sha256"],
-            conservative.raw["artifacts"]["tool_schemas"]["sha256"],
-        )
-
-    def test_missing_required_fields_are_rejected(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            source = Path(directory) / "config.json"
-            source.write_text(json.dumps({"experiment_version": "x"}), encoding="utf-8")
-            with self.assertRaisesRegex(ConfigurationError, "missing config fields"):
-                load_experiment_config(source)
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_non_active_versions_are_rejected(tmp_path: Path) -> None:
+    candidate = json.loads(ACTIVE_CONFIG.read_text(encoding="utf-8"))
+    candidate["experiment_version"] = "vtrade-kalshi-v0"
+    source = tmp_path / "experiment.json"
+    source.write_text(json.dumps(candidate), encoding="utf-8", newline="\n")
+    with pytest.raises(ConfigurationError, match="only vtrade-kalshi-v1"):
+        load_experiment_config(source)
+
+
+def test_artifact_paths_are_fixed_to_the_active_contract() -> None:
+    config = load_experiment_config(ACTIVE_CONFIG)
+    assert config.raw["artifacts"]["prompt"]["path"] == "spec/prompt/vtrade-kalshi-v1.md"
+    assert (
+        config.raw["artifacts"]["tool_schemas"]["path"] == "spec/tool-schemas-vtrade-kalshi-v1.json"
+    )
+    assert (
+        config.raw["artifacts"]["compatibility"]["path"] == "spec/vtrade-kalshi-v1-compatibility.md"
+    )

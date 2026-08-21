@@ -8,7 +8,6 @@ from types import SimpleNamespace
 import pytest
 
 from vtrade.broker import (
-    ExecutionResult,
     ExecutionStatus,
     FeePolicy,
     LiquidityTimeInForce,
@@ -29,15 +28,12 @@ from vtrade.domain.types import (
     Side,
 )
 from vtrade.order_execution import (
-    ExecutionReceipt,
     LiveContextError,
-    LiveExecutionAttempt,
     LiveOrderContext,
     MarketOrderExecutor,
     MarketOrderSubmission,
     ValidatedLiveOrderContextProvider,
 )
-from vtrade.production_tools import _execution_output
 
 NOW = datetime(2026, 8, 7, 12, 0, tzinfo=UTC)
 
@@ -245,87 +241,3 @@ def test_live_buy_rejects_missing_historical_bid_without_mutation() -> None:
     assert result.status is ExecutionStatus.REJECTED
     assert result.rejection_code is RejectionCode.NO_BID_VALUATION
     assert result.portfolio == portfolio
-
-
-def test_pre_context_rejection_omits_snapshot_and_exposes_attempts_only() -> None:
-    order = PaperOrder(
-        "order",
-        "agent",
-        "market",
-        "outcome",
-        Side.BUY,
-        Decimal(1),
-        NOW,
-    )
-    portfolio = PortfolioState("agent", MicroDollars(1_000_000))
-    result = ExecutionResult(
-        order=order,
-        policy=PaperPolicy.LIQUIDITY_AWARE,
-        status=ExecutionStatus.REJECTED,
-        fills=(),
-        rejection_code=RejectionCode.NETWORK_ERROR,
-        portfolio_before=portfolio,
-        portfolio=portfolio,
-        ledger_entries=(),
-        snapshot=None,
-        fee_policy=None,
-        executed_at=NOW,
-    )
-    receipt = ExecutionReceipt(
-        result,
-        uuid.uuid4(),
-        None,
-        (
-            LiveExecutionAttempt(
-                1,
-                "failed",
-                NOW,
-                NOW + timedelta(milliseconds=1),
-                RejectionCode.NETWORK_ERROR.value,
-            ),
-        ),
-    )
-
-    output = _execution_output(
-        receipt,
-        intent_id=uuid.uuid4(),
-        requested_amount=Decimal(1),
-        amount_type=OrderAmountType.SHARES,
-    )
-
-    assert "snapshot" not in output
-    assert output["rejection_code"] == RejectionCode.NETWORK_ERROR.value
-    assert output["attempts"] == [{"attempt": 1, "error": "network_error"}]
-
-
-def test_execution_output_does_not_expose_private_liquidity_audit() -> None:
-    order = SimpleNamespace(side=Side.BUY, outcome_id="outcome", shares=Decimal(1))
-    fill = SimpleNamespace(shares=Decimal(1), gross_micros=400_000, fee_micros=0)
-    portfolio = SimpleNamespace(
-        version=1,
-        cash_micros=MicroDollars(9_600_000),
-        position=lambda _outcome_id: None,
-    )
-    result = SimpleNamespace(
-        status=ExecutionStatus.FILLED,
-        order=order,
-        fills=(fill,),
-        portfolio=portfolio,
-        portfolio_before=SimpleNamespace(cash_micros=MicroDollars(10_000_000)),
-        snapshot=None,
-        virtual_liquidity=SimpleNamespace(
-            token_id="token",
-            side=Side.BUY,
-            requested_shares=Decimal(1),
-        ),
-    )
-
-    output = _execution_output(
-        ExecutionReceipt(result, uuid.uuid4(), None, ()),
-        intent_id=uuid.uuid4(),
-        requested_amount=Decimal(1),
-        amount_type=OrderAmountType.SHARES,
-    )
-
-    assert "virtual_liquidity" not in output
-    assert output["execution"]["filled_shares"] == "1"

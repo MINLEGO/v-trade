@@ -1,0 +1,351 @@
+{
+  "schema_version": "vtrade-kalshi-tools-v1",
+  "contract_version": "vtrade-binary-order-v1",
+  "venue": "kalshi",
+  "execution_mode": "paper_only",
+  "$defs": {
+    "audit_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {"type": ["string", "null"]},
+        "sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+        "observed_at": {"type": ["string", "null"], "format": "date-time"}
+      },
+      "required": ["artifact_id", "sha256", "observed_at"]
+    },
+    "price_range": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "start_price_micros": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "end_price_micros": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "step_micros": {"type": "integer", "minimum": 1}
+      },
+      "required": ["start_price_micros", "end_price_micros", "step_micros"]
+    },
+    "outcome_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "outcome": {"type": "string", "enum": ["YES", "NO"]},
+        "label": {"type": "string"},
+        "eligible": {"type": "boolean"},
+        "indicative_price_micros": {"type": ["integer", "null"], "minimum": 0, "maximum": 1000000}
+      },
+      "required": ["outcome", "label", "eligible", "indicative_price_micros"]
+    },
+    "market_card": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "market_ref": {"type": "string", "minLength": 1},
+        "series_ref": {"type": "string", "minLength": 1},
+        "event_ref": {"type": "string", "minLength": 1},
+        "question": {"type": "string"},
+        "open_time": {"type": ["string", "null"], "format": "date-time"},
+        "close_time": {"type": ["string", "null"], "format": "date-time"},
+        "volume_units": {"type": "integer", "minimum": 0},
+        "liquidity_micros": {"type": "integer", "minimum": 0},
+        "status": {"type": "string"},
+        "eligible": {"type": "boolean"},
+        "tradeable": {"type": "boolean"},
+        "competitive_score": {"type": "string"},
+        "tag_names": {"type": "array", "items": {"type": "string"}},
+        "outcomes": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"$ref": "#/$defs/outcome_summary"}},
+        "audit": {"$ref": "#/$defs/audit_ref"}
+      },
+      "required": [
+        "market_ref", "series_ref", "event_ref", "question", "open_time", "close_time",
+        "volume_units", "liquidity_micros", "status", "eligible", "tradeable",
+        "competitive_score", "tag_names", "outcomes", "audit"
+      ]
+    },
+    "market_page": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "as_of": {"type": "string", "format": "date-time"},
+        "data_cutoff": {"type": "string", "format": "date-time"},
+        "markets": {"type": "array", "items": {"$ref": "#/$defs/market_card"}},
+        "next_cursor": {"type": ["string", "null"]},
+        "has_more": {"type": "boolean"},
+        "payload_truncated": {"type": "boolean"}
+      },
+      "required": ["as_of", "data_cutoff", "markets", "next_cursor", "has_more", "payload_truncated"]
+    },
+    "event_group": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "event_ref": {"type": "string", "minLength": 1},
+        "series_ref": {"type": "string", "minLength": 1},
+        "title": {"type": "string"},
+        "category": {"type": ["string", "null"]},
+        "markets": {"type": "array", "items": {"$ref": "#/$defs/market_card"}},
+        "volume_24h_units": {"type": "integer", "minimum": 0},
+        "total_volume_units": {"type": "integer", "minimum": 0},
+        "newest_market_open_time": {"type": ["string", "null"], "format": "date-time"},
+        "audit": {"$ref": "#/$defs/audit_ref"}
+      },
+      "required": [
+        "event_ref", "series_ref", "title", "category", "markets", "volume_24h_units",
+        "total_volume_units", "newest_market_open_time", "audit"
+      ]
+    },
+    "event_page": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "as_of": {"type": "string", "format": "date-time"},
+        "data_cutoff": {"type": "string", "format": "date-time"},
+        "events": {"type": "array", "items": {"$ref": "#/$defs/event_group"}},
+        "next_cursor": {"type": ["string", "null"]},
+        "has_more": {"type": "boolean"},
+        "payload_truncated": {"type": "boolean"}
+      },
+      "required": ["as_of", "data_cutoff", "events", "next_cursor", "has_more", "payload_truncated"]
+    },
+    "book_level": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "price_micros": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "contract_units": {"type": "integer", "minimum": 1}
+      },
+      "required": ["price_micros", "contract_units"]
+    },
+    "book": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "market_ref": {"type": "string", "minLength": 1},
+        "yes_bids": {"type": "array", "items": {"$ref": "#/$defs/book_level"}},
+        "yes_asks": {"type": "array", "items": {"$ref": "#/$defs/book_level"}},
+        "no_bids": {"type": "array", "items": {"$ref": "#/$defs/book_level"}},
+        "no_asks": {"type": "array", "items": {"$ref": "#/$defs/book_level"}},
+        "observed_at": {"type": "string", "format": "date-time"},
+        "data_cutoff": {"type": "string", "format": "date-time"},
+        "audit": {"$ref": "#/$defs/audit_ref"}
+      },
+      "required": ["market_ref", "yes_bids", "yes_asks", "no_bids", "no_asks", "observed_at", "data_cutoff", "audit"]
+    },
+    "fee_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "contract_version": {"const": "vtrade-binary-fee-settlement-v1"},
+        "schedule_version": {"type": "string"},
+        "formula_version": {"const": "kalshi-quadratic-v1"},
+        "participant_role": {"type": "string", "enum": ["MAKER", "TAKER"]},
+        "multiplier_numerator": {"type": "integer", "minimum": 1},
+        "multiplier_denominator": {"type": "integer", "minimum": 1},
+        "event_override_micros": {"type": ["integer", "null"], "minimum": 0},
+        "event_override_cleared": {"type": "boolean"},
+        "effective_at": {"type": "string", "format": "date-time"},
+        "as_of_at": {"type": "string", "format": "date-time"},
+        "observed_at": {"type": "string", "format": "date-time"},
+        "cutoff": {"type": "string", "format": "date-time"},
+        "source_tier": {"type": "string"},
+        "policy_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "audit": {"$ref": "#/$defs/audit_ref"}
+      },
+      "required": [
+        "contract_version", "schedule_version", "formula_version", "participant_role",
+        "multiplier_numerator", "multiplier_denominator", "event_override_micros",
+        "event_override_cleared", "effective_at", "as_of_at", "observed_at", "cutoff",
+        "source_tier", "policy_fingerprint", "audit"
+      ]
+    },
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "position_id": {"type": "string", "format": "uuid"},
+        "market_ref": {"type": "string", "minLength": 1},
+        "outcome": {"type": "string", "enum": ["YES", "NO"]},
+        "contract_units": {"type": "integer", "minimum": 0},
+        "gross_cost_basis_micros": {"type": "integer", "minimum": 0},
+        "entry_fees_micros": {"type": "integer", "minimum": 0},
+        "realized_pnl_micros": {"type": "integer"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      },
+      "required": ["position_id", "market_ref", "outcome", "contract_units", "gross_cost_basis_micros", "entry_fees_micros", "realized_pnl_micros", "updated_at"]
+    },
+    "belief": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "format": "uuid"},
+        "active": {"type": "boolean"},
+        "confidence": {"type": "string"},
+        "content": {"type": "string"},
+        "category": {"type": "string", "enum": ["event_analysis", "trading_strategy", "market_sentiment", "market_structure", "risk_assessment"]},
+        "evidence": {"type": "array", "items": {"type": "string"}},
+        "created_at": {"type": "string", "format": "date-time"}
+      },
+      "required": ["id", "active", "confidence", "content", "category", "evidence", "created_at"]
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "format": "uuid"},
+        "plan_type": {"type": "string", "enum": ["long_term", "next_cycle"]},
+        "status": {"type": "string", "enum": ["active", "archived"]},
+        "due_at": {"type": ["string", "null"], "format": "date-time"},
+        "content": {"type": "string"},
+        "created_at": {"type": "string", "format": "date-time"}
+      },
+      "required": ["id", "plan_type", "status", "due_at", "content", "created_at"]
+    },
+    "fill": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fill_id": {"type": "string", "minLength": 1},
+        "contract_units": {"type": "integer", "minimum": 1},
+        "price_micros": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "gross_cash_micros": {"type": "integer", "minimum": 0},
+        "fee_micros": {"type": "integer", "minimum": 0},
+        "net_cash_delta_micros": {"type": "integer"},
+        "filled_at": {"type": "string", "format": "date-time"},
+        "audit": {"$ref": "#/$defs/audit_ref"}
+      },
+      "required": ["fill_id", "contract_units", "price_micros", "gross_cash_micros", "fee_micros", "net_cash_delta_micros", "filled_at", "audit"]
+    },
+    "order_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "market_ref": {"type": "string", "minLength": 1},
+        "outcome": {"type": "string", "enum": ["YES", "NO"]},
+        "action": {"type": "string", "enum": ["BUY", "SELL"]},
+        "amount": {"type": "string", "pattern": "^[1-9][0-9]*$"},
+        "amount_type": {"type": "string", "enum": ["CASH", "CONTRACTS"]},
+        "limit_price_micros": {"type": ["integer", "null"], "minimum": 0, "maximum": 1000000},
+        "time_in_force": {"type": "string", "enum": ["IOC", "FOK"]},
+        "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 512}
+      },
+      "required": ["market_ref", "outcome", "action", "amount", "amount_type", "limit_price_micros", "time_in_force", "idempotency_key"]
+    },
+    "order_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "contract_version": {"const": "vtrade-binary-order-v1"},
+        "operation_id": {"type": "string", "minLength": 1},
+        "status": {"type": "string", "enum": ["REJECTED", "PENDING", "PARTIALLY_FILLED", "FILLED", "CANCELLED"]},
+        "reconciliation_state": {"type": "string", "enum": ["NOT_REQUIRED", "REQUIRED", "RESOLVED", "CONFLICT"]},
+        "request": {"$ref": "#/$defs/order_request"},
+        "requested_contract_units": {"type": "integer", "minimum": 0},
+        "filled_contract_units": {"type": "integer", "minimum": 0},
+        "remaining_contract_units": {"type": "integer", "minimum": 0},
+        "cancelled_contract_units": {"type": "integer", "minimum": 0},
+        "fills": {"type": "array", "items": {"$ref": "#/$defs/fill"}},
+        "gross_cash_delta_micros": {"type": "integer"},
+        "fee_micros": {"type": "integer", "minimum": 0},
+        "net_cash_delta_micros": {"type": "integer"},
+        "frozen_context_id": {"type": ["string", "null"]},
+        "execution_context_id": {"type": ["string", "null"]},
+        "submitted_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"},
+        "error_code": {"type": ["string", "null"]},
+        "message": {"type": ["string", "null"]},
+        "audit": {"type": "array", "items": {"$ref": "#/$defs/audit_ref"}}
+      },
+      "required": [
+        "contract_version", "operation_id", "status", "reconciliation_state", "request",
+        "requested_contract_units", "filled_contract_units", "remaining_contract_units",
+        "cancelled_contract_units", "fills", "gross_cash_delta_micros", "fee_micros",
+        "net_cash_delta_micros", "frozen_context_id", "execution_context_id", "submitted_at",
+        "updated_at", "error_code", "message", "audit"
+      ]
+    },
+    "settlement": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "settlement_id": {"type": "string"},
+        "position_id": {"type": "string"},
+        "market_ref": {"type": "string", "minLength": 1},
+        "outcome": {"type": "string", "enum": ["YES", "NO"]},
+        "result": {"type": ["string", "null"], "enum": ["YES", "NO", null]},
+        "resolution_status": {"type": "string"},
+        "contract_units": {"type": "integer", "minimum": 0},
+        "gross_payout_micros": {"type": "integer", "minimum": 0},
+        "entry_fees_deducted_micros": {"type": "integer", "minimum": 0},
+        "realized_pnl_micros": {"type": "integer"},
+        "settlement_ts": {"type": ["string", "null"], "format": "date-time"},
+        "settled_at": {"type": "string", "format": "date-time"},
+        "audit": {"$ref": "#/$defs/audit_ref"}
+      },
+      "required": ["settlement_id", "position_id", "market_ref", "outcome", "result", "resolution_status", "contract_units", "gross_payout_micros", "entry_fees_deducted_micros", "realized_pnl_micros", "settlement_ts", "settled_at", "audit"]
+    },
+    "market_page_input": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {"type": "string", "minLength": 1},
+        "hours_back": {"type": ["string", "integer"], "minimum": 0, "default": "24"},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+        "min_liquidity_micros": {"type": "integer", "minimum": 0},
+        "min_volume_units": {"type": "integer", "minimum": 0}
+      },
+      "required": []
+    },
+    "event_page_input": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {"type": "string", "minLength": 1},
+        "keyword": {"type": ["string", "array"], "items": {"type": "string", "minLength": 1}, "minItems": 1},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+        "min_liquidity_micros": {"type": "integer", "minimum": 0},
+        "min_volume_units": {"type": "integer", "minimum": 0}
+      },
+      "required": []
+    },
+    "belief_page": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "as_of": {"type": "string", "format": "date-time"},
+        "beliefs": {"type": "array", "items": {"$ref": "#/$defs/belief"}},
+        "next_cursor": {"type": ["string", "null"]},
+        "has_more": {"type": "boolean"},
+        "payload_truncated": {"type": "boolean"}
+      },
+      "required": ["as_of", "beliefs", "next_cursor", "has_more", "payload_truncated"]
+    }
+  },
+  "tools": [
+    {"name": "get_newest_markets", "description": "List eligible ordinary binary markets opened within the requested lookback window.", "input_schema": {"$ref": "#/$defs/market_page_input"}, "output_schema": {"$ref": "#/$defs/market_page"}},
+    {"name": "discover_by_time_remaining", "description": "Find eligible markets whose close time is within the requested exact hour interval.", "input_schema": {"type": "object", "additionalProperties": false, "properties": {"cursor": {"type": "string", "minLength": 1}, "hours_min": {"type": ["string", "integer"], "minimum": 0}, "hours_max": {"type": ["string", "integer"], "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}, "min_liquidity_micros": {"type": "integer", "minimum": 0}}, "required": []}, "output_schema": {"$ref": "#/$defs/market_page"}},
+    {"name": "discover_events", "description": "Search eligible markets grouped by their opaque event reference.", "input_schema": {"$ref": "#/$defs/event_page_input"}, "output_schema": {"$ref": "#/$defs/event_page"}},
+    {"name": "list_top_events", "description": "List event groups ordered by aggregate volume in the frozen universe.", "input_schema": {"$ref": "#/$defs/market_page_input"}, "output_schema": {"$ref": "#/$defs/event_page"}},
+    {"name": "get_market_details", "description": "Retrieve the complete frozen normalized market record for one opaque market_ref.", "input_schema": {"type": "object", "additionalProperties": false, "properties": {"market_ref": {"type": "string", "minLength": 1}}, "required": ["market_ref"]}, "output_schema": {"type": "object", "additionalProperties": false, "properties": {"as_of": {"type": "string", "format": "date-time"}, "data_cutoff": {"type": "string", "format": "date-time"}, "market": {"$ref": "#/$defs/market_card"}, "resolution_rules": {"type": "string"}, "price_ranges": {"type": "array", "items": {"$ref": "#/$defs/price_range"}}, "audit": {"$ref": "#/$defs/audit_ref"}}, "required": ["as_of", "data_cutoff", "market", "resolution_rules", "price_ranges", "audit"]}},
+    {"name": "web_search", "description": "Search external sources for evidence relevant to a market thesis, rule, forecast, or disconfirming scenario.", "input_schema": {"type": "object", "additionalProperties": false, "properties": {"query": {"type": "string", "minLength": 1}, "max_highlight_length": {"type": "integer", "minimum": 1, "maximum": 15000, "default": 1500}, "num_results": {"type": "integer", "minimum": 1, "maximum": 10, "default": 10}, "start_published_date": {"type": ["integer", "string"], "minimum": 0, "default": 30}, "end_published_date": {"type": ["integer", "string"], "minimum": 0, "default": 0}}, "required": ["query"]}, "output_schema": {"type": "object", "additionalProperties": false, "properties": {"query": {"type": "string"}, "results": {"type": "array", "items": {"type": "object", "additionalProperties": false, "properties": {"title": {"type": "string"}, "url": {"type": "string"}, "published_at": {"type": ["string", "null"]}, "content": {"type": "string"}}, "required": ["title", "url", "published_at", "content"]}}}, "required": ["query", "results"]}},
+    {"name": "fetch_webpage", "description": "Fetch a public source page for direct inspection of evidence.", "input_schema": {"type": "object", "additionalProperties": false, "properties": {"url": {"type": "string", "minLength": 1}, "result_type": {"type": "string", "enum": ["full_text", "highlights"], "default": "highlights"}, "highlight_query": {"type": ["string", "null"], "minLength": 1, "default": null}, "max_length": {"type": "integer", "minimum": 1, "maximum": 12000, "default": 4000}}, "required": ["url"]}, "output_schema": {"oneOf": [{"type": "object", "additionalProperties": false, "properties": {"title": {"type": "string"}, "url": {"type": "string"}, "published_at": {"type": ["string", "null"]}, "author": {"type": ["string", "null"]}, "full_text": {"type": "string"}}, "required": ["title", "url", "published_at", "author", "full_text"]}, {"type": "object", "additionalProperties": false, "properties": {"title": {"type": "string"}, "url": {"type": "string"}, "published_at": {"type": ["string", "null"]}, "author": {"type": ["string", "null"]}, "highlights": {"type": "array", "items": {"type": "string"}}}, "required": ["title", "url", "published_at", "author", "highlights"]}]}},
+    {"name": "get_orderbook", "description": "Retrieve the canonical reciprocal YES/NO book for one opaque market_ref at the cycle cutoff.", "input_schema": {"type": "object", "additionalProperties": false, "properties": {"market_ref": {"type": "string", "minLength": 1}}, "required": ["market_ref"]}, "output_schema": {"type": "object", "additionalProperties": false, "properties": {"as_of": {"type": "string", "format": "date-time"}, "data_cutoff": {"type": "string", "format": "date-time"}, "book": {"$ref": "#/$defs/book"}, "fee_policy": {"anyOf": [{"$ref": "#/$defs/fee_policy"}, {"type": "null"}]}, "audit": {"$ref": "#/$defs/audit_ref"}}, "required": ["as_of", "data_cutoff", "book", "fee_policy", "audit"]}},
+    {"name": "discover_by_price_volatility", "description": "Find frozen markets ordered by observed price volatility.", "input_schema": {"type": "object", "additionalProperties": false, "properties": {"cursor": {"type": "string", "minLength": 1}, "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}, "min_liquidity_micros": {"type": "integer", "minimum": 0}, "min_volatility_micros": {"type": "integer", "minimum": 0}}, "required": []}, "output_schema": {"$ref": "#/$defs/market_page"}},
+    {"name": "get_event_markets", "description": "List the frozen markets belonging to one opaque event_ref.", "input_schema": {"type": "object", "additionalProperties": false, "properties": {"event_ref": {"type": "string", "minLength": 1}, "cursor": {"type": "string", "minLength": 1}, "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}}, "required": ["event_ref"]}, "output_schema": {"$ref": "#/$defs/market_page"}},
+    {"name": "get_newest_events", "description": "List event groups ordered by the newest opened market.", "input_schema": {"$ref": "#/$defs/market_page_input"}, "output_schema": {"$ref": "#/$defs/event_page"}},
+    {"name": "get_all_active_markets", "description": "List every eligible active market in the published freeze using opaque cursors.", "input_schema": {"$ref": "#/$defs/market_page_input"}, "output_schema": {"$ref": "#/$defs/market_page"}},
+    {"name": "discover_by_volume_trend", "description": "Find markets whose observed volume trend matches the requested direction.", "input_schema": {"type": "object", "additionalProperties": false, "properties": {"cursor": {"type": "string", "minLength": 1}, "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}, "min_liquidity_micros": {"type": "integer", "minimum": 0}, "trend": {"type": "string", "enum": ["increasing", "decreasing"], "default": "increasing"}}, "required": []}, "output_schema": {"$ref": "#/$defs/market_page"}},
+    {"name": "discover_by_competitive_score", "description": "Find markets ordered by the normalized competitive score stored with the freeze.", "input_schema": {"type": "object", "additionalProperties": false, "properties": {"cursor": {"type": "string", "minLength": 1}, "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}, "min_liquidity_micros": {"type": "integer", "minimum": 0}, "min_score": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?$"}}, "required": []}, "output_schema": {"$ref": "#/$defs/market_page"}},
+    {"name": "discover_by_date_range", "description": "Find markets opened within the requested UTC date range.", "input_schema": {"type": "object", "additionalProperties": false, "properties": {"cursor": {"type": "string", "minLength": 1}, "start_date": {"type": "string", "format": "date"}, "end_date": {"type": "string", "format": "date"}, "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}, "min_liquidity_micros": {"type": "integer", "minimum": 0}}, "required": []}, "output_schema": {"$ref": "#/$defs/market_page"}},
+    {"name": "search_tags", "description": "Find frozen markets whose normalized tags match one or more exact search terms.", "input_schema": {"type": "object", "additionalProperties": false, "properties": {"cursor": {"type": "string", "minLength": 1}, "query": {"type": ["string", "array"], "items": {"type": "string", "minLength": 1}, "minItems": 1}, "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}}, "required": ["query"]}, "output_schema": {"$ref": "#/$defs/market_page"}},
+    {"name": "get_balance", "description": "Return exact available cash and the current portfolio version.", "input_schema": {"type": "object", "additionalProperties": false, "properties": {}, "required": []}, "output_schema": {"type": "object", "additionalProperties": false, "properties": {"cash_micros": {"type": "integer"}, "portfolio_version": {"type": "integer", "minimum": 0}}, "required": ["cash_micros", "portfolio_version"]}},
+    {"name": "get_portfolio", "description": "Read the immutable cycle portfolio snapshot with an opaque cursor.", "input_schema": {"type": "object", "additionalProperties": false, "properties": {"cursor": {"type": "string", "minLength": 1, "maxLength": 64}, "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 100}}, "required": []}, "output_schema": {"type": "object", "additionalProperties": false, "properties": {"items": {"type": "array", "items": {"$ref": "#/$defs/position"}}, "next_cursor": {"type": ["string", "null"]}, "has_more": {"type": "boolean"}}, "required": ["items", "next_cursor", "has_more"]}},
+    {"name": "get_closed_trades", "description": "Return completed position trades with exact entry fees and realized P&L.", "input_schema": {"type": "object", "additionalProperties": false, "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 100}}, "required": []}, "output_schema": {"type": "object", "additionalProperties": false, "properties": {"trades": {"type": "array", "items": {"type": "object", "additionalProperties": false, "properties": {"position_id": {"type": "string"}, "market_ref": {"type": "string"}, "outcome": {"type": "string", "enum": ["YES", "NO"]}, "opened_at": {"type": "string", "format": "date-time"}, "closed_at": {"type": "string", "format": "date-time"}, "bought_contract_units": {"type": "integer"}, "sold_contract_units": {"type": "integer"}, "average_entry_price_micros": {"type": "integer"}, "average_exit_price_micros": {"type": "integer"}, "entry_cost_micros": {"type": "integer"}, "exit_proceeds_micros": {"type": "integer"}, "total_fees_micros": {"type": "integer"}, "realized_pnl_micros": {"type": "integer"}, "close_reason": {"type": "string", "enum": ["sold", "settled"]}}, "required": ["position_id", "market_ref", "outcome", "opened_at", "closed_at", "bought_contract_units", "sold_contract_units", "average_entry_price_micros", "average_exit_price_micros", "entry_cost_micros", "exit_proceeds_micros", "total_fees_micros", "realized_pnl_micros", "close_reason"]}}}, "required": ["trades"]}},
+    {"name": "get_settlements", "description": "Return FINALIZED-only settlement records and their resolution evidence.", "input_schema": {"type": "object", "additionalProperties": false, "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 100}}, "required": []}, "output_schema": {"type": "object", "additionalProperties": false, "properties": {"settlements": {"type": "array", "items": {"$ref": "#/$defs/settlement"}}}, "required": ["settlements"]}},
+    {"name": "get_general_beliefs", "description": "Read the agent's beliefs newest-first with an opaque cursor.", "input_schema": {"type": "object", "additionalProperties": false, "properties": {"cursor": {"type": "string", "minLength": 1}, "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 100}, "include_inactive": {"type": "boolean", "default": false}}, "required": []}, "output_schema": {"$ref": "#/$defs/belief_page"}},
+    {"name": "search_general_beliefs", "description": "Search the agent's beliefs by content or category.", "input_schema": {"type": "object", "additionalProperties": false, "properties": {"cursor": {"type": "string", "minLength": 1}, "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 100}, "keyword": {"type": ["string", "array"], "items": {"type": "string", "minLength": 1}, "minItems": 1}, "category": {"type": "string", "enum": ["event_analysis", "trading_strategy", "market_sentiment", "market_structure", "risk_assessment"]}, "include_inactive": {"type": "boolean", "default": false}}, "required": []}, "output_schema": {"$ref": "#/$defs/belief_page"}},
+    {"name": "create_general_belief", "description": "Create one auditable belief with bounded confidence and evidence.", "input_schema": {"type": "object", "additionalProperties": false, "properties": {"belief_content": {"type": "string", "minLength": 1}, "category": {"type": "string", "enum": ["event_analysis", "trading_strategy", "market_sentiment", "market_structure", "risk_assessment"]}, "confidence": {"type": "string", "pattern": "^(0|1|0\\.[0-9]+|1\\.0+)$"}, "evidence": {"type": "array", "items": {"type": "string", "minLength": 1}, "default": []}}, "required": ["belief_content", "category", "confidence"]}, "output_schema": {"type": "object", "additionalProperties": false, "properties": {"belief_id": {"type": "string", "format": "uuid"}, "created_at": {"type": "string", "format": "date-time"}}, "required": ["belief_id", "created_at"]}},
+    {"name": "delete_general_belief", "description": "Deactivate one belief belonging to the current agent.", "input_schema": {"type": "object", "additionalProperties": false, "properties": {"belief_id": {"type": "string", "format": "uuid"}}, "required": ["belief_id"]}, "output_schema": {"type": "object", "additionalProperties": false, "properties": {"belief_id": {"type": "string", "format": "uuid"}, "deleted": {"const": true}, "already_inactive": {"type": "boolean"}}, "required": ["belief_id", "deleted", "already_inactive"]}},
+    {"name": "create_long_term_plan", "description": "Replace the active long-term plan with a complete bounded plan.", "input_schema": {"type": "object", "additionalProperties": false, "properties": {"plan_content": {"type": "string", "minLength": 1, "maxLength": 4000}}, "required": ["plan_content"]}, "output_schema": {"type": "object", "additionalProperties": false, "properties": {"plan_id": {"type": "string", "format": "uuid"}, "created_at": {"type": "string", "format": "date-time"}}, "required": ["plan_id", "created_at"]}},
+    {"name": "create_next_cycle_plan", "description": "Replace the active next-cycle plan with a complete bounded plan.", "input_schema": {"type": "object", "additionalProperties": false, "properties": {"plan_content": {"type": "string", "minLength": 1, "maxLength": 4000}, "cycle_date": {"type": "string", "format": "date"}}, "required": ["plan_content"]}, "output_schema": {"type": "object", "additionalProperties": false, "properties": {"plan_id": {"type": "string", "format": "uuid"}, "created_at": {"type": "string", "format": "date-time"}}, "required": ["plan_id", "created_at"]}},
+    {"name": "place_market_order", "description": "Submit one exact paper order against the refreshed normalized binary execution context; no real execution is reachable.", "input_schema": {"type": "object", "additionalProperties": false, "properties": {"market_ref": {"type": "string", "minLength": 1}, "outcome": {"type": "string", "enum": ["YES", "NO"]}, "action": {"type": "string", "enum": ["BUY", "SELL"]}, "amount": {"type": "string", "pattern": "^[1-9][0-9]*$"}, "amount_type": {"type": "string", "enum": ["CASH", "CONTRACTS"]}, "limit_price_micros": {"type": ["integer", "null"], "minimum": 0, "maximum": 1000000}, "time_in_force": {"type": "string", "enum": ["IOC", "FOK"], "default": "IOC"}, "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 512}}, "required": ["market_ref", "outcome", "action", "amount", "amount_type", "limit_price_micros", "time_in_force", "idempotency_key"]}, "output_schema": {"$ref": "#/$defs/order_result"}}
+  ]
+}

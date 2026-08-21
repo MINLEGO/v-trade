@@ -1,0 +1,7 @@
+{
+  "schema_version": "vtrade-kalshi-fixtures-v1",
+  "venue": "kalshi",
+  "status": "owner_pending",
+  "source_root": "https://external-api.kalshi.com/trade-api/v2",
+  "captures": []
+}

@@ -1,0 +1,211 @@
+{
+  "experiment_version": "vtrade-kalshi-v1",
+  "status": "ready",
+  "venue": "kalshi",
+  "execution_mode": "paper_only",
+  "instrument_universe": "ordinary_binary_only",
+  "schedule": {
+    "interval_minutes": 60,
+    "mode": "independent_per_agent",
+    "simultaneous_start_required": false,
+    "missed_cycles": "skip"
+  },
+  "capital": {
+    "initial_balance_micros": 10000000000,
+    "currency": "USD"
+  },
+  "artifacts": {
+    "prompt": {
+      "path": "spec/prompt/vtrade-kalshi-v1.md",
+      "sha256": "295fcde71d71c17fc62c0f99591cc2bf4a328561906e7416f56b8903fbb578aa",
+      "classification": "inferred"
+    },
+    "tool_schemas": {
+      "path": "spec/tool-schemas-vtrade-kalshi-v1.json",
+      "sha256": "448707ae5feb72a2dfe325e813853ce9bb6fc50aa6f8126df9adc339fbe01b96",
+      "classification": "inferred"
+    },
+    "compatibility": {
+      "path": "spec/vtrade-kalshi-v1-compatibility.md",
+      "sha256": "eaaab2199ed1aeabe2a72444f1b06b67a605535e1f01bea7749e79c19815ab72",
+      "classification": "inferred"
+    }
+  },
+  "fixtures": {
+    "manifest_path": "spec/fixtures/kalshi/manifest.json",
+    "manifest_sha256": "c1556e5437cad5ffe4451242403f44cd1733bb29d363a1102f0d145585e42886",
+    "required_status": "ready"
+  },
+  "classifications": {
+    "schedule.interval_minutes": "vtrade_deviation",
+    "schedule.independent_per_agent": "vtrade_deviation",
+    "research.provider": "vtrade_deviation",
+    "models.gateway": "vtrade_deviation",
+    "venue.execution": "vtrade_deviation",
+    "risk.max_market_cost_basis_fraction": "documented",
+    "execution.paper_fill_rule": "vtrade_deviation",
+    "execution.order_book_depth": "vtrade_deviation",
+    "execution.ignored_best_levels": "vtrade_deviation",
+    "execution.maximum_ignored_depth_fraction": "vtrade_deviation",
+    "execution.maximum_order_book_age_seconds": "vtrade_deviation",
+    "prompt.role_separation": "inferred",
+    "discovery.policy": "inferred"
+  },
+  "research": {
+    "enabled_provider": "exa",
+    "fallback_provider": null,
+    "tavily": {
+      "enabled": false,
+      "policy": "future_only_no_runtime_calls"
+    },
+    "expected_searches_conditional_on_any_search": 8,
+    "expected_searches_across_all_cycles": 3.5,
+    "maximum_results_per_search": 10,
+    "maximum_exa_cost_per_search_micros": 20000,
+    "maximum_tavily_basic_cost_per_search_micros": 8000,
+    "maximum_searches_per_agent_cycle": 50,
+    "monthly_request_cap": 18000,
+    "monthly_credit_cap": 18000,
+    "excluded_from_dollar_circuit_breaker": true,
+    "cost_dollars_semantics": "provider_estimated_nominal_not_actual_billing",
+    "unexpected_positive_billed_cost": "halt_alert_and_raise",
+    "ceiling_enforcement": "strict"
+  },
+  "discovery": {
+    "root_url": "https://external-api.kalshi.com/trade-api/v2",
+    "markets_path": "/markets?status=open&mve_filter=exclude&limit=1000",
+    "market_page_size": 1000,
+    "event_page_size": 200,
+    "consume_opaque_cursors": true,
+    "historical_cutoff_path": "/historical/cutoff",
+    "retained_historical_outcomes": 20,
+    "additional_markets": 80,
+    "retained_open_markets_do_not_consume_slots": true,
+    "resolution_universe": "separate_unbounded",
+    "rank_tiebreak": ["volume_fp_desc", "liquidity_dollars_desc", "market_ref_asc"],
+    "maximum_concurrent_orderbooks": 8,
+    "catalogue_cache_seconds": 60,
+    "metadata_cache_seconds": 300,
+    "orderbook_cache_seconds": 0,
+    "request_timeout_seconds": 15,
+    "connect_timeout_seconds": 5,
+    "maximum_attempts": 3,
+    "retry_statuses": [408, 429, 500, 502, 503, 504],
+    "retry_delays_milliseconds": [250, 500],
+    "freeze_deadline_seconds": 600
+  },
+  "execution": {
+    "paper_policy": "liquidity_aware",
+    "execution_mode": "paper_only",
+    "liquidity_time_in_force": "IOC",
+    "allowed_time_in_force": ["IOC", "FOK"],
+    "buy_levels": "canonical_asks",
+    "sell_levels": "canonical_bids",
+    "raw_observed_levels": 6,
+    "effective_executable_levels": 5,
+    "ignored_best_levels": 1,
+    "maximum_ignored_depth_fraction": 0.5,
+    "maximum_order_book_age_seconds": 300,
+    "counterparty_required": true,
+    "absent_required_quote": "reject",
+    "insufficient_depth": "partial_fill_for_ioc_reject_for_fok",
+    "contract_units_scale": 100,
+    "price_scale": 1000000,
+    "money_scale": 1000000
+  },
+  "fees": {
+    "contract_version": "vtrade-binary-fee-settlement-v1",
+    "formula_version": "kalshi-quadratic-v1",
+    "default_role_for_paper_ioc_fok": "TAKER",
+    "policy_required": true,
+    "rounding": "fee_round_up_to_100_micros_then_cent_alignment_floor",
+    "venue_reported_fee_precedence": true,
+    "settlement_fee_micros": 0
+  },
+  "settlement": {
+    "accepted_status": "FINALIZED",
+    "required_fields": ["result", "settlement_ts"],
+    "payout_micros_per_contract_unit": 10000,
+    "blocked_statuses": ["DETERMINED", "DISPUTED", "AMENDED"],
+    "conflicting_terminal_evidence": "block_and_reconcile",
+    "duplicate_evidence": "no_op"
+  },
+  "models": [
+    {
+      "label": "DeepSeek V4 Flash 0731",
+      "slug": "deepseek/deepseek-v4-flash-0731",
+      "maximum_quantization_bits": 8,
+      "allowed_quantizations": ["fp8"],
+      "maximum_context_tokens": 100000,
+      "maximum_prompt_tokens": 88000,
+      "maximum_output_tokens": 12000,
+      "estimated_max_cost_micros": 16000,
+      "provider_max_price": {"prompt": "0.14", "completion": "0.28", "request": "0"},
+      "reasoning_effort": "max",
+      "provider_selection": "all_compatible_sorted_by_price",
+      "allow_provider_fallbacks": true,
+      "cross_model_fallback": false,
+      "status": "ready"
+    },
+    {
+      "label": "GPT-5.6 Luna",
+      "slug": "openai/gpt-5.6-luna",
+      "maximum_context_tokens": 100000,
+      "maximum_prompt_tokens": 88000,
+      "maximum_output_tokens": 12000,
+      "estimated_max_cost_micros": 32000,
+      "provider_max_price": {"prompt": "0.2", "completion": "1.2", "request": "0"},
+      "reasoning_effort": "xhigh",
+      "provider_selection": "all_compatible_sorted_by_price",
+      "allow_provider_fallbacks": true,
+      "cross_model_fallback": false,
+      "status": "ready"
+    }
+  ],
+  "retention": {
+    "prompts_transcripts_reasoning_months": 6,
+    "visibility": "operator_only",
+    "redaction_policy": {"always_redact": ["secrets", "tokens", "authorization_headers"]}
+  },
+  "limits": {
+    "maximum_model_turns": 32,
+    "maximum_total_tool_calls": 100,
+    "maximum_web_searches_per_cycle": 50,
+    "maximum_results_per_web_search": 10,
+    "maximum_model_context_tokens": 100000,
+    "reserved_model_output_tokens": 12000,
+    "maximum_assembled_input_tokens": 88000,
+    "maximum_tool_call_argument_tokens": 4000,
+    "default_maximum_tool_result_tokens": 4000,
+    "get_portfolio_maximum_tool_result_tokens": 24000,
+    "get_portfolio_pagination_required_beyond_limit": true,
+    "general_beliefs_pagination_required_beyond_limit": true,
+    "maximum_cycle_wall_clock_seconds": 3300,
+    "maximum_source_clock_skew_seconds": 5,
+    "maximum_archived_bid_age_seconds": 1800,
+    "monthly_external_api_budget_micros": 40000000,
+    "monthly_external_api_budget_excluded_providers": ["exa"],
+    "budget_alert_micros": [20000000, 32000000, 40000000],
+    "maximum_market_cost_basis_fraction": "0.15",
+    "maximum_beliefs_per_agent": 100
+  },
+  "owner_decisions": {
+    "paper_fill_rule": {"status": "resolved", "required": true, "policy": "walk_canonical_book_ioc_partial_fill"},
+    "liquidity_haircut": {"status": "resolved", "required": true, "rule_version": "best-level-haircut-v1", "raw_observed_levels": 6, "effective_executable_levels": 5, "ignored_best_levels": 1, "maximum_ignored_depth_fraction": 0.5, "adaptation": "manual_versioned_change_only"},
+    "model_routing": {"status": "resolved", "required": true, "exact_slugs": true, "provider_sort": "price", "allow_provider_fallbacks": true, "cross_model_fallback": false},
+    "prompt_transcript_visibility": {"status": "resolved", "required": true, "retention_months": 6, "visibility": "operator_only"},
+    "experiment_comparison": {"status": "resolved", "required": false, "policy": "independent_agent_start_and_schedule"},
+    "external_fixture_manifest": {"status": "resolved", "required": true, "policy": "reviewed_raw_capture_required_before_composition"},
+    "model_token_limits": {"status": "resolved", "required": true, "total_context_tokens": 100000, "reserved_output_tokens": 12000, "maximum_assembled_input_tokens": 88000, "maximum_tool_call_argument_tokens": 4000, "default_maximum_tool_result_tokens": 4000, "get_portfolio_maximum_tool_result_tokens": 24000},
+    "portfolio_pagination": {"status": "resolved", "required": true, "limit_range": [1, 200], "stable_order": "position_id_ascending"},
+    "belief_pagination": {"status": "resolved", "required": true, "limit_range": [1, 100], "stable_order": "created_at_descending_then_belief_id_descending"},
+    "market_cutoff_ingestion": {"status": "resolved", "required": true, "policy": "actual_completed_freeze_time_cutoff"},
+    "research_quota": {"status": "resolved", "required": true, "maximum_per_agent_cycle": 50},
+    "no_bid_valuation": {"status": "resolved", "required": true, "policy": "last_known_bid_maximum_age_1800_seconds"}
+  },
+  "deployment_gates": {
+    "fresh_database": {"status": "required", "policy": "four_migration_chain_only"},
+    "kalshi_fixture_capture": {"status": "owner_pending", "policy": "credential_free_reviewed_french_host_capture"},
+    "real_execution": {"status": "disabled", "policy": "no_credentials_no_signing_no_submission"}
+  }
+}
