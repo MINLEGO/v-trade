@@ -7,12 +7,14 @@ import os
 import shutil
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
 import httpx
 
 from vtrade.config import required_environment
+from vtrade.domain.types import RawArtifact
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +27,30 @@ class ArtifactRef:
     @property
     def uri(self) -> str:
         return self.relative_path
+
+    def as_raw_artifact(
+        self,
+        *,
+        source_endpoint: str | None = None,
+        request_identity: str | None = None,
+        source_timestamp: datetime | None = None,
+        observed_at: datetime | None = None,
+        historical_cutoff: datetime | None = None,
+        schema_version: str = "vtrade-binary-market-v1",
+    ) -> RawArtifact:
+        """Attach auditable request metadata without changing the captured bytes."""
+
+        return RawArtifact(
+            self.sha256,
+            self.byte_length,
+            self.uri,
+            source_endpoint,
+            request_identity,
+            source_timestamp,
+            observed_at,
+            historical_cutoff,
+            schema_version,
+        )
 
 
 class ContentAddressedArtifactStore:

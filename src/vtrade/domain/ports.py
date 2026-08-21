@@ -5,11 +5,15 @@ from datetime import datetime
 from typing import Any, Protocol
 
 from vtrade.domain.types import (
+    CatalogueSnapshot,
     CycleSnapshot,
+    MarketContext,
     MarketDelta,
+    MarketKey,
     OrderBookSnapshot,
     OrderIntent,
     Resolution,
+    ResolutionObservation,
 )
 
 JsonObject = dict[str, Any]
@@ -35,6 +39,26 @@ class MarketVenue(Protocol):
     def get_resolutions(
         self, market_ids: Sequence[str], as_of: datetime
     ) -> tuple[Resolution, ...]: ...
+
+
+class CataloguePort(Protocol):
+    """Semantic seam for a complete, fail-closed active-market catalogue."""
+
+    def sync_catalogue(self, *, cutoff: datetime | None = None) -> CatalogueSnapshot: ...
+
+
+class MarketContextPort(Protocol):
+    """Return one immutable market plus its canonical two-sided book."""
+
+    def get_context(self, market_key: MarketKey, *, cutoff: datetime) -> MarketContext: ...
+
+
+class ResolutionPort(Protocol):
+    """Read venue resolution state without mutating portfolios or paying out."""
+
+    def get_resolutions(
+        self, market_keys: Sequence[MarketKey], *, cutoff: datetime
+    ) -> tuple[ResolutionObservation, ...]: ...
 
 
 class ArtifactReference(Protocol):
