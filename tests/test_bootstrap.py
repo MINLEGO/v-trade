@@ -14,8 +14,10 @@ from vtrade.bootstrap import (
     PostgresExperimentBootstrap,
     _parse_timestamp,
     read_prompt_body,
+    validate_kalshi_binary_reference,
 )
 from vtrade.config import config_hash, load_experiment_config
+from vtrade.domain.types import MarketKey
 
 
 class Cursor:
@@ -203,3 +205,13 @@ def test_cli_timestamp_requires_timezone() -> None:
     assert _parse_timestamp("2026-07-16T00:00:00Z").tzinfo is UTC
     with pytest.raises(Exception, match="timezone-aware"):
         _parse_timestamp("2026-07-16T00:00:00")
+
+
+def test_bootstrap_boundary_accepts_only_opaque_kalshi_binary_identity() -> None:
+    market = MarketKey.from_ref("KXEXAMPLE-1")
+    assert validate_kalshi_binary_reference(market, "YES") == (
+        "kalshi:market:KXEXAMPLE-1",
+        "YES",
+    )
+    with pytest.raises(BootstrapError, match="YES and NO"):
+        validate_kalshi_binary_reference(market, "MAYBE")

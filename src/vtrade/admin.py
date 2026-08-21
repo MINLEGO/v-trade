@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import Protocol, cast
 
 from vtrade.dashboard.policy import POSITION_VALUATION_MAX_AGE_SQL
+from vtrade.migrate import EXPECTED_MIGRATIONS, load_migration_sources
 from vtrade.runtime import HOURLY_SCHEDULER_LOCK_NAME
 
 
@@ -281,19 +282,28 @@ class PostgresAdminRepository:
         self._connect = connect or _default_connect
 
     def probe(self) -> dict[str, object]:
+        sources = load_migration_sources()
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
             cursor.execute("SELECT current_database(), now()")
             row = cursor.fetchone()
             if row is None:
                 raise AdminRepositoryError("database probe returned no result")
             cursor.execute(
-                "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1"
+                "SELECT position, version, sha256 FROM schema_migrations ORDER BY position"
             )
-            migration = cursor.fetchone()
+            migrations = tuple(cursor.fetchall())
+        if len(migrations) != len(EXPECTED_MIGRATIONS):
+            raise AdminRepositoryError("database has not completed the clean migration chain")
+        for expected_position, migration in enumerate(migrations, start=1):
+            if len(migration) < 3 or int(str(migration[0])) != expected_position:
+                raise AdminRepositoryError("database migration order is not the clean prefix")
+            expected = sources[expected_position - 1]
+            if str(migration[1]) != expected.name or str(migration[2]) != expected.sha256:
+                raise AdminRepositoryError("database migration checksum differs from the image")
         return {
             "database": str(row[0]),
             "database_time": row[1],
-            "latest_migration": str(migration[0]) if migration else None,
+            "latest_migration": str(migrations[-1][1]),
         }
 
     def view(

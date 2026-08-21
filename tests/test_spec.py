@@ -208,11 +208,17 @@ class SpecificationTests(unittest.TestCase):
         )
         self.assertEqual(fixture["completeness"], "page_complete")
 
-    def test_agent_cycles_support_independent_schedule_and_retention(self) -> None:
-        migration = Path("migrations/0001_foundation.sql").read_text(encoding="utf-8")
-        self.assertIn("cohort_cycle_id uuid REFERENCES cohort_cycles(id)", migration)
-        self.assertIn("UNIQUE (agent_id, scheduled_at)", migration)
-        self.assertGreaterEqual(migration.count("retain_until timestamptz NOT NULL"), 3)
+    def test_clean_persistence_chain_supports_cutoffs_and_retention(self) -> None:
+        foundation = Path(
+            "migrations/0001_foundation_agent_state_ledger.sql"
+        ).read_text(encoding="utf-8")
+        runtime = Path(
+            "migrations/0004_runtime_audit_and_admin.sql"
+        ).read_text(encoding="utf-8")
+        self.assertIn("UNIQUE (agent_id, scheduled_at)", foundation)
+        self.assertIn("data_cutoff timestamptz", foundation)
+        self.assertIn("data_cutoff is immutable after freeze completion", foundation)
+        self.assertGreaterEqual(runtime.count("retain_until timestamptz NOT NULL"), 3)
 
 
 if __name__ == "__main__":

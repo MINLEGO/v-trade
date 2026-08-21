@@ -286,10 +286,15 @@ class PostgresSchedulingTests(unittest.TestCase):
         self.assertIn("controls.globally_paused = false", schedule_query)
         self.assertIn("NOT EXISTS (SELECT 1 FROM agent_cycles active", schedule_query)
 
-    def test_phase_five_migration_contains_runtime_guards(self) -> None:
-        migration = Path("migrations/0005_runtime_operations.sql").read_text(encoding="utf-8")
+    def test_clean_migration_chain_contains_runtime_guards(self) -> None:
+        foundation = Path(
+            "migrations/0001_foundation_agent_state_ledger.sql"
+        ).read_text(encoding="utf-8")
+        migration = Path("migrations/0004_runtime_audit_and_admin.sql").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("agent_runtime_schedules", foundation)
         for required in (
-            "agent_runtime_schedules",
             "runtime_cycle_steps",
             "artifact_inventory",
             "runtime_projections",
@@ -298,13 +303,13 @@ class PostgresSchedulingTests(unittest.TestCase):
         ):
             self.assertIn(required, migration)
 
-    def test_actual_freeze_cutoff_migration_allows_only_temporary_null(self) -> None:
-        migration = Path("migrations/0008_actual_freeze_cutoff.sql").read_text(
+    def test_foundation_migration_allows_only_temporary_null_cutoff(self) -> None:
+        migration = Path("migrations/0001_foundation_agent_state_ledger.sql").read_text(
             encoding="utf-8"
         )
-        self.assertIn("ALTER COLUMN data_cutoff DROP NOT NULL", migration)
+        self.assertIn("data_cutoff timestamptz", migration)
         self.assertIn("data_cutoff >= scheduled_at", migration)
-        self.assertIn("market_freeze", migration)
+        self.assertIn("data_cutoff is immutable after freeze completion", migration)
 
     def test_market_checkpoint_atomically_finalizes_actual_cutoff(self) -> None:
         connection = SchedulingConnection()

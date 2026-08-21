@@ -399,12 +399,13 @@ class AdminRepositoryTests(unittest.TestCase):
         self.assertIn("liquidation_value_micros", query)
 
     def test_phase_six_migration_has_singleton_control_and_audit_indexes(self) -> None:
-        migration = Path("migrations/0006_private_admin.sql").read_text(encoding="utf-8")
+        migration = Path("migrations/0004_runtime_audit_and_admin.sql").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("CREATE TABLE system_controls", migration)
         self.assertIn("globally_paused", migration)
         self.assertIn("operator_actions_occurred_idx", migration)
-        foundation = Path("migrations/0001_foundation.sql").read_text(encoding="utf-8")
-        self.assertIn("operator_actions_append_only", foundation)
+        self.assertIn("operator_actions_append_only", migration)
 
 
 if __name__ == "__main__":

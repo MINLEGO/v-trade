@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Protocol, cast
 
 from vtrade.config import ExperimentConfig, canonical_json, load_experiment_config
+from vtrade.domain.types import MarketKey, OutcomeSide
 from vtrade.frozen_artifacts import FrozenArtifactError, canonical_artifact_sha256
 
 
@@ -41,6 +42,20 @@ class FrozenRegistration:
     run_id: uuid.UUID
     prompt_id: uuid.UUID
     model_ids: tuple[uuid.UUID, ...]
+
+
+def validate_kalshi_binary_reference(
+    market_key: MarketKey, outcome_side: OutcomeSide | str
+) -> tuple[str, str]:
+    """Return the only market/outcome identity shape accepted by persistence."""
+
+    if market_key.venue != "kalshi" or market_key.kind != "market":
+        raise BootstrapError("persistence accepts only the Kalshi market namespace")
+    try:
+        side = OutcomeSide(outcome_side)
+    except ValueError as exc:
+        raise BootstrapError("persistence accepts only YES and NO outcomes") from exc
+    return market_key.canonical, side.value
 
 
 class PostgresExperimentBootstrap:
@@ -423,9 +438,16 @@ class PostgresExperimentBootstrap:
         run_id = uuid.uuid4()
         cursor.execute(
             "INSERT INTO experiment_runs "
-            "(id, definition_id, run_label, status, starts_at, created_at) "
-            "VALUES (%s, %s, %s, 'ready', %s, %s)",
-            (run_id, definition_id, run_label, starts_at, now),
+            "(id, definition_id, run_label, status, starts_at, idempotency_key, created_at) "
+            "VALUES (%s, %s, %s, 'ready', %s, %s, %s)",
+            (
+                run_id,
+                definition_id,
+                run_label,
+                starts_at,
+                f"run:{definition_id}:{run_label}",
+                now,
+            ),
         )
         return run_id
 

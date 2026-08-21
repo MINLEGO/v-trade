@@ -289,14 +289,17 @@ class PostgresBrokerRepositoryTests(unittest.TestCase):
             self.repository.persist_execution(changed, **self.ids)
 
     def test_phase_three_migration_records_replay_and_fee_parameters(self) -> None:
-        migration = Path("migrations/0003_paper_broker.sql").read_text(encoding="utf-8")
+        migration = Path(
+            "migrations/0003_execution_portfolio_and_settlement.sql"
+        ).read_text(encoding="utf-8")
         for required in (
-            "execution_fingerprint",
-            "liquidity_time_in_force",
-            "shares_delta",
-            "fee_exponent",
-            "as_of_cutoff",
-            "portfolio_version",
+            "request_fingerprint",
+            "time_in_force",
+            "contract_units",
+            "authoritative_fee_micros",
+            "risk_policy_snapshots",
+            "portfolio_versions",
+            "entry_fees_micros",
         ):
             self.assertIn(required, migration)
 

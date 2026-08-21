@@ -7,6 +7,8 @@ from contextlib import AbstractContextManager
 from datetime import UTC, datetime, timedelta
 from typing import Protocol, cast
 
+from vtrade.domain.types import RawArtifact
+from vtrade.migrate import EXPECTED_MIGRATIONS, load_migration_sources
 from vtrade.runtime import (
     HOURLY_SCHEDULER_LOCK_NAME,
     AlertEvent,
@@ -55,6 +57,73 @@ class PostgresRuntimeRepository:
             raise ValueError("database_url is required")
         self._database_url = database_url
         self._connect = connect or _default_connect
+
+    def migration_status(self) -> dict[str, object]:
+        """Return a verified clean-chain status for provider-independent readiness."""
+
+        sources = load_migration_sources()
+        with self._connect(self._database_url) as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT position, version, sha256 FROM schema_migrations ORDER BY position"
+            )
+            rows = tuple(cursor.fetchall())
+        if len(rows) != len(EXPECTED_MIGRATIONS):
+            raise RuntimePersistenceError("database has not completed the clean migration chain")
+        for expected_position, row in enumerate(rows, start=1):
+            if len(row) < 3 or int(str(row[0])) != expected_position:
+                raise RuntimePersistenceError("database migration order is not the clean prefix")
+            if str(row[1]) != EXPECTED_MIGRATIONS[expected_position - 1]:
+                raise RuntimePersistenceError("database contains an unexpected migration")
+            if str(row[2]) != sources[expected_position - 1].sha256:
+                raise RuntimePersistenceError("database migration checksum differs from the image")
+        return {
+            "status": "ok",
+            "latest_migration": str(rows[-1][1]),
+            "migration_count": len(rows),
+        }
+
+    def persist_raw_artifact(self, artifact: RawArtifact) -> uuid.UUID:
+        """Persist one immutable content-addressed evidence reference idempotently."""
+
+        if artifact.observed_at is None:
+            raise ValueError("raw artifact observed_at is required for persistence")
+        with self._connect(self._database_url) as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id, byte_length, uri, request_identity FROM raw_artifacts "
+                "WHERE sha256 = %s FOR UPDATE",
+                (artifact.sha256,),
+            )
+            existing = cursor.fetchone()
+            if existing is not None:
+                if (
+                    int(str(existing[1])) != artifact.byte_length
+                    or str(existing[2]) != artifact.uri
+                    or (existing[3] or None) != artifact.request_identity
+                ):
+                    raise RuntimePersistenceError(
+                        "raw artifact digest was reused with different metadata"
+                    )
+                return uuid.UUID(str(existing[0]))
+            artifact_id = uuid.uuid5(uuid.NAMESPACE_URL, f"vtrade:raw-artifact:{artifact.sha256}")
+            cursor.execute(
+                "INSERT INTO raw_artifacts "
+                "(id, sha256, uri, byte_length, source_endpoint, request_identity, "
+                "source_timestamp, observed_at, captured_cutoff, schema_version, audit_metadata) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '{}'::jsonb)",
+                (
+                    artifact_id,
+                    artifact.sha256,
+                    artifact.uri,
+                    artifact.byte_length,
+                    artifact.source_endpoint,
+                    artifact.request_identity,
+                    artifact.source_timestamp,
+                    artifact.observed_at,
+                    artifact.historical_cutoff,
+                    artifact.schema_version,
+                ),
+            )
+        return artifact_id
 
     def register_agent_schedule(self, agent_id: uuid.UUID, *, starts_at: datetime) -> bool:
         """Register a new agent's independent anchor without changing existing agents."""

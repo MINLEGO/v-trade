@@ -317,18 +317,22 @@ class PostgresHarnessRepositoryTests(unittest.TestCase):
         self.assertIn("ORDER BY r.created_at DESC, b.id DESC", belief_query)
 
     def test_phase_four_migration_contains_budget_replay_and_retention_tables(self) -> None:
-        migration = Path("migrations/0004_model_research_harness.sql").read_text(encoding="utf-8")
+        migration = Path("migrations/0004_runtime_audit_and_admin.sql").read_text(
+            encoding="utf-8"
+        )
         for required in (
             "monthly_provider_budgets",
             "provider_budget_reservations",
             "harness_runs",
             "harness_tool_records",
             "model_replay_records",
-            "critical_learning_snapshots",
             "retain_until",
-            "memory_fingerprint",
         ):
             self.assertIn(required, migration)
+        foundation = Path(
+            "migrations/0001_foundation_agent_state_ledger.sql"
+        ).read_text(encoding="utf-8")
+        self.assertIn("memory_fingerprint", foundation)
 
 
 if __name__ == "__main__":
