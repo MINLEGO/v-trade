@@ -195,8 +195,7 @@ CREATE TABLE liquidity_haircut_audits (
   UNIQUE (snapshot_id, outcome_side),
   CHECK (raw_depth_units = ignored_quantity_units + effective_depth_units),
   CHECK (ignored_quantity_units::numeric * 100 <= raw_depth_units::numeric * 50),
-  CHECK (consumed_quantity_units + cancelled_quantity_units + remaining_quantity_units
-    <= effective_depth_units)
+  CHECK (consumed_quantity_units + remaining_quantity_units <= effective_depth_units)
 );
 
 CREATE OR REPLACE FUNCTION vtrade_assert_binary_outcomes() RETURNS trigger

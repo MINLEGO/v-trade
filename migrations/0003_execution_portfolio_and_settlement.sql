@@ -220,7 +220,11 @@ CREATE TABLE resolution_observations (
   blocked boolean NOT NULL DEFAULT false,
   UNIQUE (market_id, observed_at, raw_artifact_id),
   CHECK (lifecycle_status = 'finalized' OR settlement_ts IS NULL),
-  CHECK (lifecycle_status <> 'finalized' OR (result IS NOT NULL AND settlement_ts IS NOT NULL)),
+  CHECK (
+    lifecycle_status <> 'finalized'
+    OR blocked
+    OR (result IS NOT NULL AND settlement_ts IS NOT NULL)
+  ),
   CHECK (observed_at <= cutoff),
   CHECK (source_timestamp IS NULL OR source_timestamp <= cutoff)
 );
@@ -351,15 +355,21 @@ BEGIN
      OR observation.blocked OR observation.result IS NULL
      OR observation.settlement_ts IS NULL
      OR observation.settlement_ts <> NEW.settlement_ts
-     OR observation.market_id <> NEW.market_id
-     OR observation.result <> NEW.outcome_side THEN
+     OR observation.market_id <> NEW.market_id THEN
     RAISE EXCEPTION 'settlement requires one validated, unblocked FINALIZED observation';
   END IF;
   SELECT * INTO position_row FROM positions WHERE id = NEW.position_id;
   IF position_row.id IS NULL OR position_row.agent_id <> NEW.agent_id
      OR position_row.market_id <> NEW.market_id
-     OR position_row.outcome_side <> NEW.outcome_side THEN
+     OR position_row.outcome_side <> NEW.outcome_side
+     OR position_row.contract_units <> NEW.contract_units THEN
     RAISE EXCEPTION 'settlement position does not match the finalized market outcome';
+  END IF;
+  IF NEW.gross_payout_micros <> CASE
+    WHEN observation.result = NEW.outcome_side THEN NEW.contract_units * 10000
+    ELSE 0
+  END THEN
+    RAISE EXCEPTION 'binary settlement payout is inconsistent with the finalized result';
   END IF;
   SELECT * INTO prior_settlement FROM settlements
    WHERE idempotency_key = NEW.idempotency_key OR (position_id = NEW.position_id

@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Any, Protocol
+from typing import Any, NoReturn, Protocol
 
 from vtrade.broker import (
     ExecutionResult,
@@ -356,3 +356,29 @@ def _aware(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("production timestamps must be timezone-aware")
     return value
+
+
+# ---------------------------------------------------------------------------
+# Real-execution safety boundary
+# ---------------------------------------------------------------------------
+
+
+class RealExecutionDisabled(RuntimeError):
+    """Raised for every attempted real venue operation in v1."""
+
+
+class DisabledRealExecutionAdapter:
+    """Explicit fail-closed placeholder; it has no transport or credentials."""
+
+    enabled = False
+
+    def submit(self, *_args: object, **_kwargs: object) -> NoReturn:
+        raise RealExecutionDisabled(
+            "real execution is disabled by vtrade-binary-order-v1"
+        )
+
+    execute = submit
+    place = submit
+
+
+RealExecutionAdapter = DisabledRealExecutionAdapter

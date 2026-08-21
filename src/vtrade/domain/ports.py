@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, Protocol
 
+from vtrade.domain.execution import FeePolicySnapshot, OrderRequest, OrderResult
 from vtrade.domain.types import (
     CatalogueSnapshot,
     CycleSnapshot,
@@ -59,6 +60,27 @@ class ResolutionPort(Protocol):
     def get_resolutions(
         self, market_keys: Sequence[MarketKey], *, cutoff: datetime
     ) -> tuple[ResolutionObservation, ...]: ...
+
+
+class FeePolicyPort(Protocol):
+    """Return an immutable exact fee policy; missing data is not a zero fee."""
+
+    def get_fee_policy(
+        self, market_key: MarketKey, *, as_of: datetime, cutoff: datetime
+    ) -> FeePolicySnapshot | None: ...
+
+
+class SemanticOrderPort(Protocol):
+    """Shared paper/future-real order seam with no venue transport fields."""
+
+    def submit(
+        self,
+        request: OrderRequest,
+        *,
+        context: MarketContext | None,
+        portfolio: JsonObject,
+        fee_policy: FeePolicySnapshot | None,
+    ) -> OrderResult: ...
 
 
 class ArtifactReference(Protocol):

@@ -6,7 +6,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from vtrade.domain.types import MicroDollars
+from vtrade.domain.types import MarketKey, MicroDollars, OutcomeSide
 
 
 class LedgerAccount(StrEnum):
@@ -26,9 +26,18 @@ class Posting:
     market_id: str | None = None
     outcome_id: str | None = None
     shares_delta: Decimal | None = None
+    market_ref: MarketKey | str | None = None
+    outcome: OutcomeSide | str | None = None
+    contract_units_delta: int | None = None
+    entry_fees_delta_micros: int | None = None
 
     def __post_init__(self) -> None:
-        if int(self.amount_micros) == 0 and self.shares_delta is None:
+        if (
+            int(self.amount_micros) == 0
+            and self.shares_delta is None
+            and self.contract_units_delta is None
+            and self.entry_fees_delta_micros is None
+        ):
             raise ValueError("ledger postings require money or a share delta")
         if (self.market_id is None) != (self.outcome_id is None):
             raise ValueError("ledger posting market and outcome dimensions are atomic")
@@ -39,6 +48,32 @@ class Posting:
                 raise ValueError("only position-cost postings may change shares")
             if self.outcome_id is None:
                 raise ValueError("share deltas require market and outcome dimensions")
+        if (self.market_ref is None) != (self.outcome is None):
+            raise ValueError("ledger posting market_ref and outcome dimensions are atomic")
+        if self.market_ref is not None:
+            if isinstance(self.market_ref, str):
+                object.__setattr__(self, "market_ref", MarketKey(self.market_ref))
+            assert self.outcome is not None
+            if not isinstance(self.outcome, OutcomeSide):
+                object.__setattr__(self, "outcome", OutcomeSide(self.outcome))
+        if self.contract_units_delta is not None:
+            if isinstance(self.contract_units_delta, bool) or self.contract_units_delta == 0:
+                raise ValueError("contract unit deltas must be non-zero integers")
+            if self.market_ref is None or self.outcome is None:
+                raise ValueError("contract unit deltas require market_ref and outcome")
+            if self.account is not LedgerAccount.POSITION_COST:
+                raise ValueError("only position-cost postings may change contract units")
+        if self.entry_fees_delta_micros is not None:
+            if (
+                isinstance(self.entry_fees_delta_micros, bool)
+                or not isinstance(self.entry_fees_delta_micros, int)
+                or self.entry_fees_delta_micros == 0
+            ):
+                raise ValueError("entry-fee deltas must be non-zero integers")
+            if self.account is not LedgerAccount.FEES:
+                raise ValueError("only fee postings may change entry-fee allocation")
+            if self.market_ref is None or self.outcome is None:
+                raise ValueError("entry-fee deltas require market_ref and outcome")
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,3 +125,7 @@ class AppendOnlyLedger:
                 for posting in entry.postings:
                     balances[posting.account] += int(posting.amount_micros)
         return {account: MicroDollars(value) for account, value in balances.items()}
+
+
+ContractPosting = Posting
+ContractLedgerEntry = LedgerEntry
