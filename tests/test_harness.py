@@ -103,9 +103,9 @@ class HarnessTests(unittest.TestCase):
                 "parameters": {
                     "type": "object",
                     "additionalProperties": False,
-                    "required": ["shares"],
+                    "required": ["contract_units"],
                     "properties": {
-                        "shares": {"type": "integer", "minimum": 1, "maximum": 100}
+                        "contract_units": {"type": "integer", "minimum": 1, "maximum": 100}
                     },
                 },
             },
@@ -119,7 +119,7 @@ class HarnessTests(unittest.TestCase):
                         "id": "bad",
                         "function": {
                             "name": "place_market_order",
-                            "arguments": json.dumps({"shares": "all"}),
+                            "arguments": json.dumps({"contract_units": "all"}),
                         },
                     }
                 ],
@@ -729,7 +729,7 @@ class HarnessTests(unittest.TestCase):
             {"since_last_cycle", "since_last_cycle_truncated", "summary_24h"},
         )
 
-    def test_rendered_predictionarena_prompt_delegates_policy_to_dynamic_context(self) -> None:
+    def test_rendered_kalshi_prompt_delegates_policy_to_dynamic_context(self) -> None:
         system_prompt = Path(
             "spec/prompt/vtrade-kalshi-v1.md"
         ).read_text(encoding="utf-8")

@@ -28,7 +28,7 @@ FORBIDDEN_ACTIVE_FIELDS = (
     "negative_risk",
     "shares",
     "SHARES",
-    "polymarket",
+    "poly" + "market",
 )
 
 

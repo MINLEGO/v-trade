@@ -32,6 +32,7 @@ dev = [
 [project.scripts]
 vtrade-fixture-ingest = "vtrade.fixtures:main"
 vtrade-bootstrap = "vtrade.bootstrap:main"
+vtrade-release-verify = "vtrade.release_verification:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/vtrade"]

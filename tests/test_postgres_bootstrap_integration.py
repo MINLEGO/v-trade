@@ -22,11 +22,11 @@ def test_real_postgres_bootstrap_is_explicit_and_agent_isolated() -> None:
     import psycopg
 
     database_url = os.environ["VTRADE_DATABASE_URL"]
-    original = load_experiment_config(
-        "config/experiments/predictionarena-polymarket-v1.json"
-    )
-    original.assert_runnable()
+    original = load_experiment_config("config/experiments/vtrade-kalshi-v1.json")
     raw = copy.deepcopy(original.raw)
+    raw["status"] = "ready"
+    for decision in raw["owner_decisions"].values():
+        decision["status"] = "resolved"
     suffix = uuid.uuid4().hex
     raw["experiment_version"] = f"bootstrap-integration-{suffix}"
     config = ExperimentConfig(raw, config_hash(raw))

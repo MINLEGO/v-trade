@@ -5,6 +5,8 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator
 
+from vtrade.frozen_artifacts import FORBIDDEN_ACTIVE_FIELDS
+
 SCHEMA = Path("spec/tool-schemas-vtrade-kalshi-v1.json")
 
 
@@ -46,16 +48,7 @@ def test_active_order_contract_is_exact_and_venue_neutral() -> None:
 def test_active_prompt_has_no_unresolved_template_or_legacy_surface() -> None:
     prompt = Path("spec/prompt/vtrade-kalshi-v1.md").read_text(encoding="utf-8").casefold()
     assert "{" not in prompt and "}" not in prompt
-    for forbidden in (
-        "market_id",
-        "outcome_id",
-        "token_id",
-        "venue_token_id",
-        "condition_id",
-        "negative_risk",
-        "shares",
-        "polymarket",
-    ):
+    for forbidden in FORBIDDEN_ACTIVE_FIELDS:
         assert forbidden not in prompt
 
 

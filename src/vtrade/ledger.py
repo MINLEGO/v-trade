@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal
 from enum import StrEnum
 
 from vtrade.domain.types import MarketKey, MicroDollars, OutcomeSide
@@ -23,9 +22,6 @@ class LedgerAccount(StrEnum):
 class Posting:
     account: LedgerAccount
     amount_micros: MicroDollars
-    market_id: str | None = None
-    outcome_id: str | None = None
-    shares_delta: Decimal | None = None
     market_ref: MarketKey | str | None = None
     outcome: OutcomeSide | str | None = None
     contract_units_delta: int | None = None
@@ -34,20 +30,10 @@ class Posting:
     def __post_init__(self) -> None:
         if (
             int(self.amount_micros) == 0
-            and self.shares_delta is None
             and self.contract_units_delta is None
             and self.entry_fees_delta_micros is None
         ):
-            raise ValueError("ledger postings require money or a share delta")
-        if (self.market_id is None) != (self.outcome_id is None):
-            raise ValueError("ledger posting market and outcome dimensions are atomic")
-        if self.shares_delta is not None:
-            if not self.shares_delta.is_finite() or self.shares_delta == 0:
-                raise ValueError("ledger share deltas must be finite and non-zero")
-            if self.account is not LedgerAccount.POSITION_COST:
-                raise ValueError("only position-cost postings may change shares")
-            if self.outcome_id is None:
-                raise ValueError("share deltas require market and outcome dimensions")
+            raise ValueError("ledger postings require money or a contract-unit delta")
         if (self.market_ref is None) != (self.outcome is None):
             raise ValueError("ledger posting market_ref and outcome dimensions are atomic")
         if self.market_ref is not None:
@@ -96,7 +82,7 @@ class LedgerEntry:
 
 
 class AppendOnlyLedger:
-    """Deterministic domain ledger; persistence enforces the same invariants in PostgreSQL."""
+    """Deterministic domain ledger; PostgreSQL enforces the same invariants."""
 
     def __init__(self, entries: Iterable[LedgerEntry] = ()) -> None:
         self._entries: list[LedgerEntry] = []

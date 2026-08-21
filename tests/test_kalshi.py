@@ -17,6 +17,7 @@ from vtrade.domain.types import (
     to_price_micros,
 )
 from vtrade.kalshi import (
+    ORDINARY_BINARY_FORBIDDEN_FIELDS,
     KalshiLookAheadError,
     KalshiPayloadError,
     KalshiPublicRestAdapter,
@@ -239,7 +240,8 @@ class KalshiDomainTests(unittest.TestCase):
                 path = request.url.path.removeprefix("/trade-api/v2")
                 if path == "/markets" and request.url.params.get("cursor") is None:
                     payload = json.loads(response.content)
-                    payload["markets"][0]["token_id"] = "forbidden"
+                    forbidden_field = next(iter(ORDINARY_BINARY_FORBIDDEN_FIELDS))
+                    payload["markets"][0][forbidden_field] = "forbidden"
                     return Replay.response(request, payload)
                 return response
 

@@ -1,74 +1,50 @@
 # V-Trade
 
-V-Trade is an auditable agent experiment for researching and trading prediction markets. Its
-current venue is Kalshi, while its cognitive and experimental method derives from
-PredictionArena's Polymarket experiment.
+V-Trade is an auditable agent experiment for researching and paper-trading ordinary
+binary Kalshi markets. The active first release is `vtrade-kalshi-v1` and is
+paper-only.
 
-## Language
+## Domain language
 
-**Venue**:
-The external prediction market that supplies market data and may ultimately execute orders.
-_Avoid_: Provider, platform
+**Venue**: The external prediction market that supplies read-only market data.
 
-**Event**:
-A user-facing occurrence that groups one or more related markets.
-_Avoid_: Market, contract
+**Series**: A recurring venue family whose reference is opaque and never inferred by
+parsing another reference.
 
-**Series**:
-A venue-defined recurring family of related markets and rules; its identity is retained as an
-opaque venue reference and is never inferred by parsing a market reference.
-_Avoid_: Event, market
+**Event**: A user-facing occurrence grouping related markets.
 
-**Market**:
-One binary proposition whose mutually exclusive outcomes are YES and NO.
-_Avoid_: Event, token
+**Market**: One binary proposition with exactly YES and NO outcomes.
 
-**Market reference**:
-The exact opaque venue reference for one Market, stable across live and historical reads and not
-derived from a label, slug, or ticker structure.
-_Avoid_: Token ID, condition ID, slug
+**Market reference**: The exact opaque reference for one market, stable across live
+and historical reads and not derived from a label or ticker structure.
 
-**Outcome**:
-The YES or NO side of a market that determines a position's payoff.
-_Avoid_: Token, market
+**Outcome**: YES or NO for one market.
 
-**Outcome side**:
-Exactly one of YES or NO for a Market; its identity is owned by the Market and side, not by a
-venue-specific token or leg.
-_Avoid_: Token, leg
+**Contract**: A quantity-bearing claim on one outcome, measured in exact hundredths
+of a contract.
 
-**Contract**:
-The quantity-bearing claim on one outcome of a market; contract quantities may be fractional.
-_Avoid_: Share, token
+**Canonical order book**: A cutoff-bound view of executable bids and complementary
+asks for both outcomes, with exact integer microdollar prices and contract units.
 
-**Canonical order book**:
-A frozen two-sided view of executable bids and complementary asks for both outcome sides, with
-exact prices and contract quantities observed at one cutoff.
-_Avoid_: Raw venue book, quote
+**Discovery universe**: The bounded active catalogue selected for one decision cycle.
 
-**Discovery universe**:
-The bounded set of active, tradeable markets made available for an agent to investigate during a
-cycle.
-_Avoid_: Resolution universe, predefined market list
+**Resolution universe**: Every held or previously touched market tracked until its
+validated payout is final.
 
-**Resolution universe**:
-Every previously touched or held market that must remain tracked until its payout is final.
-_Avoid_: Discovery universe, active-market shortlist
+**Market freeze**: The immutable market, book, fee, resolution, cutoff, and audit
+evidence made available during one cycle.
 
-**Market freeze**:
-The immutable venue state made available to an agent for one decision cycle.
-_Avoid_: Live market state, cache
+**Paper execution**: A deterministic simulation against real venue data that never
+submits a venue order.
 
-**Paper execution**:
-An execution simulated against real venue data without submitting an order to the venue.
-_Avoid_: Fake trade, mock execution
+**Methodological provenance**: The active experiment preserves the agreed agent
+process—plans, beliefs, research, tools, and autonomous market selection—without
+creating product, schema, venue, or performance equivalence with historical work.
 
-**Real execution**:
-An execution submitted to and reconciled with the venue.
-_Avoid_: Live context, paper execution
+## Safety vocabulary
 
-**Methodological comparability**:
-Continuity with the agent process used by PredictionArena's Polymarket experiment, including
-Plans, Beliefs, tools, and autonomous market selection; it creates no product or venue lineage
-with Polymarket and does not imply financial-performance comparability across venues.
-_Avoid_: Performance equivalence
+Financial values are exact integer microdollars. Orders use `market_ref`, YES/NO,
+BUY/SELL, CASH/CONTRACTS, optional limits, and IOC/FOK. A missing, stale, crossed,
+malformed, or causally invalid market context fails closed. Only a FINALIZED binary
+result with `settlement_ts` can pay a position.
+

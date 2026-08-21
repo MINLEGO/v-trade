@@ -2,9 +2,11 @@
 
 | Term | Meaning |
 |---|---|
-| `cost_basis_micros` | Gross purchase notional assigned to the currently held shares. It excludes trading fees and is unchanged by the entry-fee correction. |
-| `average_cost` | Gross purchase notional per currently held share. It remains a gross metric and does not include trading fees. |
-| `entry_fees_micros` | Buy fees still attributable to the currently held shares. It is reduced proportionally by partial sells and fully consumed by a full sell or settlement. |
-| `total_fees_micros` | All fees in a closed SELL lifecycle, including both BUY and SELL fees. |
-| Net realized P&L | For a closed SELL lifecycle: `exit_proceeds_micros - entry_cost_micros - total_fees_micros`. For settlement: `payout_micros - cost_basis_micros - entry_fees_micros`. |
-| Net unrealized P&L | Current liquidation value minus gross `cost_basis_micros` minus remaining `entry_fees_micros`. |
+| `contract_units` | Exact hundredths of one binary contract; no floating-point financial quantity is persisted. |
+| `gross_cost_basis_micros` | Gross purchase notional assigned to the currently held contract units. |
+| `entry_fees_micros` | Buy fees still attributable to currently held contract units; reduced proportionally on a partial sale or final settlement. |
+| `total_fees_micros` | All authoritative fees in a completed order lifecycle. |
+| Net realized P&L | Exit proceeds or payout minus released gross basis, released entry fees, and exit fees. |
+| Net unrealized P&L | Current executable bid value minus gross cost basis and remaining entry fees. |
+| Balanced ledger event | An append-only event whose monetary postings sum to zero and whose contract-unit dimensions reconcile with the portfolio projection. |
+

@@ -7,13 +7,8 @@ from typing import Any, Protocol
 from vtrade.domain.execution import FeePolicySnapshot, OrderRequest, OrderResult
 from vtrade.domain.types import (
     CatalogueSnapshot,
-    CycleSnapshot,
     MarketContext,
-    MarketDelta,
     MarketKey,
-    OrderBookSnapshot,
-    OrderIntent,
-    Resolution,
     ResolutionObservation,
 )
 
@@ -30,16 +25,6 @@ class ResearchProvider(Protocol):
     def search(self, query: str, options: JsonObject) -> JsonObject: ...
 
     def fetch(self, url: str, options: JsonObject) -> JsonObject: ...
-
-
-class MarketVenue(Protocol):
-    def sync_markets(self, cursor: str | None) -> MarketDelta: ...
-
-    def get_order_book(self, outcome_ids: Sequence[str]) -> tuple[OrderBookSnapshot, ...]: ...
-
-    def get_resolutions(
-        self, market_ids: Sequence[str], as_of: datetime
-    ) -> tuple[Resolution, ...]: ...
 
 
 class CataloguePort(Protocol):
@@ -96,12 +81,6 @@ class ArtifactReference(Protocol):
 
 class ArtifactStore(Protocol):
     def put(self, content: bytes) -> ArtifactReference: ...
-
-
-class Broker(Protocol):
-    def place(
-        self, order: OrderIntent, portfolio: JsonObject, snapshot: CycleSnapshot
-    ) -> JsonObject: ...
 
 
 class Clock(Protocol):

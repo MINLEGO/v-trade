@@ -138,7 +138,7 @@ def test_agent_add_is_paused_and_start_remove_only_touch_selected_agent() -> Non
         clock=lambda: datetime(2026, 7, 16, tzinfo=UTC),
     )
     agent_id = service.add_agent(
-        experiment_version="predictionarena-polymarket-v1",
+        experiment_version="vtrade-kalshi-v1",
         run_label="baseline",
         model_label="DeepSeek V4 Flash",
         name="deepseek-1",
@@ -155,7 +155,7 @@ def test_agent_add_is_paused_and_start_remove_only_touch_selected_agent() -> Non
     start_cursor = Cursor([(str(agent_id), run_id, "ready")])
     service._connect = connector(start_cursor)
     service.start_agent(
-        experiment_version="predictionarena-polymarket-v1",
+        experiment_version="vtrade-kalshi-v1",
         run_label="baseline",
         name="deepseek-1",
         starts_at=datetime(2026, 7, 17, tzinfo=UTC),
@@ -168,7 +168,7 @@ def test_agent_add_is_paused_and_start_remove_only_touch_selected_agent() -> Non
     remove_cursor = Cursor([(str(agent_id),)])
     service._connect = connector(remove_cursor)
     service.remove_agent(
-        experiment_version="predictionarena-polymarket-v1",
+        experiment_version="vtrade-kalshi-v1",
         run_label="baseline",
         name="deepseek-1",
     )
@@ -192,7 +192,7 @@ def test_existing_agent_requires_the_exact_balanced_initial_capital_event() -> N
     )
     service = PostgresExperimentBootstrap("postgres://test", connect=connector(cursor))
     result = service.add_agent(
-        experiment_version="predictionarena-polymarket-v1",
+        experiment_version="vtrade-kalshi-v1",
         run_label="baseline",
         model_label="DeepSeek V4 Flash",
         name="deepseek-1",

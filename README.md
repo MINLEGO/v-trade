@@ -1,33 +1,49 @@
 # V-Trade
 
-V-Trade is an auditable, provider-neutral reproduction of PredictionArena's publicly
-documented behavior. The frozen baseline is `predictionarena-polymarket-v1-liquidity-aware`. Owner decisions for portfolio pagination, fees, provider routing, retention, and request ceilings are frozen in the versioned experiment configuration.
+V-Trade is an auditable, paper-only prediction-market experiment. The active release
+is `vtrade-kalshi-v1`: it discovers ordinary binary Kalshi markets, exposes YES/NO
+outcomes, and simulates IOC/FOK orders against real public market data without
+submitting orders to a venue.
+
+The active release has one experiment, one clean four-migration database chain, and
+no compatibility loader, dual venue, dual write, legacy upgrade, or real-execution
+fallback. Historical research is retained only under
+[`docs/archive/predictionarena/`](docs/archive/predictionarena/); that archive is
+read-only evidence and is never imported or loaded by the application.
 
 ## Local validation
 
-Python 3.12 is required. Install the development dependencies, then run:
+Python 3.12 and the locked development environment are required:
 
 ```powershell
-python -m pytest
-python -m ruff check src tests
-python -m mypy src/vtrade
+$env:UV_CACHE_DIR='.uv-cache'
+uv sync --extra dev
+uv run --extra dev python -m pytest
+uv run --extra dev python -m ruff check src tests
+uv run --extra dev python -m mypy src/vtrade
+uv run --extra dev python -m vtrade.release_verification
+docker compose -f compose.coolify.yaml config --quiet
 ```
 
-The standard-library test suite can also run before dependencies are installed:
+The release verifier checks frozen artifact hashes, the exact migration chain, the
+archive boundary, the fixture manifest, and the zero-active-legacy-venue sweep. It
+prints PostgreSQL, image, storage, and French-host probe gates separately; local
+tests do not claim those external checks.
 
-```powershell
-$env:PYTHONPATH='src'; python -m unittest discover -s tests -v
-```
+## Deployment boundary
 
-Copy `.env.example` only after the Supabase resources and external API credentials are
-available. OpenRouter may change provider routes for the same model according to the
-frozen price-sorted routing policy; it must never substitute another configured model.
+Deploy a disposable empty PostgreSQL target with the real private object store. The
+sequence is `migrate -> authenticated API readiness -> worker`. `/health/live` is
+cheap and provider-independent. `/health/ready` checks the database, latest
+migration, private configuration, storage, and active artifact contract; it does not
+call Kalshi, model, or research providers.
 
-Phase-0 evidence and decisions are under `spec/`; versioned PostgreSQL migrations are
-under `migrations/`. Apply them with `python -m vtrade.migrate` only after exporting the
-real `VTRADE_DATABASE_URL`. No runtime path substitutes local storage or fake providers
-for missing production resources.
+The image verifies active artifacts before dropping privileges. Missing private
+resources, reviewed external fixture evidence, or migrations fail closed. Real
+Kalshi authentication, signing, WebSockets, and order submission are not part of
+this release.
 
-Runtime scheduling, recovery, retention and private-admin deployment are documented in
-`docs/runtime-operations.md`. Every admin route requires the runtime admin secret;
-Swagger, ReDoc and OpenAPI endpoints are disabled.
+See [`docs/runtime-operations.md`](docs/runtime-operations.md) for the operator
+runbook and [`docs/adr/0002-kalshi-only-paper-cutover.md`](docs/adr/0002-kalshi-only-paper-cutover.md)
+for the irreversible fresh-database cutover decision.
+

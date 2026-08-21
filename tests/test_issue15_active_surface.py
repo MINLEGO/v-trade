@@ -9,8 +9,9 @@ from jsonschema import Draft202012Validator
 
 from vtrade.config import ConfigurationError, load_experiment_config
 from vtrade.fixtures import FixtureValidationError, validate_fixture_manifest
-from vtrade.frozen_artifacts import verify_active_artifacts
+from vtrade.frozen_artifacts import FORBIDDEN_ACTIVE_FIELDS, verify_active_artifacts
 from vtrade.production_tools import ProductionToolRegistry
+from vtrade.release_verification import FORBIDDEN_ACTIVE_PATHS
 
 ACTIVE_CONFIG = Path("config/experiments/vtrade-kalshi-v1.json")
 ACTIVE_SCHEMA = Path("spec/tool-schemas-vtrade-kalshi-v1.json")
@@ -30,16 +31,7 @@ def test_active_artifacts_are_frozen_and_schema_is_strict() -> None:
             "spec/tool-schemas-vtrade-kalshi-v1.json",
         )
     ).casefold()
-    for forbidden in (
-        "market_id",
-        "outcome_id",
-        "token_id",
-        "venue_token_id",
-        "condition_id",
-        "negative_risk",
-        "shares",
-        "polymarket",
-    ):
+    for forbidden in FORBIDDEN_ACTIVE_FIELDS:
         assert forbidden not in active_text
 
 
@@ -50,7 +42,7 @@ def test_only_the_kalshi_experiment_can_load_and_external_gate_fails_closed() ->
     with pytest.raises(ConfigurationError, match="reviewed Kalshi fixture capture"):
         config.assert_runnable()
 
-    assert not Path("config/experiments/predictionarena-polymarket-v1.json").exists()
+    assert all(not path.exists() for path in FORBIDDEN_ACTIVE_PATHS)
     assert not Path("spec/tool-schemas-v1.json").exists()
 
 

@@ -1,6 +1,7 @@
 # Frozen experiment inputs are hashed byte-for-byte and must use one checkout form.
-spec/prompt/predictionarena-polymarket-v1.md text eol=lf
-spec/tool-schemas-v1.json text eol=lf
-spec/tool-schemas-v1-legacy.json text eol=lf
-config/experiments/predictionarena-polymarket-v1.json text eol=lf
-config/experiments/predictionarena-polymarket-v1-liquidity-aware.json text eol=lf
+spec/prompt/vtrade-kalshi-v1.md text eol=lf
+spec/tool-schemas-vtrade-kalshi-v1.json text eol=lf
+spec/vtrade-kalshi-v1-compatibility.md text eol=lf
+config/experiments/vtrade-kalshi-v1.json text eol=lf
+spec/fixtures/kalshi/manifest.json text eol=lf
+migrations/*.sql text eol=lf
