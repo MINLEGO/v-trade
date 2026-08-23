@@ -28,8 +28,8 @@ def test_real_postgres_bootstrap_is_explicit_and_agent_isolated() -> None:
     for decision in raw["owner_decisions"].values():
         decision["status"] = "resolved"
     suffix = uuid.uuid4().hex
-    raw["experiment_version"] = f"bootstrap-integration-{suffix}"
     config = ExperimentConfig(raw, config_hash(raw))
+    model_labels = tuple(str(model["label"]) for model in raw["models"])
     prompt = read_prompt_body(str(raw["artifacts"]["prompt"]["path"]))
     now = datetime.now(UTC)
     with psycopg.connect(database_url) as connection:
@@ -49,14 +49,14 @@ def test_real_postgres_bootstrap_is_explicit_and_agent_isolated() -> None:
         first = service.add_agent(
             experiment_version=raw["experiment_version"],
             run_label=f"shadow-{suffix}",
-            model_label="DeepSeek V4 Flash",
+            model_label=model_labels[0],
             name=f"deepseek-{suffix}",
             initial_cash_micros=10_000_000_000,
         )
         second = service.add_agent(
             experiment_version=raw["experiment_version"],
             run_label=f"shadow-{suffix}",
-            model_label="MiMo V2.5 Pro",
+            model_label=model_labels[1],
             name=f"mimo-{suffix}",
             initial_cash_micros=10_000_000_000,
         )

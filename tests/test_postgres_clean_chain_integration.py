@@ -29,8 +29,8 @@ def test_fresh_database_applies_reruns_and_rejects_checksum_drift() -> None:
             if int(cursor.fetchone()[0]) != 0:
                 pytest.skip("requires a dedicated empty staging database")
 
-    assert apply_migrations(database_url) == EXPECTED_MIGRATIONS
-    assert apply_migrations(database_url) == EXPECTED_MIGRATIONS
+    assert apply_migrations(database_url=database_url) == EXPECTED_MIGRATIONS
+    assert apply_migrations(database_url=database_url) == EXPECTED_MIGRATIONS
 
     with psycopg.connect(database_url) as connection, connection.cursor() as cursor:
         cursor.execute(
@@ -47,7 +47,7 @@ def test_fresh_database_applies_reruns_and_rejects_checksum_drift() -> None:
 
     try:
         with pytest.raises(MigrationError, match="applied migration changed"):
-            apply_migrations(database_url)
+            apply_migrations(database_url=database_url)
     finally:
         with psycopg.connect(database_url) as connection, connection.cursor() as cursor:
             cursor.execute(

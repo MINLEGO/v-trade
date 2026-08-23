@@ -365,10 +365,12 @@ BEGIN
      OR position_row.contract_units <> NEW.contract_units THEN
     RAISE EXCEPTION 'settlement position does not match the finalized market outcome';
   END IF;
-  IF NEW.gross_payout_micros <> CASE
-    WHEN observation.result = NEW.outcome_side THEN NEW.contract_units * 10000
-    ELSE 0
-  END THEN
+  IF NEW.gross_payout_micros <> (
+    CASE
+      WHEN observation.result = NEW.outcome_side THEN NEW.contract_units * 10000
+      ELSE 0
+    END
+  ) THEN
     RAISE EXCEPTION 'binary settlement payout is inconsistent with the finalized result';
   END IF;
   SELECT * INTO prior_settlement FROM settlements

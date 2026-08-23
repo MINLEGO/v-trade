@@ -74,7 +74,7 @@ CREATE TABLE market_price_grid_ranges (
   start_price_micros bigint NOT NULL CHECK (start_price_micros >= 0),
   end_price_micros bigint NOT NULL CHECK (end_price_micros <= 1000000),
   step_micros bigint NOT NULL CHECK (step_micros > 0),
-  PRIMARY KEY (market_id, ordinal),
+  UNIQUE (market_id, ordinal),
   CHECK (start_price_micros < end_price_micros),
   CHECK ((end_price_micros - start_price_micros) % step_micros = 0)
 );
