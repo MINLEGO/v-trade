@@ -187,6 +187,16 @@ def _ordinary_market(rows: list[Any]) -> dict[str, Any]:
     raise ProbeError("complete catalogue contains no ordinary binary market")
 
 
+def _series_ref_from_event(payload: dict[str, Any]) -> str:
+    event = payload.get("event")
+    if not isinstance(event, dict):
+        raise ProbeError("event response lacks an event object")
+    series_ref = event.get("series_ticker")
+    if not isinstance(series_ref, str) or not series_ref:
+        raise ProbeError("event lacks opaque series_ticker")
+    return series_ref
+
+
 def run(args: argparse.Namespace) -> Path:
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -226,10 +236,12 @@ def run(args: argparse.Namespace) -> Path:
         market = _ordinary_market(rows)
         market_ref = args.market_ref or market["ticker"]
         event_ref = market.get("event_ticker")
-        series_ref = market.get("series_ticker")
-        if not isinstance(event_ref, str) or not isinstance(series_ref, str):
-            raise ProbeError("selected market lacks opaque event_ticker/series_ticker")
-        probe.get("event-metadata", f"/events/{quote(event_ref, safe='')}")
+        if not isinstance(event_ref, str) or not event_ref:
+            raise ProbeError("selected market lacks opaque event_ticker")
+        event_payload, _ = probe.get(
+            "event-metadata", f"/events/{quote(event_ref, safe='')}"
+        )
+        series_ref = _series_ref_from_event(event_payload)
         probe.get("series-metadata", f"/series/{quote(series_ref, safe='')}")
         book_path = f"/markets/{quote(market_ref, safe='')}/orderbook"
         probe.get("ordinary-binary-orderbook", book_path, {"depth": "0"})
