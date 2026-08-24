@@ -43,6 +43,20 @@ def test_active_sweep_reports_file_line_and_identifier(tmp_path: Path) -> None:
         assert_zero_active_venue(tmp_path)
 
 
+def test_active_sweep_ignores_external_capture_bytes(tmp_path: Path) -> None:
+    for directory in (
+        tmp_path / "spec" / "fixtures" / "kalshi" / "responses",
+        tmp_path / "scripts" / "probe_kalshi_result" / "run",
+    ):
+        directory.mkdir(parents=True)
+        forbidden_key = "share" + "s"
+        (directory / "raw.json").write_text(
+            f'{{"{forbidden_key}": 1}}\n', encoding="utf-8"
+        )
+
+    assert not scan_active_surface(tmp_path)
+
+
 def test_archive_boundary_has_explicit_read_only_contract() -> None:
     assert_archive_boundary()
 

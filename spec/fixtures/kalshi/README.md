@@ -8,7 +8,8 @@ The probe writes the raw UTF-8 response bytes under `responses/` and a separate
 cutoff data, and SHA-256 values. Response JSON must never be hand-written,
 rounded, normalized, or replaced with a fake provider.
 
-The repository currently has no owner-supplied French-host capture in this
-checkout. Until that probe is run and reviewed, fixture-dependent deployment
-evidence remains `owner_pending`; offline tests must use explicitly labelled
-test doubles rather than claiming a real-host result.
+The reviewed French-host probe captured 125 HTTP-200 responses at
+`2026-08-24T17:15:11.246281Z`. The active `manifest.json` is the runtime projection
+with status `ready`; `probe-manifest.json` preserves the probe's pagination,
+concurrency, cutoff, and response-audit metadata. Raw response bytes remain exact
+and are validated by SHA-256 and byte length before composition.

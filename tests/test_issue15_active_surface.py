@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 from jsonschema import Draft202012Validator
 
-from vtrade.config import ConfigurationError, load_experiment_config
+from vtrade.config import load_experiment_config
 from vtrade.fixtures import FixtureValidationError, validate_fixture_manifest
 from vtrade.frozen_artifacts import FORBIDDEN_ACTIVE_FIELDS, verify_active_artifacts
 from vtrade.production_tools import ProductionToolRegistry
@@ -35,12 +35,11 @@ def test_active_artifacts_are_frozen_and_schema_is_strict() -> None:
         assert forbidden not in active_text
 
 
-def test_only_the_kalshi_experiment_can_load_and_external_gate_fails_closed() -> None:
+def test_only_the_kalshi_experiment_can_load_with_the_reviewed_external_gate() -> None:
     config = load_experiment_config(ACTIVE_CONFIG)
     assert config.version == "vtrade-kalshi-v1"
     assert config.raw["execution_mode"] == "paper_only"
-    with pytest.raises(ConfigurationError, match="reviewed Kalshi fixture capture"):
-        config.assert_runnable()
+    config.assert_runnable()
 
     assert all(not path.exists() for path in FORBIDDEN_ACTIVE_PATHS)
     assert not Path("spec/tool-schemas-v1.json").exists()

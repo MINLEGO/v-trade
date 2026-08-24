@@ -24,10 +24,9 @@ def test_active_configuration_is_kalshi_paper_only() -> None:
     assert config.raw["fixtures"]["manifest_path"] == "spec/fixtures/kalshi/manifest.json"
 
 
-def test_active_configuration_fails_closed_until_fixture_gate_is_ready() -> None:
+def test_active_configuration_accepts_the_reviewed_fixture_gate() -> None:
     config = load_experiment_config(ACTIVE_CONFIG)
-    with pytest.raises(ConfigurationError, match="reviewed Kalshi fixture capture"):
-        config.assert_runnable()
+    config.assert_runnable()
 
 
 def test_non_active_versions_are_rejected(tmp_path: Path) -> None:

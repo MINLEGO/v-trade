@@ -5,7 +5,6 @@ credential-free public REST captures, request identity, response metadata, cutof
 causality, and SHA-256 values. Raw response bytes are never hand-written, rounded,
 normalized, or replaced by a fake provider.
 
-The checked-in manifest is intentionally `owner_pending` until the intended French
-production host supplies a reviewed capture. That state is valid repository evidence
-but is not valid production-composition evidence: fixture-dependent startup must fail
-closed until the manifest is complete.
+The reviewed capture from the intended French production host is integrated under
+`spec/fixtures/kalshi/`. The active manifest is `ready`; the original probe audit is
+preserved as `probe-manifest.json`, and raw response bytes remain under `responses/`.

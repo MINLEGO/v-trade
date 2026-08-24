@@ -39,6 +39,10 @@ ACTIVE_SCAN_FILES = (
 )
 ARCHIVE_PROVENANCE_PATH = Path("spec/vtrade-kalshi-v1-compatibility.md")
 PROVENANCE_MARKER = "Historical provenance (controlled):"
+EXTERNAL_EVIDENCE_ROOTS = (
+    Path("spec/fixtures/kalshi/responses"),
+    Path("scripts/probe_kalshi_result"),
+)
 GUARD_FILES = frozenset(
     {
         Path("src/vtrade/frozen_artifacts.py"),
@@ -132,6 +136,12 @@ def iter_active_files(root: str | Path = ".") -> Iterator[Path]:
             if not path.is_file() or any(part in _SKIPPED_DIRECTORY_NAMES for part in path.parts):
                 continue
             relative_path = path.relative_to(base).as_posix()
+            if any(
+                relative_path == evidence_root.as_posix()
+                or relative_path.startswith(evidence_root.as_posix() + "/")
+                for evidence_root in EXTERNAL_EVIDENCE_ROOTS
+            ):
+                continue
             if (
                 relative_path == ARCHIVE_ROOT.as_posix()
                 or relative_path.startswith(ARCHIVE_ROOT.as_posix() + "/")
@@ -151,7 +161,8 @@ def scan_active_surface(root: str | Path = ".") -> tuple[LegacyReference, ...]:
     The three guard files are intentionally allowed to name rejected fields: they
     implement fail-closed deny-lists and stage-payload rejection. The compatibility
     statement may contain one explicitly marked provenance paragraph; every other
-    active occurrence is a release failure.
+    active occurrence is a release failure. Byte-exact provider responses and the
+    probe staging directory are external evidence, not active source vocabulary.
     """
 
     base = Path(root)

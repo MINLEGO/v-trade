@@ -33,7 +33,7 @@
   },
   "fixtures": {
     "manifest_path": "spec/fixtures/kalshi/manifest.json",
-    "manifest_sha256": "c1556e5437cad5ffe4451242403f44cd1733bb29d363a1102f0d145585e42886",
+    "manifest_sha256": "6f87bfb388f4497d41c077f1c5d71e3f449985b1af26b461028c5cba73ef54c0",
     "required_status": "ready"
   },
   "classifications": {
@@ -205,7 +205,7 @@
   },
   "deployment_gates": {
     "fresh_database": {"status": "required", "policy": "four_migration_chain_only"},
-    "kalshi_fixture_capture": {"status": "owner_pending", "policy": "credential_free_reviewed_french_host_capture"},
+    "kalshi_fixture_capture": {"status": "ready", "policy": "credential_free_reviewed_french_host_capture"},
     "real_execution": {"status": "disabled", "policy": "no_credentials_no_signing_no_submission"}
   }
 }
