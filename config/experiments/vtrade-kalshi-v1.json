@@ -87,6 +87,7 @@
     "catalogue_cache_seconds": 60,
     "metadata_cache_seconds": 300,
     "orderbook_cache_seconds": 0,
+    "catalogue_sync_deadline_seconds": 300,
     "request_timeout_seconds": 15,
     "connect_timeout_seconds": 5,
     "maximum_attempts": 3,

@@ -10,6 +10,7 @@ import httpx
 
 from vtrade.artifacts import ContentAddressedArtifactStore
 from vtrade.domain.types import (
+    CatalogueScanRequest,
     MarketKey,
     OutcomeSide,
     PriceGrid,
@@ -113,6 +114,59 @@ class Replay:
             content=json.dumps(payload, separators=(",", ":")).encode(),
             request=request,
         )
+
+
+class LargeCatalogueReplay:
+    total_rows = 95_366
+    page_size = 1_000
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path.removeprefix("/trade-api/v2")
+        self.calls.append(str(request.url))
+        if path == "/historical/cutoff":
+            return Replay.response(request, {"market_settled_ts": "2026-08-01T00:00:00Z"})
+        if path == "/events/KXLARGE":
+            return Replay.response(
+                request,
+                {
+                    "event": {
+                        "event_ticker": "KXLARGE",
+                        "series_ticker": "KXLARGE-SERIES",
+                        "title": "Large event",
+                    }
+                },
+            )
+        if path == "/series/KXLARGE-SERIES":
+            return Replay.response(
+                request,
+                {
+                    "series": {
+                        "ticker": "KXLARGE-SERIES",
+                        "title": "Large series",
+                        "rules_primary": "Large series rules",
+                    }
+                },
+            )
+        if path != "/markets":
+            return httpx.Response(404, request=request)
+        cursor = request.url.params.get("cursor")
+        page_index = 0 if cursor is None else int(cursor.removeprefix("page-"))
+        start = page_index * self.page_size
+        count = min(self.page_size, self.total_rows - start)
+        rows: list[dict[str, object]] = []
+        for offset in range(count):
+            index = start + offset
+            row = market_payload(f"KXLARGE-{index}")
+            row.pop("series_ticker")
+            row["event_ticker"] = "KXLARGE"
+            row["volume_fp"] = f"{index}.00"
+            row["liquidity_dollars"] = f"{index}.00"
+            rows.append(row)
+        next_cursor = None if start + count >= self.total_rows else f"page-{page_index + 1}"
+        return Replay.response(request, {"markets": rows, "cursor": next_cursor})
 
 
 class KalshiDomainTests(unittest.TestCase):
@@ -346,6 +400,44 @@ class KalshiDomainTests(unittest.TestCase):
                 freeze.discovery_market_keys,
             )
             self.assertTrue(freeze.artifacts)
+
+    def test_large_catalogue_scan_keeps_only_global_top_k_and_selected_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            replay = LargeCatalogueReplay()
+            adapter = KalshiPublicRestAdapter(
+                ContentAddressedArtifactStore(Path(directory)),
+                client=httpx.Client(transport=httpx.MockTransport(replay)),
+                clock=lambda: NOW,
+                sleep=lambda _delay: None,
+            )
+            result = adapter.scan_catalogue(
+                CatalogueScanRequest(
+                    cutoff=NOW,
+                    maximum_historical_markets=0,
+                    maximum_additional_markets=2,
+                )
+            )
+
+            self.assertEqual(len(result.pages), 96)
+            self.assertEqual(result.scanned_market_count, 95_366)
+            self.assertEqual(sum(page.record_count for page in result.pages), 95_366)
+            self.assertEqual(len(result.markets), 2)
+            self.assertEqual(
+                result.discovery_market_keys,
+                (MarketKey("KXLARGE-95365"), MarketKey("KXLARGE-95364")),
+            )
+            self.assertEqual(sum(len(page.markets) for page in result.pages), 2)
+            self.assertEqual(
+                len([call for call in replay.calls if "/events/" in call]),
+                1,
+            )
+            self.assertEqual(
+                len([call for call in replay.calls if "/series/" in call]),
+                1,
+            )
+            self.assertFalse(
+                any("KXLARGE-0" in call for call in replay.calls if "/events/" in call)
+            )
 
 
 if __name__ == "__main__":

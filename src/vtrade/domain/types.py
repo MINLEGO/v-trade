@@ -569,6 +569,33 @@ class BinaryEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class CatalogueScanRequest:
+    """Bounded selection inputs for one complete active-catalogue scan."""
+
+    held_markets: tuple[MarketKey, ...] = ()
+    touched_markets: tuple[MarketKey, ...] = ()
+    historical_markets: tuple[MarketKey, ...] = ()
+    cutoff: datetime | None = None
+    maximum_historical_markets: int = 20
+    maximum_additional_markets: int = 80
+
+    def __post_init__(self) -> None:
+        if self.cutoff is not None and (
+            self.cutoff.tzinfo is None or self.cutoff.utcoffset() is None
+        ):
+            raise ValueError("catalogue scan cutoff must be timezone-aware")
+        if self.maximum_historical_markets < 0 or self.maximum_additional_markets < 0:
+            raise ValueError("catalogue scan limits cannot be negative")
+        for name, values in (
+            ("held_markets", self.held_markets),
+            ("touched_markets", self.touched_markets),
+            ("historical_markets", self.historical_markets),
+        ):
+            if any(not isinstance(value, MarketKey) for value in values):
+                raise ValueError(f"{name} must contain MarketKey values")
+
+
+@dataclass(frozen=True, slots=True)
 class CataloguePage:
     requested_cursor: str | None
     next_cursor: str | None
@@ -578,6 +605,7 @@ class CataloguePage:
     markets: tuple[BinaryMarket, ...]
     audit: RawArtifact
     metadata_audits: tuple[RawArtifact, ...] = ()
+    record_count: int = -1
 
     def __post_init__(self) -> None:
         _require_aware(self.observed_at, "catalogue page observed_at")
@@ -585,6 +613,10 @@ class CataloguePage:
             raise ValueError("catalogue cursor must use null for the terminal page")
         if self.next_cursor is not None and not self.next_cursor:
             raise ValueError("catalogue cursor cannot be empty")
+        if self.record_count == -1:
+            object.__setattr__(self, "record_count", len(self.markets))
+        if self.record_count < len(self.markets):
+            raise ValueError("catalogue page record_count cannot omit retained markets")
 
 
 @dataclass(frozen=True, slots=True)
@@ -617,6 +649,61 @@ class CatalogueSnapshot:
             for page in self.pages
             for artifact in (page.audit, *page.metadata_audits)
         )
+
+    @property
+    def source_record_count(self) -> int:
+        return sum(page.record_count for page in self.pages)
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogueScanResult:
+    """Complete page evidence plus a bounded semantic catalogue shortlist."""
+
+    pages: tuple[CataloguePage, ...]
+    discovery_market_keys: tuple[MarketKey, ...]
+    data_cutoff: datetime
+    historical_cutoff: datetime
+    scanned_market_count: int
+
+    def __post_init__(self) -> None:
+        if not self.pages:
+            raise ValueError("catalogue scan requires at least one page")
+        _require_aware(self.data_cutoff, "catalogue scan data_cutoff")
+        _require_aware(self.historical_cutoff, "catalogue scan historical_cutoff")
+        if self.scanned_market_count < 0:
+            raise ValueError("catalogue scan market count cannot be negative")
+        if self.scanned_market_count != sum(page.record_count for page in self.pages):
+            raise ValueError("catalogue scan market count must match page record counts")
+        if len(set(self.discovery_market_keys)) != len(self.discovery_market_keys):
+            raise ValueError("catalogue scan discovery keys must be unique")
+        available = {market.key for page in self.pages for market in page.markets}
+        if any(key not in available for key in self.discovery_market_keys):
+            raise ValueError("catalogue scan discovery key is absent from retained markets")
+
+    @property
+    def markets(self) -> tuple[BinaryMarket, ...]:
+        unique: dict[MarketKey, BinaryMarket] = {}
+        for page in self.pages:
+            for market in page.markets:
+                previous = unique.get(market.key)
+                if previous is not None and previous != market:
+                    raise ValueError("catalogue scan contains conflicting market observations")
+                unique[market.key] = market
+        return tuple(unique.values())
+
+    @property
+    def artifacts(self) -> tuple[RawArtifact, ...]:
+        return tuple(
+            artifact
+            for page in self.pages
+            for artifact in (page.audit, *page.metadata_audits)
+        )
+
+    @property
+    def snapshot(self) -> CatalogueSnapshot:
+        """Return the bounded compatibility view used by older callers."""
+
+        return CatalogueSnapshot(self.pages, self.data_cutoff, self.historical_cutoff)
 
 
 @dataclass(frozen=True, slots=True)
@@ -790,5 +877,4 @@ KalshiMarketStatus = MarketStatus
 NormalizedMarket = BinaryMarket
 NormalizedOutcome = BinaryOutcome
 CanonicalBook = CanonicalOrderBook
-
 

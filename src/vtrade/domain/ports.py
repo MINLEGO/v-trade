@@ -6,6 +6,8 @@ from typing import Any, Protocol
 
 from vtrade.domain.execution import FeePolicySnapshot, OrderRequest, OrderResult
 from vtrade.domain.types import (
+    CatalogueScanRequest,
+    CatalogueScanResult,
     CatalogueSnapshot,
     MarketContext,
     MarketKey,
@@ -30,20 +32,34 @@ class ResearchProvider(Protocol):
 class CataloguePort(Protocol):
     """Semantic seam for a complete, fail-closed active-market catalogue."""
 
+    def scan_catalogue(
+        self, request: CatalogueScanRequest, *, deadline: float | None = None
+    ) -> CatalogueScanResult: ...
+
     def sync_catalogue(self, *, cutoff: datetime | None = None) -> CatalogueSnapshot: ...
 
 
 class MarketContextPort(Protocol):
     """Return one immutable market plus its canonical two-sided book."""
 
-    def get_context(self, market_key: MarketKey, *, cutoff: datetime) -> MarketContext: ...
+    def get_context(
+        self,
+        market_key: MarketKey,
+        *,
+        cutoff: datetime,
+        deadline: float | None = None,
+    ) -> MarketContext: ...
 
 
 class ResolutionPort(Protocol):
     """Read venue resolution state without mutating portfolios or paying out."""
 
     def get_resolutions(
-        self, market_keys: Sequence[MarketKey], *, cutoff: datetime
+        self,
+        market_keys: Sequence[MarketKey],
+        *,
+        cutoff: datetime,
+        deadline: float | None = None,
     ) -> tuple[ResolutionObservation, ...]: ...
 
 

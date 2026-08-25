@@ -201,7 +201,7 @@ class PostgresKalshiFreezeRepository:
                         page_id,
                         page.requested_cursor,
                         page.next_cursor,
-                        len(page.markets),
+                        page.record_count,
                         _aware(page.observed_at),
                         _aware(freeze.data_cutoff),
                         self._artifact_id(raw_artifact_ids, page.audit),

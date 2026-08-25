@@ -26,6 +26,8 @@ from vtrade.domain.types import (
     BinaryMarket,
     BinaryOutcome,
     CataloguePage,
+    CatalogueScanRequest,
+    CatalogueScanResult,
     CatalogueSnapshot,
     ContractQuantity,
     EventKey,
@@ -149,6 +151,72 @@ class _Deadline:
     def check(self) -> None:
         if self.monotonic_deadline is not None and time.monotonic() >= self.monotonic_deadline:
             raise KalshiDeadlineExceeded("Kalshi freeze transport deadline exceeded")
+
+
+def _parallel_map[T, R](
+    values: Sequence[T],
+    worker: Callable[[T], R],
+    *,
+    maximum_workers: int,
+    deadline: _Deadline,
+) -> tuple[R, ...]:
+    executor = ThreadPoolExecutor(max_workers=maximum_workers)
+    futures = [executor.submit(worker, value) for value in values]
+    try:
+        results: list[R] = []
+        for future in futures:
+            deadline.check()
+            timeout = (
+                None
+                if deadline.monotonic_deadline is None
+                else max(0.0, deadline.monotonic_deadline - time.monotonic())
+            )
+            try:
+                results.append(future.result(timeout=timeout))
+            except TimeoutError as exc:
+                raise KalshiDeadlineExceeded(
+                    "Kalshi freeze deadline exceeded while waiting for parallel work"
+                ) from exc
+        deadline.check()
+    except BaseException:
+        for future in futures:
+            future.cancel()
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    executor.shutdown(wait=True)
+    return tuple(results)
+
+
+@dataclass(frozen=True, slots=True)
+class _CatalogueCandidate:
+    key: MarketKey
+    payload: Mapping[str, Any]
+    page_index: int
+    row_index: int
+    volume: int
+    liquidity_micros: int
+    tradeable: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _CataloguePageEvidence:
+    requested_cursor: str | None
+    next_cursor: str | None
+    observed_at: datetime
+    artifact: RawArtifact
+    endpoint: str
+    request_identity: str
+    record_count: int
+
+    def archived(self) -> _ArchivedResponse:
+        return _ArchivedResponse(
+            None,
+            b"",
+            self.observed_at,
+            self.artifact,
+            self.endpoint,
+            self.request_identity,
+        )
 
 
 def _aware(value: datetime, field: str = "timestamp") -> datetime:
@@ -357,12 +425,15 @@ class KalshiPublicRestAdapter:
         maximum_parallel_requests: int = 8,
         request_timeout_seconds: float = 15.0,
         connect_timeout_seconds: float = 5.0,
+        catalogue_sync_deadline_seconds: float = 300.0,
         freeze_deadline_seconds: float = 600.0,
     ) -> None:
         if maximum_parallel_requests < 1:
             raise ValueError("maximum_parallel_requests must be positive")
         if request_timeout_seconds <= 0 or connect_timeout_seconds <= 0:
             raise ValueError("request timeouts must be positive")
+        if catalogue_sync_deadline_seconds <= 0:
+            raise ValueError("catalogue sync deadline must be positive")
         if freeze_deadline_seconds <= 0:
             raise ValueError("freeze_deadline_seconds must be positive")
         if not root_url.startswith("https://"):
@@ -388,6 +459,7 @@ class KalshiPublicRestAdapter:
         self._clock = clock
         self._sleep = sleep
         self._maximum_parallel_requests = maximum_parallel_requests
+        self._catalogue_sync_deadline_seconds = catalogue_sync_deadline_seconds
         self._freeze_deadline_seconds = freeze_deadline_seconds
         self._market_cache: dict[MarketKey, BinaryMarket] = {}
         self._event_metadata_cache: dict[str, tuple[Mapping[str, Any], _ArchivedResponse]] = {}
@@ -409,8 +481,12 @@ class KalshiPublicRestAdapter:
     def last_historical_cutoff(self) -> HistoricalCutoff | None:
         return self._last_historical_cutoff
 
-    def _deadline(self) -> _Deadline:
-        return _Deadline(time.monotonic() + self._freeze_deadline_seconds)
+    def _deadline(self, monotonic_deadline: float | None = None) -> _Deadline:
+        return _Deadline(
+            monotonic_deadline
+            if monotonic_deadline is not None
+            else time.monotonic() + self._freeze_deadline_seconds
+        )
 
     def _endpoint(self, path: str) -> str:
         if not path.startswith("/"):
@@ -456,13 +532,19 @@ class KalshiPublicRestAdapter:
             if response.status_code < 200 or response.status_code >= 300:
                 raise KalshiHTTPError(response.status_code, path)
             observed_at = _aware(self._clock(), "local observation time")
+            if deadline is not None:
+                deadline.check()
             content = bytes(response.content)
             try:
                 payload = json.loads(content.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                 raise KalshiPayloadError(f"{path} did not return valid UTF-8 JSON") from exc
             request_identity = self._request_identity(request)
+            if deadline is not None:
+                deadline.check()
             reference = self._artifact_store.put(content)
+            if deadline is not None:
+                deadline.check()
             artifact = _artifact_from_reference(
                 reference,
                 endpoint=self._source_endpoint(request),
@@ -504,50 +586,166 @@ class KalshiPublicRestAdapter:
         self._last_historical_cutoff = cutoff
         return cutoff
 
-    def sync_catalogue(self, *, cutoff: datetime | None = None) -> CatalogueSnapshot:
-        deadline = self._deadline()
-        historical_cutoff = self.get_historical_cutoff(deadline=deadline)
-        requested_cutoff = _aware(cutoff, "catalogue cutoff") if cutoff is not None else None
-        pages: list[CataloguePage] = []
+    def scan_catalogue(
+        self,
+        request: CatalogueScanRequest,
+        *,
+        deadline: float | None = None,
+    ) -> CatalogueScanResult:
+        """Scan every page while retaining only the bounded semantic shortlist."""
+
+        outer_deadline = self._deadline(deadline)
+        scan_deadline = _Deadline(
+            min(
+                value
+                for value in (
+                    outer_deadline.monotonic_deadline,
+                    time.monotonic() + self._catalogue_sync_deadline_seconds,
+                )
+                if value is not None
+            )
+        )
+        self._market_cache.clear()
+        self._event_metadata_cache.clear()
+        self._series_metadata_cache.clear()
+        historical_cutoff = self.get_historical_cutoff(deadline=scan_deadline)
+        requested_cutoff = (
+            _aware(request.cutoff, "catalogue cutoff") if request.cutoff is not None else None
+        )
+        page_evidence: list[_CataloguePageEvidence] = []
         seen_cursors: set[str] = set()
         seen_page_hashes: set[str] = set()
         seen_market_keys: set[MarketKey] = set()
+        historical_keys = request.historical_markets[: request.maximum_historical_markets]
+        historical_key_set = set(historical_keys)
+        always_retained_keys = tuple(
+            dict.fromkeys((*request.held_markets, *request.touched_markets))
+        )
+        always_retained_key_set = set(always_retained_keys)
+        retained: dict[MarketKey, _CatalogueCandidate] = {}
+        additional: dict[MarketKey, _CatalogueCandidate] = {}
         cursor: str | None = None
-        while True:
-            deadline.check()
-            params: dict[str, str] = {
-                "status": "open",
-                "mve_filter": "exclude",
-                "limit": "1000",
-            }
-            if cursor is not None:
-                params["cursor"] = cursor
-            archived = self._request("/markets", params, deadline=deadline)
-            if archived.artifact.sha256 in seen_page_hashes:
-                raise KalshiCursorError("catalogue returned a duplicate raw page")
-            seen_page_hashes.add(archived.artifact.sha256)
-            page = self._catalogue_page(
-                archived, cursor, requested_cutoff, historical_cutoff, deadline
+        scanned_market_count = 0
+        try:
+            while True:
+                scan_deadline.check()
+                params: dict[str, str] = {
+                    "status": "open",
+                    "mve_filter": "exclude",
+                    "limit": "1000",
+                }
+                if cursor is not None:
+                    params["cursor"] = cursor
+                archived = self._request("/markets", params, deadline=scan_deadline)
+                if archived.artifact.sha256 in seen_page_hashes:
+                    raise KalshiCursorError("catalogue returned a duplicate raw page")
+                seen_page_hashes.add(archived.artifact.sha256)
+                root = _root(archived.payload)
+                rows = root.get("markets")
+                if not isinstance(rows, list):
+                    raise KalshiPayloadError("markets response lacks a markets array")
+                next_cursor = self._next_cursor(root)
+                page_index = len(page_evidence)
+                page_evidence.append(
+                    _CataloguePageEvidence(
+                        cursor,
+                        next_cursor,
+                        archived.observed_at,
+                        archived.artifact,
+                        archived.endpoint,
+                        archived.request_identity,
+                        len(rows),
+                    )
+                )
+                scanned_market_count += len(rows)
+                for row_index, row in enumerate(rows):
+                    scan_deadline.check()
+                    if not isinstance(row, Mapping):
+                        raise KalshiPayloadError(f"markets[{row_index}] must be an object")
+                    candidate = self._catalogue_candidate(
+                        row,
+                        page_index=page_index,
+                        row_index=row_index,
+                        observed_at=archived.observed_at,
+                        cutoff=requested_cutoff,
+                    )
+                    if candidate is None:
+                        continue
+                    if candidate.key in seen_market_keys:
+                        raise KalshiCursorError("catalogue contains a duplicate market identity")
+                    seen_market_keys.add(candidate.key)
+                    if not candidate.tradeable:
+                        continue
+                    if (
+                        candidate.key in historical_key_set
+                        or candidate.key in always_retained_key_set
+                    ):
+                        retained[candidate.key] = candidate
+                        continue
+                    if request.maximum_additional_markets <= 0:
+                        continue
+                    if len(additional) < request.maximum_additional_markets:
+                        additional[candidate.key] = candidate
+                        continue
+                    worst_key = max(
+                        additional,
+                        key=lambda key: self._candidate_rank(additional[key]),
+                    )
+                    if self._candidate_rank(candidate) < self._candidate_rank(
+                        additional[worst_key]
+                    ):
+                        del additional[worst_key]
+                        additional[candidate.key] = candidate
+                if next_cursor is None:
+                    break
+                if next_cursor in seen_cursors or next_cursor == cursor:
+                    raise KalshiCursorError("catalogue cursor repeated")
+                seen_cursors.add(next_cursor)
+                cursor = next_cursor
+
+            scan_deadline.check()
+            data_cutoff = requested_cutoff or _aware(
+                self._clock(), "catalogue completion time"
             )
-            duplicate_keys = [
-                market.key for market in page.markets if market.key in seen_market_keys
-            ]
-            page_keys = [market.key for market in page.markets]
-            if len(set(page_keys)) != len(page_keys) or duplicate_keys:
-                raise KalshiCursorError("catalogue contains a duplicate market identity")
-            seen_market_keys.update(page_keys)
-            pages.append(page)
-            next_cursor = page.next_cursor
-            if next_cursor is None:
-                break
-            if next_cursor in seen_cursors or next_cursor == cursor:
-                raise KalshiCursorError("catalogue cursor repeated")
-            seen_cursors.add(next_cursor)
-            cursor = next_cursor
-        data_cutoff = requested_cutoff or _aware(self._clock(), "catalogue completion time")
-        for page in pages:
-            _check_cutoff(page.observed_at, data_cutoff, "catalogue page observation")
-        return CatalogueSnapshot(tuple(pages), data_cutoff, historical_cutoff.market_settled_ts)
+            for page in page_evidence:
+                _check_cutoff(page.observed_at, data_cutoff, "catalogue page observation")
+            discovery_keys = self._discovery_keys(
+                request,
+                retained,
+                additional,
+            )
+            selected = {key: retained.get(key) or additional.get(key) for key in discovery_keys}
+            selected_candidates = {
+                key: candidate for key, candidate in selected.items() if candidate is not None
+            }
+            outer_deadline.check()
+            pages = self._materialize_catalogue_pages(
+                page_evidence,
+                selected_candidates,
+                cutoff=requested_cutoff,
+                historical_cutoff=historical_cutoff,
+                deadline=outer_deadline,
+            )
+            outer_deadline.check()
+            return CatalogueScanResult(
+                tuple(pages),
+                discovery_keys,
+                data_cutoff,
+                historical_cutoff.market_settled_ts,
+                scanned_market_count,
+            )
+        finally:
+            seen_cursors.clear()
+            seen_page_hashes.clear()
+            seen_market_keys.clear()
+            historical_key_set.clear()
+            always_retained_key_set.clear()
+            retained.clear()
+            additional.clear()
+            page_evidence.clear()
+
+    def sync_catalogue(self, *, cutoff: datetime | None = None) -> CatalogueSnapshot:
+        return self.scan_catalogue(CatalogueScanRequest(cutoff=cutoff)).snapshot
 
     def read_catalogue(self, *, cutoff: datetime | None = None) -> CatalogueSnapshot:
         return self.sync_catalogue(cutoff=cutoff)
@@ -555,93 +753,223 @@ class KalshiPublicRestAdapter:
     def catalogue(self, *, cutoff: datetime | None = None) -> CatalogueSnapshot:
         return self.sync_catalogue(cutoff=cutoff)
 
-    def _catalogue_page(
+    @staticmethod
+    def _candidate_rank(candidate: _CatalogueCandidate) -> tuple[int, int, str]:
+        return (-candidate.volume, -candidate.liquidity_micros, candidate.key.market_ref)
+
+    @staticmethod
+    def _discovery_keys(
+        request: CatalogueScanRequest,
+        retained: Mapping[MarketKey, _CatalogueCandidate],
+        additional: Mapping[MarketKey, _CatalogueCandidate],
+    ) -> tuple[MarketKey, ...]:
+        values: list[MarketKey] = []
+        for key in (
+            *request.historical_markets[: request.maximum_historical_markets],
+            *request.held_markets,
+            *request.touched_markets,
+        ):
+            if key in retained and key not in values:
+                values.append(key)
+        values.extend(
+            key
+            for key, _candidate in sorted(
+                additional.items(),
+                key=lambda item: KalshiPublicRestAdapter._candidate_rank(item[1]),
+            )
+            if key not in values
+        )
+        return tuple(values)
+
+    @staticmethod
+    def _catalogue_candidate(
+        row: Mapping[str, Any],
+        *,
+        page_index: int,
+        row_index: int,
+        observed_at: datetime,
+        cutoff: datetime | None,
+    ) -> _CatalogueCandidate | None:
+        forbidden = sorted(field for field in ORDINARY_BINARY_FORBIDDEN_FIELDS if field in row)
+        if forbidden:
+            raise KalshiPayloadError(
+                f"market contains forbidden token-shaped fields: {forbidden}"
+            )
+        for field in MULTIVARIATE_MARKET_FIELDS:
+            value = row.get(field)
+            if value not in (None, False, "", [], {}):
+                return None
+        market_type = row.get("market_type")
+        if market_type is not None and not isinstance(market_type, str):
+            raise KalshiPayloadError("market_type must be a string when present")
+        if market_type not in (None, "binary", "Binary"):
+            return None
+        if "outcomes" in row:
+            raw_outcomes = row["outcomes"]
+            if not isinstance(raw_outcomes, (list, tuple)) or not all(
+                isinstance(value, str) for value in raw_outcomes
+            ):
+                raise KalshiPayloadError("market outcomes must be an array of strings")
+            if set(raw_outcomes) != {"YES", "NO"}:
+                return None
+        raw_result = row.get("result")
+        if raw_result not in (None, "", "yes", "no"):
+            raise KalshiPayloadError("only binary YES/NO results are admitted")
+        market_ref = _first_string(row, ("ticker", "market_ticker"), label="market ticker")
+        _first_string(row, ("event_ticker", "event_ref"), label="event ticker")
+        _first_string(
+            row,
+            ("series_ticker", "series_ref"),
+            label="series ticker",
+            required=False,
+        )
+        status = _status(row.get("status"))
+        source_updated = _optional_timestamp(
+            row, ("updated_time", "updated_ts", "updated_at"), "updated_time"
+        )
+        _check_cutoff(source_updated, cutoff, "updated_time")
+        if source_updated is not None and source_updated > observed_at:
+            raise KalshiLookAheadError("updated_time is newer than local observation")
+        volume_raw = row.get("volume_fp", row.get("volume", 0))
+        liquidity_raw = row.get("liquidity_dollars", row.get("liquidity", 0))
+        try:
+            volume = int(to_contract_quantity(volume_raw, field="volume_fp"))
+        except ValueError as exc:
+            raise KalshiPayloadError(str(exc)) from exc
+        try:
+            liquidity_micros = int(to_money_micros(liquidity_raw, field="liquidity_dollars"))
+        except ValueError as exc:
+            raise KalshiPayloadError(str(exc)) from exc
+        return _CatalogueCandidate(
+            MarketKey(market_ref),
+            row,
+            page_index,
+            row_index,
+            volume,
+            liquidity_micros,
+            status is MarketStatus.ACTIVE,
+        )
+
+    def _materialize_catalogue_pages(
         self,
-        archived: _ArchivedResponse,
-        cursor: str | None,
+        evidence: Sequence[_CataloguePageEvidence],
+        candidates: Mapping[MarketKey, _CatalogueCandidate],
+        *,
         cutoff: datetime | None,
         historical_cutoff: HistoricalCutoff,
         deadline: _Deadline,
-    ) -> CataloguePage:
-        root = _root(archived.payload)
-        rows = root.get("markets")
-        if not isinstance(rows, list):
-            raise KalshiPayloadError("markets response lacks a markets array")
-        next_cursor = self._next_cursor(root)
-        markets: list[BinaryMarket] = []
-        events: dict[EventKey, BinaryEvent] = {}
-        series: dict[SeriesKey, Series] = {}
-        metadata_audits: list[RawArtifact] = []
-        for index, row in enumerate(rows):
-            if not isinstance(row, Mapping):
-                raise KalshiPayloadError(f"markets[{index}] must be an object")
-            event_ref = _first_string(
-                row, ("event_ticker", "event_ref"), label="event ticker"
-            )
-            assert event_ref is not None
-            event_metadata: Mapping[str, Any] | None = None
-            event_archived: _ArchivedResponse | None = None
-            series_ref = _first_string(
-                row, ("series_ticker", "series_ref"), label="series ticker", required=False
-            )
-            if series_ref is None:
-                event_metadata, event_archived = self._fetch_event_metadata(
-                    event_ref, deadline=deadline
-                )
-                series_ref = _first_string(
-                    event_metadata,
-                    ("series_ticker", "series_ref"),
-                    label="series ticker",
-                )
-                assert series_ref is not None
-            series_metadata: Mapping[str, Any] | None = None
-            series_archived: _ArchivedResponse | None = None
-            if event_metadata is not None:
-                series_metadata, series_archived = self._fetch_series_metadata(
-                    series_ref, deadline=deadline
-                )
-            market = self._normalize_market(
-                row,
-                archived,
+    ) -> tuple[CataloguePage, ...]:
+        markets_by_page: dict[int, list[BinaryMarket]] = {
+            index: [] for index in range(len(evidence))
+        }
+        events_by_page: dict[int, dict[EventKey, BinaryEvent]] = {
+            index: {} for index in range(len(evidence))
+        }
+        series_by_page: dict[int, dict[SeriesKey, Series]] = {
+            index: {} for index in range(len(evidence))
+        }
+        metadata_audits_by_page: dict[int, list[RawArtifact]] = {
+            index: [] for index in range(len(evidence))
+        }
+        for candidate in sorted(
+            candidates.values(), key=lambda value: (value.page_index, value.row_index)
+        ):
+            deadline.check()
+            market, event, series, metadata_audits = self._materialize_candidate(
+                candidate,
+                evidence[candidate.page_index],
                 cutoff,
                 historical_cutoff,
-                series_ref=series_ref,
-                resolution_source=(
-                    _resolution_source(event_metadata) if event_metadata is not None else None
-                ),
+                deadline,
             )
-            markets.append(market)
-            event = self._event_from_market(
-                row,
-                archived,
-                market,
-                metadata=event_metadata,
-                metadata_archived=event_archived,
-            )
-            events[event.key] = event
-            family = self._series_from_market(
-                row,
-                archived,
-                market,
-                metadata=series_metadata,
-                metadata_archived=series_archived,
-            )
-            series[family.key] = family
-            if event_archived is not None:
-                metadata_audits.append(event_archived.artifact)
-            if series_archived is not None:
-                metadata_audits.append(series_archived.artifact)
             self._remember_market(market)
-        return CataloguePage(
-            cursor,
-            next_cursor,
-            archived.observed_at,
-            tuple(series.values()),
-            tuple(events.values()),
-            tuple(markets),
-            archived.artifact,
-            tuple(dict.fromkeys(metadata_audits)),
+            markets_by_page[candidate.page_index].append(market)
+            events_by_page[candidate.page_index][event.key] = event
+            series_by_page[candidate.page_index][series.key] = series
+            metadata_audits_by_page[candidate.page_index].extend(metadata_audits)
+        return tuple(
+            CataloguePage(
+                page.requested_cursor,
+                page.next_cursor,
+                page.observed_at,
+                tuple(series_by_page[index].values()),
+                tuple(events_by_page[index].values()),
+                tuple(markets_by_page[index]),
+                page.artifact,
+                tuple(dict.fromkeys(metadata_audits_by_page[index])),
+                page.record_count,
+            )
+            for index, page in enumerate(evidence)
         )
+
+    def _materialize_candidate(
+        self,
+        candidate: _CatalogueCandidate,
+        page: _CataloguePageEvidence,
+        cutoff: datetime | None,
+        historical_cutoff: HistoricalCutoff,
+        deadline: _Deadline,
+    ) -> tuple[BinaryMarket, BinaryEvent, Series, tuple[RawArtifact, ...]]:
+        payload = candidate.payload
+        archived = page.archived()
+        event_metadata: Mapping[str, Any] | None = None
+        event_archived: _ArchivedResponse | None = None
+        series_ref = _first_string(
+            payload, ("series_ticker", "series_ref"), label="series ticker", required=False
+        )
+        if series_ref is None:
+            event_ref = _first_string(payload, ("event_ticker", "event_ref"), label="event ticker")
+            assert event_ref is not None
+            deadline.check()
+            event_metadata, event_archived = self._fetch_event_metadata(
+                event_ref, deadline=deadline
+            )
+            series_ref = _first_string(
+                event_metadata,
+                ("series_ticker", "series_ref"),
+                label="series ticker",
+            )
+            assert series_ref is not None
+        series_metadata: Mapping[str, Any] | None = None
+        series_archived: _ArchivedResponse | None = None
+        if event_metadata is not None:
+            deadline.check()
+            series_metadata, series_archived = self._fetch_series_metadata(
+                series_ref, deadline=deadline
+            )
+        market = self._normalize_market(
+            payload,
+            archived,
+            cutoff,
+            historical_cutoff,
+            series_ref=series_ref,
+            resolution_source=(
+                _resolution_source(event_metadata) if event_metadata is not None else None
+            ),
+        )
+        event = self._event_from_market(
+            payload,
+            archived,
+            market,
+            metadata=event_metadata,
+            metadata_archived=event_archived,
+        )
+        series = self._series_from_market(
+            payload,
+            archived,
+            market,
+            metadata=series_metadata,
+            metadata_archived=series_archived,
+        )
+        metadata_audits = tuple(
+            artifact
+            for artifact in (
+                event_archived.artifact if event_archived is not None else None,
+                series_archived.artifact if series_archived is not None else None,
+            )
+            if artifact is not None
+        )
+        return market, event, series, metadata_audits
 
     def _fetch_event_metadata(
         self, event_ref: str, *, deadline: _Deadline | None = None
@@ -912,6 +1240,7 @@ class KalshiPublicRestAdapter:
         # to route it. Try live first, then the historical single-market endpoint
         # on a definitive 404 so held old markets remain resolvable.
         path = f"/markets/{market_key.market_ref}"
+        event_metadata: Mapping[str, Any] | None = None
         try:
             archived = self._request(path, deadline=deadline)
         except KalshiHTTPError as exc:
@@ -938,25 +1267,36 @@ class KalshiPublicRestAdapter:
             cutoff,
             historical_cutoff,
             series_ref=series_ref,
-            resolution_source=_resolution_source(event_metadata),
+            resolution_source=(
+                _resolution_source(event_metadata) if event_metadata is not None else None
+            ),
         )
         if market.key != market_key:
             raise KalshiPayloadError("market response ticker does not match the requested key")
         self._remember_market(market)
         return market
 
-    def get_context(self, market_key: MarketKey, *, cutoff: datetime) -> MarketContext:
+    def get_context(
+        self,
+        market_key: MarketKey,
+        *,
+        cutoff: datetime,
+        deadline: float | None = None,
+    ) -> MarketContext:
         requested_cutoff = _aware(cutoff, "context cutoff")
-        historical_cutoff = self._last_historical_cutoff or self.get_historical_cutoff()
-        deadline = self._deadline()
+        operation_deadline = self._deadline(deadline)
+        historical_cutoff = self._last_historical_cutoff or self.get_historical_cutoff(
+            deadline=operation_deadline
+        )
         market = self._fetch_market(
             market_key,
             cutoff=requested_cutoff,
             historical_cutoff=historical_cutoff,
-            deadline=deadline,
+            deadline=operation_deadline,
         )
+        operation_deadline.check()
         path = f"/markets/{market.key.market_ref}/orderbook"
-        archived = self._request(path, {"depth": "0"}, deadline=deadline)
+        archived = self._request(path, {"depth": "0"}, deadline=operation_deadline)
         root = _root(archived.payload)
         book_payload = root.get("orderbook_fp")
         if book_payload is None:
@@ -995,27 +1335,44 @@ class KalshiPublicRestAdapter:
         return self.get_context(market_key, cutoff=cutoff)
 
     def get_contexts(
-        self, market_keys: Sequence[MarketKey], *, cutoff: datetime
+        self,
+        market_keys: Sequence[MarketKey],
+        *,
+        cutoff: datetime,
+        deadline: float | None = None,
     ) -> tuple[MarketContext, ...]:
         unique = tuple(dict.fromkeys(market_keys))
         if len(unique) != len(market_keys):
             raise ValueError("context request contains duplicate market identities")
         if not unique:
             return ()
-        with ThreadPoolExecutor(
-            max_workers=min(self._maximum_parallel_requests, len(unique))
-        ) as executor:
-            return tuple(executor.map(lambda key: self.get_context(key, cutoff=cutoff), unique))
+        operation_deadline = self._deadline(deadline)
+        return _parallel_map(
+            unique,
+            lambda key: self.get_context(
+                key,
+                cutoff=cutoff,
+                deadline=operation_deadline.monotonic_deadline,
+            ),
+            maximum_workers=min(self._maximum_parallel_requests, len(unique)),
+            deadline=operation_deadline,
+        )
 
     def get_resolutions(
-        self, market_keys: Sequence[MarketKey], *, cutoff: datetime
+        self,
+        market_keys: Sequence[MarketKey],
+        *,
+        cutoff: datetime,
+        deadline: float | None = None,
     ) -> tuple[ResolutionObservation, ...]:
         requested_cutoff = _aware(cutoff, "resolution cutoff")
         unique = tuple(dict.fromkeys(market_keys))
         if not unique:
             return ()
-        historical_cutoff = self._last_historical_cutoff or self.get_historical_cutoff()
-        deadline = self._deadline()
+        operation_deadline = self._deadline(deadline)
+        historical_cutoff = self._last_historical_cutoff or self.get_historical_cutoff(
+            deadline=operation_deadline
+        )
 
         def read(key: MarketKey) -> ResolutionObservation:
             market = self._market_cache.get(key)
@@ -1024,10 +1381,10 @@ class KalshiPublicRestAdapter:
                     key,
                     cutoff=requested_cutoff,
                     historical_cutoff=historical_cutoff,
-                    deadline=deadline,
+                    deadline=operation_deadline,
                 )
             path = self._market_path(market, historical_cutoff)
-            archived = self._request(path, deadline=deadline)
+            archived = self._request(path, deadline=operation_deadline)
             payload = _nested_or_root(_root(archived.payload), "market")
             returned = _first_string(
                 payload, ("ticker", "market_ticker"), label="resolution ticker"
@@ -1065,8 +1422,12 @@ class KalshiPublicRestAdapter:
                 self._resolution_history[key] = observation
             return observation
 
-        with ThreadPoolExecutor(max_workers=self._maximum_parallel_requests) as executor:
-            observations = tuple(executor.map(read, unique))
+        observations = _parallel_map(
+            unique,
+            read,
+            maximum_workers=min(self._maximum_parallel_requests, len(unique)),
+            deadline=operation_deadline,
+        )
         return tuple(
             observation
             for observation in observations

@@ -9,7 +9,8 @@ from typing import Protocol
 
 from vtrade.domain.types import (
     BinaryMarket,
-    CatalogueSnapshot,
+    CatalogueScanRequest,
+    CatalogueScanResult,
     MarketContext,
     MarketKey,
     RawArtifact,
@@ -48,7 +49,7 @@ class KalshiFreezeRequest:
 class KalshiMarketFreeze:
     """The only publishable result of a complete catalogue/book cycle."""
 
-    catalogue: CatalogueSnapshot
+    catalogue: CatalogueScanResult
     discovery_market_keys: tuple[MarketKey, ...]
     resolution_market_keys: tuple[MarketKey, ...]
     contexts: tuple[MarketContext, ...]
@@ -78,12 +79,24 @@ class KalshiMarketFreeze:
 
 
 class _KalshiFreezeVenue(Protocol):
-    def sync_catalogue(self, *, cutoff: datetime | None = None) -> CatalogueSnapshot: ...
+    def scan_catalogue(
+        self, request: CatalogueScanRequest, *, deadline: float | None = None
+    ) -> CatalogueScanResult: ...
 
-    def get_context(self, market_key: MarketKey, *, cutoff: datetime) -> MarketContext: ...
+    def get_context(
+        self,
+        market_key: MarketKey,
+        *,
+        cutoff: datetime,
+        deadline: float | None = None,
+    ) -> MarketContext: ...
 
     def get_resolutions(
-        self, market_keys: Sequence[MarketKey], *, cutoff: datetime
+        self,
+        market_keys: Sequence[MarketKey],
+        *,
+        cutoff: datetime,
+        deadline: float | None = None,
     ) -> tuple[ResolutionObservation, ...]: ...
 
 
@@ -111,14 +124,25 @@ class KalshiMarketFreezeService:
         freeze_request = request or KalshiFreezeRequest()
         self._aware(self._clock(), "freeze start")
         deadline = time.monotonic() + self._freeze_deadline_seconds
-        catalogue = self._venue.sync_catalogue(cutoff=freeze_request.cutoff)
+        catalogue = self._venue.scan_catalogue(
+            CatalogueScanRequest(
+                held_markets=freeze_request.held_markets,
+                touched_markets=freeze_request.touched_markets,
+                historical_markets=freeze_request.historical_markets,
+                cutoff=freeze_request.cutoff,
+                maximum_historical_markets=freeze_request.maximum_historical_markets,
+                maximum_additional_markets=freeze_request.maximum_additional_markets,
+            ),
+            deadline=deadline,
+        )
+        self._check_deadline(deadline, "after catalogue scan")
         by_key = {market.key: market for market in catalogue.markets}
         operation_cutoff = self._aware(
             freeze_request.cutoff
             or self._clock() + timedelta(seconds=self._freeze_deadline_seconds),
             "freeze operation cutoff",
         )
-        discovery_keys = self._select_discovery_keys(freeze_request, catalogue.markets)
+        discovery_keys = catalogue.discovery_market_keys
         context_keys = tuple(key for key in discovery_keys if key in by_key)
         contexts = self._read_contexts(context_keys, operation_cutoff, deadline)
         resolution_keys = tuple(
@@ -135,10 +159,15 @@ class KalshiMarketFreezeService:
             or self._clock() + timedelta(seconds=self._freeze_deadline_seconds),
             "resolution operation cutoff",
         )
-        resolutions = self._venue.get_resolutions(resolution_keys, cutoff=resolution_cutoff)
+        self._check_deadline(deadline, "before resolution reads")
+        resolutions = self._venue.get_resolutions(
+            resolution_keys,
+            cutoff=resolution_cutoff,
+            deadline=deadline,
+        )
+        self._check_deadline(deadline, "after resolution reads")
         completed = self._aware(self._clock(), "freeze completion")
-        if time.monotonic() > deadline:
-            raise RuntimeError("Kalshi freeze deadline exceeded before publication")
+        self._check_deadline(deadline, "before publication")
         data_cutoff = self._aware(freeze_request.cutoff or completed, "freeze data cutoff")
         finalized_contexts = tuple(
             MarketContext(
@@ -180,33 +209,9 @@ class KalshiMarketFreezeService:
         return value.astimezone(UTC)
 
     @staticmethod
-    def _select_discovery_keys(
-        request: KalshiFreezeRequest, markets: Sequence[BinaryMarket]
-    ) -> tuple[MarketKey, ...]:
-        by_key = {market.key: market for market in markets}
-        retained: list[MarketKey] = []
-        for key in (
-            *request.historical_markets[: request.maximum_historical_markets],
-            *request.held_markets,
-            *request.touched_markets,
-        ):
-            market = by_key.get(key)
-            if market is not None and market.tradeable and key not in retained:
-                retained.append(key)
-        candidates = sorted(
-            (market for market in markets if market.tradeable and market.key not in retained),
-            key=lambda market: (
-                -int(market.volume),
-                -int(market.liquidity_micros),
-                market.key.market_ref,
-            ),
-        )
-        retained.extend(
-            market.key
-            for market in candidates[: request.maximum_additional_markets]
-            if market.key not in retained
-        )
-        return tuple(retained)
+    def _check_deadline(deadline: float, stage: str) -> None:
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f"Kalshi freeze deadline exceeded {stage}")
 
     def _read_contexts(
         self, keys: Sequence[MarketKey], cutoff: datetime, deadline: float
@@ -215,18 +220,37 @@ class KalshiMarketFreezeService:
             return ()
 
         def read(key: MarketKey) -> MarketContext:
-            if time.monotonic() > deadline:
-                raise RuntimeError("Kalshi freeze deadline exceeded while reading books")
-            return self._venue.get_context(key, cutoff=cutoff)
+            self._check_deadline(deadline, "while reading books")
+            return self._venue.get_context(key, cutoff=cutoff, deadline=deadline)
 
-        with ThreadPoolExecutor(
+        executor = ThreadPoolExecutor(
             max_workers=min(self._maximum_parallel_book_requests, len(keys))
-        ) as executor:
-            return tuple(executor.map(read, keys))
+        )
+        futures = [executor.submit(read, key) for key in keys]
+        try:
+            results: list[MarketContext] = []
+            for future in futures:
+                self._check_deadline(deadline, "while waiting for books")
+                try:
+                    results.append(
+                        future.result(timeout=max(0.0, deadline - time.monotonic()))
+                    )
+                except TimeoutError as exc:
+                    raise RuntimeError(
+                        "Kalshi freeze deadline exceeded while waiting for books"
+                    ) from exc
+            self._check_deadline(deadline, "after reading books")
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
+        executor.shutdown(wait=True)
+        return tuple(results)
 
     @staticmethod
     def _collect_artifacts(
-        catalogue: CatalogueSnapshot,
+        catalogue: CatalogueScanResult,
         contexts: Sequence[MarketContext],
         resolutions: Sequence[ResolutionObservation],
         *,

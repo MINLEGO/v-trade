@@ -1431,6 +1431,9 @@ def build_production_worker(
         ),
         request_timeout_seconds=float(discovery.get("request_timeout_seconds", 15)),
         connect_timeout_seconds=float(discovery.get("connect_timeout_seconds", 5)),
+        catalogue_sync_deadline_seconds=float(
+            discovery.get("catalogue_sync_deadline_seconds", 300)
+        ),
         freeze_deadline_seconds=float(discovery.get("freeze_deadline_seconds", 600)),
     )
     repository = PostgresRuntimeRepository(database_url)
