@@ -73,6 +73,10 @@ from vtrade.semantic_runtime import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+_RECOVERY_WITHOUT_HARNESS_RUN_ERROR = (
+    "ProductionCompositionUnavailable: recovery found no completed persisted harness run; "
+    "provider replay is forbidden"
+)
 
 
 class ProductionCompositionUnavailable(RuntimeError):
@@ -786,7 +790,7 @@ class ProductionHarnessPort:
         # A recovered claim may have failed before the harness stage started. In
         # that case no provider execution needs replaying; only an existing
         # harness checkpoint requires rehydration from its persisted run.
-        if claim.recovery and self._harness_stage_exists(claim):
+        if claim.recovery and self._harness_stage_requires_persisted_run(claim):
             return self._recover_completed_run(claim)
         messages, model_config = self._load_context(claim.cycle_id)
         immediate_executor = self._immediate_order_executor
@@ -907,14 +911,20 @@ class ProductionHarnessPort:
             int(str(run[2])),
         )
 
-    def _harness_stage_exists(self, claim: CycleClaim) -> bool:
+    def _harness_stage_requires_persisted_run(self, claim: CycleClaim) -> bool:
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
             cursor.execute(
-                "SELECT 1 FROM runtime_cycle_steps WHERE agent_cycle_id = %s "
+                "SELECT error FROM runtime_cycle_steps WHERE agent_cycle_id = %s "
                 "AND stage = %s",
                 (claim.cycle_id, "harness"),
             )
-            return cursor.fetchone() is not None
+            row = cursor.fetchone()
+        if row is None:
+            return False
+        # This exact error is emitted before any provider call. It is the safe
+        # marker left by the previous recovery implementation, so the stage may
+        # be retried once without replaying an in-flight provider execution.
+        return str(row[0]) != _RECOVERY_WITHOUT_HARNESS_RUN_ERROR
 
     def _load_context(self, cycle_id: uuid.UUID) -> tuple[list[JsonObject], JsonObject]:
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:

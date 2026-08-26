@@ -404,7 +404,8 @@ class PostgresRuntimeRepository:
             cursor.execute(
                 "UPDATE runtime_cycle_steps SET status = 'running', "
                 "attempt_count = attempt_count + 1, started_at = %s, "
-                "completed_at = NULL, error = NULL "
+                "completed_at = NULL, error = CASE WHEN stage = 'harness' "
+                "THEN error ELSE NULL END "
                 "WHERE agent_cycle_id = %s AND stage = %s",
                 (now, claim.cycle_id, stage.value),
             )
@@ -428,7 +429,7 @@ class PostgresRuntimeRepository:
             _assert_lease(cursor, claim, now, lock=False)
             cursor.execute(
                 "UPDATE runtime_cycle_steps SET status = 'completed', output = %s::jsonb, "
-                "completed_at = %s WHERE agent_cycle_id = %s AND stage = %s "
+                "completed_at = %s, error = NULL WHERE agent_cycle_id = %s AND stage = %s "
                 "AND status = 'running' AND input_fingerprint = %s",
                 (
                     json.dumps(

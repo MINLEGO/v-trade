@@ -506,9 +506,19 @@ class Issue21MarketFreezeTests(unittest.TestCase):
             NOW + timedelta(minutes=70),
         )
 
-        self.assertFalse(port._harness_stage_exists(claim))
-        cursor.row = (1,)
-        self.assertTrue(port._harness_stage_exists(claim))
+        self.assertFalse(port._harness_stage_requires_persisted_run(claim))
+        cursor.row = (
+            "ProductionCompositionUnavailable: recovery found no completed persisted "
+            "harness run; provider replay is forbidden",
+        )
+        self.assertFalse(port._harness_stage_requires_persisted_run(claim))
+        cursor.row = ("provider call failed",)
+        self.assertTrue(port._harness_stage_requires_persisted_run(claim))
+        self.assertEqual(
+            cursor.query and " ".join(cursor.query.split()),
+            "SELECT error FROM runtime_cycle_steps "
+            "WHERE agent_cycle_id = %s AND stage = %s",
+        )
         self.assertEqual(cursor.params, (CYCLE_ID, "harness"))
 
 
