@@ -24,5 +24,5 @@ or runtime input.
 | Content-addressed raw evidence | inferred | artifact and fixture manifest validation |
 | Paper-only real-data simulation | owner decision | active configuration and disabled real adapter |
 
-Every active row is subject to the five-migration persistence boundary, frozen artifact
+Every active row is subject to the six-migration persistence boundary, frozen artifact
 hashes, the active-venue sweep, and the external evidence gates in the release matrix.

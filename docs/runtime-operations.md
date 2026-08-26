@@ -3,7 +3,7 @@
 ## Deployment sequence
 
 The target is a fresh empty PostgreSQL database. The image contains only the active
-configuration, five migrations, Kalshi fixture manifest, and frozen tool/prompt
+configuration, six migrations, Kalshi fixture manifest, and frozen tool/prompt
 contracts. Coolify starts one migration job, then the API, then the worker after the
 API's authenticated readiness check is healthy:
 
