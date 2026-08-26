@@ -975,7 +975,10 @@ def _persist_raw_artifact_cursor(cursor: _Cursor, artifact: RawArtifact) -> uuid
             artifact.request_identity,
             artifact.source_timestamp,
             artifact.observed_at,
-            artifact.historical_cutoff,
+            # The provider's historical cutoff is routing metadata, not the
+            # capture cutoff enforced by raw_artifacts. The authoritative
+            # cycle cutoff is recorded on the published freeze rows.
+            None,
             artifact.schema_version,
         ),
     )

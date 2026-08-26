@@ -152,6 +152,7 @@ class _RecoveryCursor:
     def __init__(self) -> None:
         self.rowcount = 1
         self.queries: list[str] = []
+        self.params: list[tuple[object, ...]] = []
         self.rows: list[tuple[object, ...]] = []
 
     def __enter__(self) -> _RecoveryCursor:
@@ -162,6 +163,7 @@ class _RecoveryCursor:
 
     def execute(self, query: str, _params: tuple[object, ...] = ()) -> _RecoveryCursor:
         self.queries.append(query)
+        self.params.append(tuple(_params))
         normalized = " ".join(query.split())
         if normalized.startswith("SELECT pg_try_advisory"):
             self.rows = [(True,)]
@@ -430,6 +432,29 @@ class Issue21MarketFreezeTests(unittest.TestCase):
         )
         self.assertIn("THEN 'interrupted'::vtrade_cycle_status", update)
         self.assertIn("ELSE 'failed'::vtrade_cycle_status", update)
+
+    def test_historical_routing_cutoff_is_not_persisted_as_capture_cutoff(self) -> None:
+        cursor = _RecoveryCursor()
+        repository = PostgresRuntimeRepository(
+            "postgresql://unused",
+            connect=lambda _url: _SingleCursorConnection(cursor),
+        )
+        artifact = RawArtifact(
+            "b" * 64,
+            1,
+            "supabase://v-trade/b/b.json.gz",
+            observed_at=NOW,
+            historical_cutoff=NOW - timedelta(days=1),
+        )
+
+        repository.persist_raw_artifacts((artifact,))
+
+        insert_params = next(
+            params
+            for query, params in zip(cursor.queries, cursor.params, strict=True)
+            if query.startswith("INSERT INTO raw_artifacts")
+        )
+        self.assertIsNone(insert_params[8])
 
 
 if __name__ == "__main__":
