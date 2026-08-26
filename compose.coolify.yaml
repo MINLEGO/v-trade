@@ -23,7 +23,7 @@ services:
   api:
     build: .
     command: ["uvicorn", "vtrade.api:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
-    restart: unless-stopped
+    restart: "no"
     environment: *vtrade-environment
     expose: ["8000"]
     read_only: true
@@ -49,7 +49,7 @@ services:
   worker:
     build: .
     command: ["python", "-m", "vtrade.worker"]
-    restart: unless-stopped
+    restart: "no"
     environment: *vtrade-environment
     read_only: true
     tmpfs: [/tmp]
