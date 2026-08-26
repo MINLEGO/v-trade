@@ -18,6 +18,7 @@ EXPECTED_MIGRATIONS: tuple[str, ...] = (
     "0004_runtime_audit_and_admin.sql",
     "0005_runtime_pre_settlement_stage.sql",
     "0006_monthly_budget_alert_flags.sql",
+    "0007_exa_quota_contract.sql",
 )
 MIGRATION_LOCK_NAME = "vtrade:clean-migrations:v1"
 

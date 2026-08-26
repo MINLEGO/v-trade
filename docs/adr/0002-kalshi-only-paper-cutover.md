@@ -12,7 +12,7 @@ REST data without credentials, and exposes a semantic YES/NO order contract. The
 worker can simulate paper fills but cannot authenticate, sign, or submit a venue
 order.
 
-The active repository contains six dependency-ordered migrations:
+The active repository contains seven dependency-ordered migrations:
 
 1. foundation, agent state, raw evidence, and balanced ledger;
 2. Kalshi catalogue, dynamic grids, freezes, and canonical books;
@@ -20,6 +20,7 @@ The active repository contains six dependency-ordered migrations:
 4. runtime checkpoints, retention, admin controls, and readiness projections.
 5. the durable pre-settlement runtime stage contract.
 6. durable monthly budget alert flags.
+7. the durable Exa request-credit quota contract.
 
 Historical research is retained only below `docs/archive/predictionarena/` with an
 explicit read-only marker. It is not imported or loaded by runtime, tests, image

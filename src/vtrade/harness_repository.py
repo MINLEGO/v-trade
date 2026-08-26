@@ -250,12 +250,13 @@ class PostgresBudgetGuard:
                 raise BudgetExceeded("pre-request Exa monthly request/credit cap reached")
             cursor.execute(
                 "INSERT INTO exa_quota_reservations "
-                "(id, month_start, reserved_request_count, reserved_credit_count, "
-                "nominal_cost_micros, status, reserved_at) "
-                "VALUES (%s, %s, 1, %s, %s, 'reserved', %s)",
+                "(id, month_start, request_key, estimated_units, reserved_request_count, "
+                "reserved_credit_count, nominal_cost_micros, status, reserved_at) "
+                "VALUES (%s, %s, %s, 1, 1, %s, %s, 'reserved', %s)",
                 (
                     uuid.UUID(reservation.id),
                     month,
+                    f"exa:{reservation.id}",
                     EXA_MAX_CREDITS_PER_SEARCH,
                     reservation.estimated_cost_micros,
                     now,
