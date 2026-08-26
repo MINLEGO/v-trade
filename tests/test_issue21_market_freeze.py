@@ -27,6 +27,7 @@ from vtrade.runtime import (
     PromptResult,
     SettlementValuationResult,
 )
+from vtrade.worker import ProductionHarnessPort
 
 NOW = datetime(2026, 8, 26, 10, 0, tzinfo=UTC)
 
@@ -194,6 +195,41 @@ class _SingleCursorConnection:
         return None
 
     def cursor(self) -> _RecoveryCursor:
+        return self.cursor_instance
+
+
+class _StageCursor:
+    def __init__(self, row: tuple[object, ...] | None) -> None:
+        self.row = row
+        self.query: str | None = None
+        self.params: tuple[object, ...] = ()
+
+    def __enter__(self) -> _StageCursor:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def execute(self, query: str, params: tuple[object, ...] = ()) -> _StageCursor:
+        self.query = query
+        self.params = params
+        return self
+
+    def fetchone(self) -> tuple[object, ...] | None:
+        return self.row
+
+
+class _StageConnection:
+    def __init__(self, cursor: _StageCursor) -> None:
+        self.cursor_instance = cursor
+
+    def __enter__(self) -> _StageConnection:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def cursor(self) -> _StageCursor:
         return self.cursor_instance
 
 
@@ -455,6 +491,25 @@ class Issue21MarketFreezeTests(unittest.TestCase):
             if query.startswith("INSERT INTO raw_artifacts")
         )
         self.assertIsNone(insert_params[8])
+
+    def test_recovery_before_harness_stage_does_not_require_provider_replay(self) -> None:
+        cursor = _StageCursor(None)
+        port = object.__new__(ProductionHarnessPort)
+        port._database_url = "postgresql://unused"
+        port._connect = lambda _url: _StageConnection(cursor)
+        claim = CycleClaim(
+            CYCLE_ID,
+            AGENT_ID,
+            NOW,
+            None,
+            "worker-1",
+            NOW + timedelta(minutes=70),
+        )
+
+        self.assertFalse(port._harness_stage_exists(claim))
+        cursor.row = (1,)
+        self.assertTrue(port._harness_stage_exists(claim))
+        self.assertEqual(cursor.params, (CYCLE_ID, "harness"))
 
 
 if __name__ == "__main__":

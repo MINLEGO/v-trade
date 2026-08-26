@@ -783,7 +783,10 @@ class ProductionHarnessPort:
         self, claim: CycleClaim, frozen: JsonObject, prompt: JsonObject
     ) -> HarnessExecutionResult:
         del prompt
-        if claim.recovery:
+        # A recovered claim may have failed before the harness stage started. In
+        # that case no provider execution needs replaying; only an existing
+        # harness checkpoint requires rehydration from its persisted run.
+        if claim.recovery and self._harness_stage_exists(claim):
             return self._recover_completed_run(claim)
         messages, model_config = self._load_context(claim.cycle_id)
         immediate_executor = self._immediate_order_executor
@@ -903,6 +906,15 @@ class ProductionHarnessPort:
             int(str(run[3])),
             int(str(run[2])),
         )
+
+    def _harness_stage_exists(self, claim: CycleClaim) -> bool:
+        with self._connect(self._database_url) as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT 1 FROM runtime_cycle_steps WHERE agent_cycle_id = %s "
+                "AND stage = %s",
+                (claim.cycle_id, "harness"),
+            )
+            return cursor.fetchone() is not None
 
     def _load_context(self, cycle_id: uuid.UUID) -> tuple[list[JsonObject], JsonObject]:
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
