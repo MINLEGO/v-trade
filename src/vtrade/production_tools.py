@@ -460,9 +460,9 @@ class ProductionToolRegistry:
             "SELECT obs.id, obs.observed_at, obs.source_timestamp, obs.cutoff, "
             "obs.raw_artifact_id, ra.sha256, ra.observed_at "
             "FROM order_book_snapshots obs JOIN markets m ON m.id = obs.market_id "
-            "JOIN market_freezes freeze ON freeze.id = obs.freeze_id "
+            "JOIN market_freezes mf ON mf.id = obs.freeze_id "
             "JOIN raw_artifacts ra ON ra.id = obs.raw_artifact_id "
-            "WHERE m.market_ref = %s AND m.venue = 'kalshi' AND freeze.agent_cycle_id = %s "
+            "WHERE m.market_ref = %s AND m.venue = 'kalshi' AND mf.agent_cycle_id = %s "
             "AND obs.cutoff <= %s ORDER BY obs.cutoff DESC, obs.id DESC LIMIT 1",
             (market_ref, self._context.claim.cycle_id, self._context.cutoff),
         )
@@ -949,11 +949,11 @@ _MARKET_SELECT = (
     "'indicative_price_micros', NULL) ORDER BY o.outcome_side) FROM outcomes o "
     "WHERE o.market_id = m.id), '[]'::jsonb) "
     "FROM markets m JOIN series s ON s.id = m.series_id JOIN events e ON e.id = m.event_id "
-    "JOIN market_freezes freeze ON freeze.agent_cycle_id = %s "
-    "AND freeze.publication_status = 'published' "
-    "JOIN frozen_market_states state ON state.freeze_id = freeze.id AND state.market_id = m.id "
+    "JOIN market_freezes mf ON mf.agent_cycle_id = %s "
+    "AND mf.publication_status = 'published' "
+    "JOIN frozen_market_states state ON state.freeze_id = mf.id AND state.market_id = m.id "
     "JOIN raw_artifacts ra ON ra.id = m.raw_artifact_id "
-    "WHERE m.venue = 'kalshi' AND m.kind = 'binary' AND freeze.data_cutoff <= %s"
+    "WHERE m.venue = 'kalshi' AND m.kind = 'binary' AND mf.data_cutoff <= %s"
 )
 
 

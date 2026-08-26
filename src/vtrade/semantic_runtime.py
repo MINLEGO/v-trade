@@ -369,8 +369,8 @@ class ProductionSemanticOrderExecutor:
             cursor.execute(
                 "SELECT m.id, o.id, books.id FROM markets m "
                 "JOIN outcomes o ON o.market_id = m.id AND o.outcome_side = %s "
-                "LEFT JOIN market_freezes freeze ON freeze.agent_cycle_id = %s "
-                "LEFT JOIN order_book_snapshots books ON books.freeze_id = freeze.id "
+                "LEFT JOIN market_freezes mf ON mf.agent_cycle_id = %s "
+                "LEFT JOIN order_book_snapshots books ON books.freeze_id = mf.id "
                 "AND books.market_id = m.id WHERE m.market_ref = %s "
                 "ORDER BY books.cutoff DESC NULLS LAST, books.id DESC LIMIT 1",
                 (OutcomeSide(outcome).value, cycle_id, market_ref),
