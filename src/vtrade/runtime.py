@@ -2,16 +2,22 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
+import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
+from functools import partial
 from typing import Any, Protocol
 
+from vtrade.deadline import check_deadline, run_with_deadline
+
 JsonObject = dict[str, Any]
+_LOGGER = logging.getLogger(__name__)
 
 _REMOVED_STAGE_KEYS = frozenset(
     {
@@ -71,6 +77,7 @@ class CycleClaim:
     lease_owner: str
     lease_expires_at: datetime
     recovery: bool = False
+    attempt: int = 1
 
     def __post_init__(self) -> None:
         for value in (self.scheduled_at, self.lease_expires_at):
@@ -81,6 +88,8 @@ class CycleClaim:
                 raise ValueError("data cutoff cannot precede the scheduled cycle instant")
         if not self.lease_owner:
             raise ValueError("lease owner is required")
+        if self.attempt < 1:
+            raise ValueError("cycle attempt must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,7 +178,9 @@ class SettlementValuationResult(StageResult):
 
 
 class MarketFreezePort(Protocol):
-    def freeze(self, claim: CycleClaim) -> MarketFreezeResult: ...
+    def freeze(
+        self, claim: CycleClaim, *, deadline: float | None = None
+    ) -> MarketFreezeResult: ...
 
 
 class PreSettlementPort(Protocol):
@@ -218,6 +229,7 @@ class RuntimeRepository(Protocol):
         lease_owner: str,
         lease_duration: timedelta,
         limit: int,
+        stale_after: timedelta | None = None,
     ) -> tuple[CycleClaim, ...]: ...
 
     def renew_lease(self, claim: CycleClaim, *, now: datetime, duration: timedelta) -> None: ...
@@ -236,6 +248,7 @@ class RuntimeRepository(Protocol):
         result: StageResult,
         *,
         now: datetime,
+        deadline: float | None = None,
     ) -> None: ...
 
     def complete_cycle(self, claim: CycleClaim, *, now: datetime, summary: JsonObject) -> None: ...
@@ -463,9 +476,13 @@ class CycleOrchestrator:
         clock: Callable[[], datetime],
         alert_policy: RuntimeAlertPolicy | None = None,
         lease_duration: timedelta = DEFAULT_CYCLE_LEASE_DURATION,
+        market_freeze_deadline_seconds: float = 600.0,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         if lease_duration < MINIMUM_CYCLE_LEASE_DURATION:
             raise ValueError("cycle lease must cover the configured 3300-second wall clock")
+        if market_freeze_deadline_seconds <= 0:
+            raise ValueError("market_freeze_deadline_seconds must be positive")
         self._repository = repository
         self._market_freezer = market_freezer
         self._pre_settlement = pre_settlement
@@ -476,13 +493,21 @@ class CycleOrchestrator:
         self._clock = clock
         self._alert_policy = alert_policy or RuntimeAlertPolicy()
         self._lease_duration = lease_duration
+        self._market_freeze_deadline_seconds = market_freeze_deadline_seconds
+        self._monotonic = monotonic
+
+    @property
+    def market_freeze_deadline_seconds(self) -> float:
+        return self._market_freeze_deadline_seconds
 
     def run(self, claim: CycleClaim) -> JsonObject:
         active_claim = claim
         outputs: dict[CycleStage, JsonObject] = {}
         typed: dict[CycleStage, StageResult] = {}
+        active_stage: CycleStage | None = None
         try:
             for stage in STAGE_ORDER:
+                active_stage = stage
                 stored = self._repository.load_stage(active_claim.cycle_id, stage)
                 if stored is not None:
                     outputs[stage] = stored.payload
@@ -491,12 +516,81 @@ class CycleOrchestrator:
                 now = _aware(self._clock())
                 self._repository.renew_lease(active_claim, now=now, duration=self._lease_duration)
                 fingerprint = _fingerprint_inputs(active_claim, stage, outputs)
-                self._repository.begin_stage(active_claim, stage, fingerprint, now=now)
-                result = self._invoke(stage, active_claim, outputs)
-                completed = _aware(self._clock())
-                self._repository.complete_stage(
-                    active_claim, stage, fingerprint, result, now=completed
+                stage_started = self._monotonic() if stage is CycleStage.MARKET_FREEZE else None
+                deadline = (
+                    stage_started + self._market_freeze_deadline_seconds
+                    if stage_started is not None
+                    else None
                 )
+                if deadline is not None:
+                    _LOGGER.info(
+                        "market_freeze stage_boundary event=start cycle_id=%s attempt=%s "
+                        "lease_generation=%s deadline_remaining_ms=%.3f",
+                        active_claim.cycle_id,
+                        active_claim.attempt,
+                        _lease_generation(active_claim.lease_owner),
+                        max(0.0, deadline - self._monotonic()) * 1000,
+                    )
+                    run_with_deadline(
+                        partial(
+                            self._repository.begin_stage,
+                            active_claim,
+                            stage,
+                            fingerprint,
+                            now=now,
+                        ),
+                        deadline=deadline,
+                        label="market_freeze stage begin",
+                        clock=self._monotonic,
+                    )
+                    result = run_with_deadline(
+                        partial(
+                            self._invoke,
+                            stage,
+                            active_claim,
+                            outputs,
+                            deadline=deadline,
+                        ),
+                        deadline=deadline,
+                        label="market_freeze stage",
+                        clock=self._monotonic,
+                    )
+                else:
+                    self._repository.begin_stage(active_claim, stage, fingerprint, now=now)
+                    result = self._invoke(stage, active_claim, outputs)
+                completed = _aware(self._clock())
+                if deadline is not None:
+                    check_deadline(deadline, "market_freeze checkpoint", clock=self._monotonic)
+                    run_with_deadline(
+                        partial(
+                            self._repository.complete_stage,
+                            active_claim,
+                            stage,
+                            fingerprint,
+                            result,
+                            now=completed,
+                            deadline=deadline,
+                        ),
+                        deadline=deadline,
+                        label="market_freeze checkpoint",
+                        clock=self._monotonic,
+                    )
+                else:
+                    self._repository.complete_stage(
+                        active_claim, stage, fingerprint, result, now=completed
+                    )
+                if deadline is not None:
+                    _LOGGER.info(
+                        "market_freeze stage_boundary event=complete cycle_id=%s attempt=%s "
+                        "lease_generation=%s elapsed_ms=%.3f deadline_remaining_ms=%.3f",
+                        active_claim.cycle_id,
+                        active_claim.attempt,
+                        _lease_generation(active_claim.lease_owner),
+                        (self._monotonic() - stage_started) * 1000
+                        if stage_started is not None
+                        else 0.0,
+                        max(0.0, deadline - self._monotonic()) * 1000,
+                    )
                 if stage is CycleStage.MARKET_FREEZE:
                     active_claim = replace(
                         active_claim,
@@ -523,19 +617,32 @@ class CycleOrchestrator:
             return summary
         except Exception as exc:
             now = _aware(self._clock())
-            consecutive = self._repository.fail_cycle(
-                active_claim, now=now, reason=redact_runtime_error(exc)
-            )
+            safe_reason = redact_runtime_error(exc)
+            consecutive = self._repository.fail_cycle(active_claim, now=now, reason=safe_reason)
+            if active_stage is CycleStage.MARKET_FREEZE:
+                _LOGGER.info(
+                    "market_freeze stage_boundary event=failure cycle_id=%s attempt=%s "
+                    "lease_generation=%s reason=%s",
+                    active_claim.cycle_id,
+                    active_claim.attempt,
+                    _lease_generation(active_claim.lease_owner),
+                    safe_reason,
+                )
             failure_alert = self._alert_policy.failure_alert(active_claim, now, consecutive)
             if failure_alert is not None:
                 self._repository.open_alert(failure_alert)
             raise
 
     def _invoke(
-        self, stage: CycleStage, claim: CycleClaim, outputs: Mapping[CycleStage, JsonObject]
+        self,
+        stage: CycleStage,
+        claim: CycleClaim,
+        outputs: Mapping[CycleStage, JsonObject],
+        *,
+        deadline: float | None = None,
     ) -> StageResult:
         if stage is CycleStage.MARKET_FREEZE:
-            return self._market_freezer.freeze(claim)
+            return self._market_freezer.freeze(claim, deadline=deadline)
         frozen = _required(outputs, CycleStage.MARKET_FREEZE)
         if stage is CycleStage.PRE_SETTLEMENT:
             return self._pre_settlement.settle_before_prompt(claim, frozen)
@@ -576,6 +683,9 @@ class HourlyRuntime:
         self._lease_duration = lease_duration
         self._missed_grace = missed_grace
         self._batch_size = batch_size
+        self._market_freeze_recovery_after = timedelta(
+            seconds=orchestrator.market_freeze_deadline_seconds
+        )
 
     def tick(self) -> RuntimeTickResult:
         now = _aware(self._clock())
@@ -584,6 +694,7 @@ class HourlyRuntime:
             lease_owner=self._lease_owner,
             lease_duration=self._lease_duration,
             limit=self._batch_size,
+            stale_after=self._market_freeze_recovery_after,
         )
         remaining = max(0, self._batch_size - len(recovered))
         due = (
@@ -835,3 +946,9 @@ def _aware(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("runtime timestamps must be timezone-aware")
     return value.astimezone(UTC)
+
+
+def _lease_generation(lease_owner: str) -> str:
+    """Expose a stable, non-sensitive generation label in runtime telemetry."""
+
+    return hashlib.sha256(lease_owner.encode("utf-8")).hexdigest()[:16]

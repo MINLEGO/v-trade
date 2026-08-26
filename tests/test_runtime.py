@@ -105,7 +105,10 @@ class Ports:
         self.financial_events: set[uuid.UUID] = set()
         self.fail_after_broker_side_effect = fail_after_broker_side_effect
 
-    def freeze(self, _claim: CycleClaim) -> MarketFreezeResult:
+    def freeze(
+        self, _claim: CycleClaim, *, deadline: float | None = None
+    ) -> MarketFreezeResult:
+        del deadline
         self.calls.append("market_freeze")
         return MarketFreezeResult({"snapshot": "frozen"}, (), NOW - timedelta(minutes=1))
 

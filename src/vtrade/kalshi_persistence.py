@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
@@ -7,6 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol, cast
 
+from vtrade.deadline import check_deadline
 from vtrade.domain.types import (
     BinaryEvent,
     BinaryMarket,
@@ -19,6 +21,7 @@ from vtrade.domain.types import (
     SeriesKey,
 )
 from vtrade.kalshi_freeze import KalshiMarketFreeze
+from vtrade.runtime import LeaseLost
 
 
 class _Cursor(Protocol):
@@ -41,7 +44,9 @@ _Connect = Callable[[str], AbstractContextManager[_Connection]]
 def _default_connect(database_url: str) -> AbstractContextManager[_Connection]:
     import psycopg
 
-    return cast(AbstractContextManager[_Connection], psycopg.connect(database_url))
+    return cast(
+        AbstractContextManager[_Connection], psycopg.connect(database_url, connect_timeout=5)
+    )
 
 
 def _stable_id(kind: str, value: str) -> uuid.UUID:
@@ -52,6 +57,38 @@ def _aware(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("Kalshi persistence timestamps must be timezone-aware")
     return value.astimezone(UTC)
+
+
+def _check_deadline(deadline: float | None, label: str) -> None:
+    if deadline is not None:
+        check_deadline(deadline, f"Kalshi {label}")
+
+
+def _set_statement_timeout(cursor: _Cursor, deadline: float) -> None:
+    remaining_ms = max(1, int((deadline - time.monotonic()) * 1000))
+    cursor.execute(
+        "SELECT set_config('statement_timeout', %s, true)",
+        (f"{remaining_ms}ms",),
+    )
+
+
+def _assert_lease(
+    cursor: _Cursor,
+    cycle_id: uuid.UUID,
+    lease_owner: str,
+    now: datetime,
+    *,
+    lock: bool,
+) -> None:
+    query = (
+        "SELECT 1 FROM agent_cycles WHERE id = %s AND status = 'running' "
+        "AND lease_owner = %s AND lease_expires_at > %s"
+    )
+    if lock:
+        query += " FOR UPDATE"
+    cursor.execute(query, (cycle_id, lease_owner, now))
+    if cursor.fetchone() is None:
+        raise LeaseLost(f"cycle lease lost: {cycle_id}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,10 +108,15 @@ class PostgresKalshiFreezeRepository:
         self._database_url = database_url
         self._connect = connect or _default_connect
 
-    def market_refs_for_agent(self, agent_id: uuid.UUID) -> tuple[MarketKey, ...]:
+    def market_refs_for_agent(
+        self, agent_id: uuid.UUID, *, deadline: float | None = None
+    ) -> tuple[MarketKey, ...]:
         """Return held and previously touched market identities for resolution reads."""
 
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
+            if deadline is not None:
+                _set_statement_timeout(cursor, deadline)
+                check_deadline(deadline, "held-market lookup")
             cursor.execute(
                 "SELECT DISTINCT m.market_ref FROM positions p "
                 "JOIN markets m ON m.id = p.market_id "
@@ -95,8 +137,12 @@ class PostgresKalshiFreezeRepository:
         agent_cycle_id: uuid.UUID,
         raw_artifact_ids: Mapping[str, uuid.UUID],
         published_at: datetime,
+        lease_owner: str | None = None,
+        deadline: float | None = None,
     ) -> KalshiFreezePersistence:
         published_at = _aware(published_at)
+        if deadline is not None:
+            check_deadline(deadline, "Kalshi freeze persistence")
         pages = freeze.catalogue.pages
         if not pages:
             raise ValueError("Kalshi freeze requires at least one catalogue page")
@@ -124,7 +170,13 @@ class PostgresKalshiFreezeRepository:
         resolution_ids: list[uuid.UUID] = []
 
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
+            if deadline is not None:
+                _set_statement_timeout(cursor, deadline)
+                check_deadline(deadline, "Kalshi freeze persistence")
+            if lease_owner is not None:
+                _assert_lease(cursor, agent_cycle_id, lease_owner, published_at, lock=False)
             for series_item in series.values():
+                _check_deadline(deadline, "series persistence")
                 artifact = series_item.audit
                 cursor.execute(
                     "INSERT INTO series "
@@ -142,6 +194,7 @@ class PostgresKalshiFreezeRepository:
                     ),
                 )
             for event_item in events.values():
+                _check_deadline(deadline, "event persistence")
                 artifact = event_item.audit
                 cursor.execute(
                     "INSERT INTO events "
@@ -160,6 +213,7 @@ class PostgresKalshiFreezeRepository:
                     ),
                 )
             for market in markets.values():
+                _check_deadline(deadline, "market persistence")
                 self._persist_market(cursor, market, raw_artifact_ids)
 
             market_ids: dict[MarketKey, uuid.UUID] = {
@@ -171,6 +225,7 @@ class PostgresKalshiFreezeRepository:
             for market_key in sorted(
                 resolution_keys - set(markets), key=lambda value: value.canonical
             ):
+                _check_deadline(deadline, "resolution market lookup")
                 cursor.execute(
                     "SELECT id, lifecycle_status, eligible, tradeable, observed_at, "
                     "raw_artifact_id FROM markets WHERE venue = 'kalshi' "
@@ -187,6 +242,7 @@ class PostgresKalshiFreezeRepository:
                 existing_market_states[market_key] = tuple(existing)
 
             for page_index, page in enumerate(pages):
+                _check_deadline(deadline, "catalogue persistence")
                 page_id = _stable_id(
                     "catalogue-page",
                     f"{agent_cycle_id}:{page_index}:{page.audit.sha256}",
@@ -208,6 +264,7 @@ class PostgresKalshiFreezeRepository:
                     ),
                 )
                 for market in page.markets:
+                    _check_deadline(deadline, "catalogue market persistence")
                     cursor.execute(
                         "INSERT INTO catalogue_market_observations "
                         "(id, market_id, lifecycle_status, eligible, tradeable, observed_at, "
@@ -230,6 +287,15 @@ class PostgresKalshiFreezeRepository:
                         ),
                     )
 
+            if lease_owner is not None:
+                _assert_lease(
+                    cursor,
+                    agent_cycle_id,
+                    lease_owner,
+                    _aware(datetime.now(UTC)),
+                    lock=False,
+                )
+            _check_deadline(deadline, "before freeze publication")
             cursor.execute(
                 "INSERT INTO market_freezes "
                 "(id, agent_cycle_id, data_cutoff, historical_cutoff, catalogue_artifact_id, "
@@ -264,6 +330,7 @@ class PostgresKalshiFreezeRepository:
                 or not bool(stored_freeze[5])
             ):
                 raise ValueError("Kalshi freeze idempotency evidence conflicts")
+            _check_deadline(deadline, "after freeze publication")
 
             discovery_keys = {context.market.key for context in freeze.contexts}
             memberships = (
@@ -275,6 +342,7 @@ class PostgresKalshiFreezeRepository:
                 )),
             )
             for market_key, membership_type in memberships:
+                _check_deadline(deadline, "freeze membership persistence")
                 if market_key not in market_ids:
                     raise ValueError(
                         "freeze membership market is absent from catalogue: "
@@ -299,6 +367,7 @@ class PostgresKalshiFreezeRepository:
             membership_markets = discovery_keys | resolution_keys
             context_by_key = {context.market.key: context for context in freeze.contexts}
             for market_key in sorted(membership_markets, key=lambda value: value.canonical):
+                _check_deadline(deadline, "frozen market persistence")
                 frozen_market = markets.get(market_key)
                 existing_state = existing_market_states.get(market_key)
                 if frozen_market is None and existing_state is None:
@@ -341,6 +410,7 @@ class PostgresKalshiFreezeRepository:
                 context = context_by_key.get(market_key)
                 if context is None:
                     continue
+                _check_deadline(deadline, "order book persistence")
                 book_id = _stable_id(
                     "order-book-snapshot",
                     f"{freeze_id}:{market_key.canonical}:{context.order_book.artifact.sha256}",
@@ -363,6 +433,7 @@ class PostgresKalshiFreezeRepository:
                 )
                 for outcome_side, book_side, levels in self._book_levels(context.order_book):
                     for level_index, level in enumerate(levels):
+                        _check_deadline(deadline, "order book level persistence")
                         cursor.execute(
                             "INSERT INTO order_book_levels "
                             "(snapshot_id, outcome_side, book_side, level_index, "
@@ -379,6 +450,7 @@ class PostgresKalshiFreezeRepository:
                         )
 
             for observation in freeze.resolutions:
+                _check_deadline(deadline, "resolution persistence")
                 if observation.market_key not in market_ids:
                     raise ValueError(
                         "resolution observation market is absent from the catalogue: "
@@ -405,6 +477,16 @@ class PostgresKalshiFreezeRepository:
                         observation.blocked,
                     ),
                 )
+
+            if lease_owner is not None:
+                _assert_lease(
+                    cursor,
+                    agent_cycle_id,
+                    lease_owner,
+                    _aware(datetime.now(UTC)),
+                    lock=True,
+                )
+            _check_deadline(deadline, "after Kalshi freeze persistence")
 
         return KalshiFreezePersistence(
             freeze_id,

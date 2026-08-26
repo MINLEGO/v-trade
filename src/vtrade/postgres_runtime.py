@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime, timedelta
 from typing import Protocol, cast
 
+from vtrade.deadline import check_deadline
 from vtrade.domain.types import RawArtifact
 from vtrade.migrate import EXPECTED_MIGRATIONS, load_migration_sources
 from vtrade.runtime import (
@@ -103,45 +105,48 @@ class PostgresRuntimeRepository:
     def persist_raw_artifact(self, artifact: RawArtifact) -> uuid.UUID:
         """Persist one immutable content-addressed evidence reference idempotently."""
 
-        if artifact.observed_at is None:
-            raise ValueError("raw artifact observed_at is required for persistence")
+        return next(iter(self.persist_raw_artifacts((artifact,)).values()))
+
+    def persist_raw_artifacts(
+        self,
+        artifacts: Sequence[RawArtifact],
+        *,
+        claim: CycleClaim | None = None,
+        now: datetime | None = None,
+        deadline: float | None = None,
+    ) -> dict[str, uuid.UUID]:
+        """Persist a freeze's raw references atomically and behind its lease fence."""
+
+        unique: dict[str, RawArtifact] = {}
+        for artifact in artifacts:
+            previous = unique.get(artifact.sha256)
+            if previous is not None and previous != artifact:
+                raise RuntimePersistenceError(
+                    "raw artifact digest was reused with different metadata"
+                )
+            unique.setdefault(artifact.sha256, artifact)
+        if not unique:
+            return {}
+        for artifact in unique.values():
+            if artifact.observed_at is None:
+                raise ValueError("raw artifact observed_at is required for persistence")
+        checked_at = _aware(now or datetime.now(UTC))
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT id, byte_length, uri, request_identity FROM raw_artifacts "
-                "WHERE sha256 = %s FOR UPDATE",
-                (artifact.sha256,),
-            )
-            existing = cursor.fetchone()
-            if existing is not None:
-                if (
-                    int(str(existing[1])) != artifact.byte_length
-                    or str(existing[2]) != artifact.uri
-                    or (existing[3] or None) != artifact.request_identity
-                ):
-                    raise RuntimePersistenceError(
-                        "raw artifact digest was reused with different metadata"
-                    )
-                return uuid.UUID(str(existing[0]))
-            artifact_id = uuid.uuid5(uuid.NAMESPACE_URL, f"vtrade:raw-artifact:{artifact.sha256}")
-            cursor.execute(
-                "INSERT INTO raw_artifacts "
-                "(id, sha256, uri, byte_length, source_endpoint, request_identity, "
-                "source_timestamp, observed_at, captured_cutoff, schema_version, audit_metadata) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '{}'::jsonb)",
-                (
-                    artifact_id,
-                    artifact.sha256,
-                    artifact.uri,
-                    artifact.byte_length,
-                    artifact.source_endpoint,
-                    artifact.request_identity,
-                    artifact.source_timestamp,
-                    artifact.observed_at,
-                    artifact.historical_cutoff,
-                    artifact.schema_version,
-                ),
-            )
-        return artifact_id
+            if deadline is not None:
+                _set_statement_timeout(cursor, deadline)
+                check_deadline(deadline, "raw artifact persistence")
+            if claim is not None:
+                _assert_lease(cursor, claim, checked_at, lock=False)
+            result: dict[str, uuid.UUID] = {}
+            for artifact in unique.values():
+                if deadline is not None:
+                    check_deadline(deadline, "raw artifact persistence")
+                result[artifact.sha256] = _persist_raw_artifact_cursor(cursor, artifact)
+            if claim is not None:
+                if deadline is not None:
+                    check_deadline(deadline, "raw artifact lease fence")
+                _assert_lease(cursor, claim, _aware(datetime.now(UTC)))
+        return result
 
     def register_agent_schedule(self, agent_id: uuid.UUID, *, starts_at: datetime) -> bool:
         """Register a new agent's independent anchor without changing existing agents."""
@@ -210,8 +215,9 @@ class PostgresRuntimeRepository:
                     self._advance_schedule(cursor, agent_id, scheduled_at + timedelta(hours=1))
                     continue
                 lease_expires = now + lease_duration
+                claimed_owner = _new_lease_owner(lease_owner)
                 cycle_id = self._insert_or_claim_cycle(
-                    cursor, agent_id, scheduled_at, lease_owner, lease_expires, now
+                    cursor, agent_id, scheduled_at, claimed_owner, lease_expires, now
                 )
                 self._advance_schedule(cursor, agent_id, scheduled_at + timedelta(hours=1))
                 if cycle_id is not None:
@@ -221,8 +227,9 @@ class PostgresRuntimeRepository:
                             agent_id,
                             scheduled_at,
                             None,
-                            lease_owner,
+                            claimed_owner,
                             lease_expires,
+                            attempt=1,
                         )
                     )
         return tuple(claims)
@@ -234,10 +241,36 @@ class PostgresRuntimeRepository:
         lease_owner: str,
         lease_duration: timedelta,
         limit: int,
+        stale_after: timedelta | None = None,
     ) -> tuple[CycleClaim, ...]:
         now = _aware(now)
-        if not lease_owner or lease_duration <= timedelta(0) or limit <= 0:
+        if (
+            not lease_owner
+            or lease_duration <= timedelta(0)
+            or limit <= 0
+            or (stale_after is not None and stale_after <= timedelta(0))
+        ):
             return ()
+        if stale_after is None:
+            recovery_filter = (
+                "(cycles.lease_expires_at IS NULL OR cycles.lease_expires_at <= %s)"
+            )
+            recovery_params: tuple[object, ...] = (now, limit)
+        else:
+            recovery_filter = (
+                "(cycles.lease_expires_at IS NULL OR cycles.lease_expires_at <= %s) OR ("
+                "cycles.data_cutoff IS NULL AND (EXISTS ("
+                "SELECT 1 FROM runtime_cycle_steps freeze_step "
+                "WHERE freeze_step.agent_cycle_id = cycles.id "
+                "AND freeze_step.stage = 'market_freeze' "
+                "AND freeze_step.status <> 'completed' "
+                "AND freeze_step.started_at <= %s) OR (NOT EXISTS ("
+                "SELECT 1 FROM runtime_cycle_steps freeze_step "
+                "WHERE freeze_step.agent_cycle_id = cycles.id "
+                "AND freeze_step.stage = 'market_freeze') "
+                "AND cycles.started_at IS NOT NULL AND cycles.started_at <= %s))"
+            )
+            recovery_params = (now, now - stale_after, now - stale_after, limit)
         claims: list[CycleClaim] = []
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
             cursor.execute(
@@ -248,17 +281,18 @@ class PostgresRuntimeRepository:
             if lock is None or not bool(lock[0]):
                 return ()
             cursor.execute(
-                "SELECT cycles.id, cycles.agent_id, cycles.scheduled_at, cycles.data_cutoff "
+                "SELECT cycles.id, cycles.agent_id, cycles.scheduled_at, cycles.data_cutoff, "
+                "cycles.attempt_count "
                 "FROM agent_cycles cycles "
                 "JOIN agents ON agents.id = cycles.agent_id "
                 "JOIN experiment_runs runs ON runs.id = agents.run_id "
                 "CROSS JOIN system_controls controls "
                 "WHERE cycles.status IN ('running', 'interrupted') "
-                "AND (cycles.lease_expires_at IS NULL OR cycles.lease_expires_at <= %s) "
+                f"AND ({recovery_filter}) "
                 "AND controls.singleton = true AND controls.globally_paused = false "
                 "AND agents.paused_at IS NULL AND runs.status = 'running' "
                 "ORDER BY cycles.scheduled_at FOR UPDATE OF cycles SKIP LOCKED LIMIT %s",
-                (now, limit),
+                recovery_params,
             )
             for row in cursor.fetchall():
                 cycle_id = uuid.UUID(str(row[0]))
@@ -270,11 +304,28 @@ class PostgresRuntimeRepository:
                 if locked is None or not bool(locked[0]):
                     continue
                 lease_expires = now + lease_duration
+                claimed_owner = _new_lease_owner(lease_owner)
+                cursor.execute(
+                    "UPDATE runtime_cycle_steps SET status = 'failed', "
+                    "error = %s, completed_at = %s "
+                    "WHERE agent_cycle_id = %s AND stage = 'market_freeze' "
+                    "AND status = 'running'",
+                    (
+                        "market_freeze interrupted: previous worker generation became stale",
+                        now,
+                        cycle_id,
+                    ),
+                )
                 cursor.execute(
                     "UPDATE agent_cycles SET status = 'running', lease_owner = %s, "
                     "lease_expires_at = %s, attempt_count = attempt_count + 1, "
-                    "failure_reason = NULL WHERE id = %s",
-                    (lease_owner, lease_expires, cycle_id),
+                    "failure_reason = %s WHERE id = %s",
+                    (
+                        claimed_owner,
+                        lease_expires,
+                        "market_freeze lease reclaimed after worker inactivity",
+                        cycle_id,
+                    ),
                 )
                 cutoff = _aware(cast(datetime, row[3])) if row[3] is not None else None
                 claims.append(
@@ -283,9 +334,10 @@ class PostgresRuntimeRepository:
                         uuid.UUID(str(row[1])),
                         _aware(cast(datetime, row[2])),
                         cutoff,
-                        lease_owner,
+                        claimed_owner,
                         lease_expires,
                         recovery=True,
+                        attempt=(int(str(row[4])) + 1) if len(row) > 4 else 1,
                     )
                 )
         return tuple(claims)
@@ -364,10 +416,15 @@ class PostgresRuntimeRepository:
         result: StageResult,
         *,
         now: datetime,
+        deadline: float | None = None,
     ) -> None:
         now = _aware(now)
+        if deadline is not None:
+            check_deadline(deadline, "runtime stage checkpoint")
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
-            _assert_lease(cursor, claim, now)
+            if deadline is not None:
+                _set_statement_timeout(cursor, deadline)
+            _assert_lease(cursor, claim, now, lock=False)
             cursor.execute(
                 "UPDATE runtime_cycle_steps SET status = 'completed', output = %s::jsonb, "
                 "completed_at = %s WHERE agent_cycle_id = %s AND stage = %s "
@@ -387,6 +444,13 @@ class PostgresRuntimeRepository:
             )
             if cursor.rowcount != 1:
                 raise ValueError("runtime stage completion lost its checkpoint")
+            for artifact in result.artifacts:
+                if deadline is not None:
+                    check_deadline(deadline, "runtime artifact registration")
+                _register_artifact(cursor, claim, stage, artifact, now)
+            if deadline is not None:
+                check_deadline(deadline, "runtime stage checkpoint")
+            _assert_lease(cursor, claim, now, lock=True)
             if stage is CycleStage.MARKET_FREEZE:
                 freeze_cutoff = _market_freeze_cutoff(result, now)
                 cursor.execute(
@@ -397,8 +461,6 @@ class PostgresRuntimeRepository:
                 )
                 if cursor.rowcount != 1:
                     raise ValueError("market freeze cutoff conflicts with the agent cycle")
-            for artifact in result.artifacts:
-                _register_artifact(cursor, claim, stage, artifact, now)
 
     def complete_cycle(
         self, claim: CycleClaim, *, now: datetime, summary: dict[str, object]
@@ -416,7 +478,7 @@ class PostgresRuntimeRepository:
             cursor.execute(
                 "UPDATE agent_cycles SET status = 'completed', completed_at = %s, "
                 "final_summary = %s::text, model_termination_status = %s, "
-                "lease_owner = NULL, lease_expires_at = NULL "
+                "failure_reason = NULL, lease_owner = NULL, lease_expires_at = NULL "
                 "WHERE id = %s AND lease_owner = %s",
                 (
                     now,
@@ -434,15 +496,17 @@ class PostgresRuntimeRepository:
         safe_reason = reason[:4000]
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
             cursor.execute(
+                "UPDATE agent_cycles SET status = 'failed', failure_reason = %s, "
+                "completed_at = %s, lease_owner = NULL, lease_expires_at = NULL "
+                "WHERE id = %s AND status = 'running' AND lease_owner = %s",
+                (safe_reason, now, claim.cycle_id, claim.lease_owner),
+            )
+            if cursor.rowcount != 1:
+                return 0
+            cursor.execute(
                 "UPDATE runtime_cycle_steps SET status = 'failed', error = %s, completed_at = %s "
                 "WHERE agent_cycle_id = %s AND status = 'running'",
                 (safe_reason, now, claim.cycle_id),
-            )
-            cursor.execute(
-                "UPDATE agent_cycles SET status = 'failed', failure_reason = %s, "
-                "completed_at = %s, lease_owner = NULL, lease_expires_at = NULL "
-                "WHERE id = %s AND lease_owner = %s",
-                (safe_reason, now, claim.cycle_id, claim.lease_owner),
             )
             cursor.execute(
                 "SELECT count(*) FROM (SELECT status, sum(CASE WHEN status <> 'failed' "
@@ -878,12 +942,67 @@ def _register_artifact(
     )
 
 
-def _assert_lease(cursor: _Cursor, claim: CycleClaim, now: datetime) -> None:
+def _persist_raw_artifact_cursor(cursor: _Cursor, artifact: RawArtifact) -> uuid.UUID:
     cursor.execute(
-        "SELECT 1 FROM agent_cycles WHERE id = %s AND status = 'running' "
-        "AND lease_owner = %s AND lease_expires_at > %s FOR UPDATE",
-        (claim.cycle_id, claim.lease_owner, now),
+        "SELECT id, byte_length, uri, request_identity FROM raw_artifacts "
+        "WHERE sha256 = %s FOR UPDATE",
+        (artifact.sha256,),
     )
+    existing = cursor.fetchone()
+    if existing is not None:
+        if (
+            int(str(existing[1])) != artifact.byte_length
+            or str(existing[2]) != artifact.uri
+            or (existing[3] or None) != artifact.request_identity
+        ):
+            raise RuntimePersistenceError("raw artifact digest was reused with different metadata")
+        return uuid.UUID(str(existing[0]))
+    artifact_id = uuid.uuid5(uuid.NAMESPACE_URL, f"vtrade:raw-artifact:{artifact.sha256}")
+    cursor.execute(
+        "INSERT INTO raw_artifacts "
+        "(id, sha256, uri, byte_length, source_endpoint, request_identity, "
+        "source_timestamp, observed_at, captured_cutoff, schema_version, audit_metadata) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '{}'::jsonb)",
+        (
+            artifact_id,
+            artifact.sha256,
+            artifact.uri,
+            artifact.byte_length,
+            artifact.source_endpoint,
+            artifact.request_identity,
+            artifact.source_timestamp,
+            artifact.observed_at,
+            artifact.historical_cutoff,
+            artifact.schema_version,
+        ),
+    )
+    return artifact_id
+
+
+def _set_statement_timeout(cursor: _Cursor, deadline: float) -> None:
+    remaining_ms = max(1, int((deadline - time.monotonic()) * 1000))
+    cursor.execute(
+        "SELECT set_config('statement_timeout', %s, true)",
+        (f"{remaining_ms}ms",),
+    )
+
+
+def _new_lease_owner(worker_owner: str) -> str:
+    """Make every claim a distinct worker generation, even with a stable worker id."""
+
+    return f"{worker_owner}:{uuid.uuid4().hex}"
+
+
+def _assert_lease(
+    cursor: _Cursor, claim: CycleClaim, now: datetime, *, lock: bool = True
+) -> None:
+    query = (
+        "SELECT 1 FROM agent_cycles WHERE id = %s AND status = 'running' "
+        "AND lease_owner = %s AND lease_expires_at > %s"
+    )
+    if lock:
+        query += " FOR UPDATE"
+    cursor.execute(query, (claim.cycle_id, claim.lease_owner, now))
     if cursor.fetchone() is None:
         raise LeaseLost(f"cycle lease lost: {claim.cycle_id}")
 
@@ -909,4 +1028,6 @@ def _optional_text(value: object) -> str | None:
 def _default_connect(database_url: str) -> AbstractContextManager[_Connection]:
     import psycopg
 
-    return cast(AbstractContextManager[_Connection], psycopg.connect(database_url))
+    return cast(
+        AbstractContextManager[_Connection], psycopg.connect(database_url, connect_timeout=5)
+    )

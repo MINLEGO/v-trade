@@ -9,17 +9,20 @@ data raises a typed error and is never converted into a plausible default.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from functools import partial
 from typing import Any, cast
 
 import httpx
 
 from vtrade.artifacts import ArtifactRef
+from vtrade.deadline import DeadlineExceeded, deadline_remaining, run_with_deadline
 from vtrade.domain.ports import ArtifactReference, ArtifactStore
 from vtrade.domain.types import (
     BinaryEvent,
@@ -49,6 +52,7 @@ from vtrade.domain.types import (
 
 KALSHI_PUBLIC_REST_ROOT = "https://external-api.kalshi.com/trade-api/v2"
 KALSHI_SCHEMA_VERSION = "vtrade-binary-market-v1"
+_LOGGER = logging.getLogger(__name__)
 RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
 ORDINARY_BINARY_FORBIDDEN_FIELDS = frozenset(
     {"token_id", "venue_token_id", "condition_id", "negative_risk", "shares"}
@@ -183,6 +187,14 @@ def _parallel_map[T, R](
             future.cancel()
         executor.shutdown(wait=False, cancel_futures=True)
         raise
+    if (
+        deadline.monotonic_deadline is not None
+        and time.monotonic() >= deadline.monotonic_deadline
+    ):
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise KalshiDeadlineExceeded(
+            "Kalshi freeze deadline exceeded while shutting down parallel work"
+        )
     executor.shutdown(wait=True)
     return tuple(results)
 
@@ -517,8 +529,19 @@ class KalshiPublicRestAdapter:
                 tuple(params.items()) if isinstance(params, Mapping) else tuple(params)
             )
             request = self._client.build_request("GET", endpoint, params=request_params)
+            request_identity = self._request_identity(request)
+            operation_started = time.monotonic()
             try:
-                response = self._client.send(request)
+                if deadline is None or deadline.monotonic_deadline is None:
+                    response = self._client.send(request)
+                else:
+                    response = run_with_deadline(
+                        partial(self._client.send, request),
+                        deadline=deadline.monotonic_deadline,
+                        label=f"Kalshi request {request_identity}",
+                    )
+            except DeadlineExceeded as exc:
+                raise KalshiDeadlineExceeded(str(exc)) from exc
             except httpx.HTTPError as exc:
                 if attempt == self._retry_policy.maximum_attempts:
                     raise KalshiTransportError(f"request failed for {path}") from exc
@@ -539,12 +562,39 @@ class KalshiPublicRestAdapter:
                 payload = json.loads(content.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                 raise KalshiPayloadError(f"{path} did not return valid UTF-8 JSON") from exc
-            request_identity = self._request_identity(request)
             if deadline is not None:
                 deadline.check()
-            reference = self._artifact_store.put(content)
+            artifact_started = time.monotonic()
+            try:
+                if deadline is None or deadline.monotonic_deadline is None:
+                    reference = self._artifact_store.put(content)
+                else:
+                    reference = run_with_deadline(
+                        partial(self._artifact_store.put, content),
+                        deadline=deadline.monotonic_deadline,
+                        label=f"Kalshi artifact upload {request_identity}",
+                    )
+            except DeadlineExceeded as exc:
+                raise KalshiDeadlineExceeded(str(exc)) from exc
             if deadline is not None:
                 deadline.check()
+            remaining_ms = (
+                deadline_remaining(deadline.monotonic_deadline) * 1000
+                if deadline is not None and deadline.monotonic_deadline is not None
+                else -1.0
+            )
+            _LOGGER.info(
+                "market_freeze stage_boundary event=external_complete endpoint=%s "
+                "request_identity=%s attempt=%s elapsed_ms=%.3f bytes=%s "
+                "artifact_upload_ms=%.3f deadline_remaining_ms=%.3f",
+                self._source_endpoint(request),
+                request_identity,
+                attempt,
+                (time.monotonic() - operation_started) * 1000,
+                len(content),
+                (time.monotonic() - artifact_started) * 1000,
+                remaining_ms,
+            )
             artifact = _artifact_from_reference(
                 reference,
                 endpoint=self._source_endpoint(request),
@@ -569,7 +619,17 @@ class KalshiPublicRestAdapter:
                 raise KalshiDeadlineExceeded("Kalshi freeze transport deadline exceeded")
             delay = min(delay, remaining)
         if delay:
-            self._sleep(delay)
+            try:
+                if deadline is None or deadline.monotonic_deadline is None:
+                    self._sleep(delay)
+                else:
+                    run_with_deadline(
+                        lambda: self._sleep(delay),
+                        deadline=deadline.monotonic_deadline,
+                        label="Kalshi retry backoff",
+                    )
+            except DeadlineExceeded as exc:
+                raise KalshiDeadlineExceeded(str(exc)) from exc
 
     def get_historical_cutoff(self, *, deadline: _Deadline | None = None) -> HistoricalCutoff:
         archived = self._request("/historical/cutoff", deadline=deadline)
@@ -656,6 +716,18 @@ class KalshiPublicRestAdapter:
                         archived.request_identity,
                         len(rows),
                     )
+                )
+                _LOGGER.info(
+                    "market_freeze stage_boundary event=catalogue_page page=%s "
+                    "cursor=%s next_cursor=%s record_count=%s "
+                    "deadline_remaining_ms=%.3f",
+                    page_index,
+                    cursor,
+                    next_cursor,
+                    len(rows),
+                    deadline_remaining(scan_deadline.monotonic_deadline) * 1000
+                    if scan_deadline.monotonic_deadline is not None
+                    else -1.0,
                 )
                 scanned_market_count += len(rows)
                 for row_index, row in enumerate(rows):

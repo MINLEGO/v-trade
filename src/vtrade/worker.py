@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import socket
 import time
@@ -23,6 +24,7 @@ from vtrade.config import (
     load_experiment_config,
     required_environment,
 )
+from vtrade.deadline import check_deadline, deadline_remaining, run_with_deadline
 from vtrade.domain.execution import OrderRequest
 from vtrade.domain.ports import ArtifactStore, JsonObject
 from vtrade.domain.types import Side
@@ -69,6 +71,8 @@ from vtrade.semantic_runtime import (
     ProductionSemanticOrderExecutor,
     ProductionSemanticSettlementPort,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class ProductionCompositionUnavailable(RuntimeError):
@@ -1171,8 +1175,17 @@ class ProductionKalshiFreezePort:
         self._maximum_historical_markets = maximum_historical_markets
         self._maximum_additional_markets = maximum_additional_markets
 
-    def freeze(self, claim: CycleClaim) -> MarketFreezeResult:
-        held_markets = self._persistence.market_refs_for_agent(claim.agent_id)
+    def freeze(self, claim: CycleClaim, *, deadline: float | None = None) -> MarketFreezeResult:
+        if deadline is not None:
+            held_markets = run_with_deadline(
+                lambda: self._persistence.market_refs_for_agent(
+                    claim.agent_id, deadline=deadline
+                ),
+                deadline=deadline,
+                label="Kalshi held-market lookup",
+            )
+        else:
+            held_markets = self._persistence.market_refs_for_agent(claim.agent_id)
         result = self._service.freeze(
             KalshiFreezeRequest(
                 held_markets=held_markets,
@@ -1187,21 +1200,78 @@ class ProductionKalshiFreezePort:
                 historical_markets=held_markets,
                 maximum_historical_markets=self._maximum_historical_markets,
                 maximum_additional_markets=self._maximum_additional_markets,
-            )
+            ),
+            deadline=deadline,
         )
+        if deadline is not None:
+            check_deadline(deadline, "after Kalshi venue freeze")
         retained = six_month_retain_until(_aware(self._clock()))
-        registrations: list[ArtifactRegistration] = []
-        artifact_ids: dict[str, uuid.UUID] = {}
-        for artifact in result.artifacts:
-            artifact_ids[artifact.sha256] = self._repository.persist_raw_artifact(artifact)
-            registrations.append(
-                ArtifactRegistration(artifact.uri, artifact.sha256, artifact.byte_length, retained)
+        published_at = _aware(self._clock())
+        raw_persistence_started = time.monotonic()
+        if deadline is not None:
+            artifact_ids = run_with_deadline(
+                lambda: self._repository.persist_raw_artifacts(
+                    result.artifacts,
+                    claim=claim,
+                    now=published_at,
+                    deadline=deadline,
+                ),
+                deadline=deadline,
+                label="Kalshi raw artifact persistence",
             )
-        persisted = self._persistence.persist(
-            result,
-            agent_cycle_id=claim.cycle_id,
-            raw_artifact_ids=artifact_ids,
-            published_at=_aware(self._clock()),
+        else:
+            artifact_ids = self._repository.persist_raw_artifacts(result.artifacts)
+        _LOGGER.info(
+            "market_freeze stage_boundary event=raw_artifacts_persisted cycle_id=%s "
+            "attempt=%s artifact_count=%s elapsed_ms=%.3f deadline_remaining_ms=%.3f",
+            claim.cycle_id,
+            claim.attempt,
+            len(result.artifacts),
+            (time.monotonic() - raw_persistence_started) * 1000,
+            deadline_remaining(deadline) * 1000 if deadline is not None else -1.0,
+        )
+        registrations = tuple(
+            ArtifactRegistration(artifact.uri, artifact.sha256, artifact.byte_length, retained)
+            for artifact in result.artifacts
+        )
+        freeze_persistence_started = time.monotonic()
+        if deadline is not None:
+            persisted = run_with_deadline(
+                lambda: self._persistence.persist(
+                    result,
+                    agent_cycle_id=claim.cycle_id,
+                    raw_artifact_ids=artifact_ids,
+                    published_at=published_at,
+                    lease_owner=claim.lease_owner,
+                    deadline=deadline,
+                ),
+                deadline=deadline,
+                label="Kalshi freeze PostgreSQL persistence",
+            )
+            check_deadline(deadline, "after Kalshi PostgreSQL persistence")
+        else:
+            persisted = self._persistence.persist(
+                result,
+                agent_cycle_id=claim.cycle_id,
+                raw_artifact_ids=artifact_ids,
+                published_at=published_at,
+            )
+        _LOGGER.info(
+            "market_freeze stage_boundary event=postgres_persisted cycle_id=%s "
+            "attempt=%s elapsed_ms=%.3f deadline_remaining_ms=%.3f",
+            claim.cycle_id,
+            claim.attempt,
+            (time.monotonic() - freeze_persistence_started) * 1000,
+            deadline_remaining(deadline) * 1000 if deadline is not None else -1.0,
+        )
+        _LOGGER.info(
+            "market_freeze stage_boundary event=publication_ready cycle_id=%s "
+            "attempt=%s artifact_count=%s artifact_bytes=%s deadline_remaining_ms=%.3f",
+            claim.cycle_id,
+            claim.attempt,
+            len(result.artifacts),
+            sum(artifact.byte_length for artifact in result.artifacts),
+            deadline_remaining(deadline) * 1000 if deadline is not None else -1.0,
         )
         payload = _kalshi_freeze_payload(
             result,
@@ -1520,6 +1590,8 @@ def build_production_worker(
                 config.raw["limits"], "monthly_external_api_budget_micros"
             ),
         ),
+        market_freeze_deadline_seconds=float(discovery.get("freeze_deadline_seconds", 600)),
+        monotonic=monotonic,
     )
     lease_owner = values.get("VTRADE_WORKER_ID") or f"{socket.gethostname()}:{os.getpid()}"
     runtime = HourlyRuntime(
