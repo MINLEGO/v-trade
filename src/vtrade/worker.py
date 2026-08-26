@@ -77,6 +77,7 @@ _RECOVERY_WITHOUT_HARNESS_RUN_ERROR = (
     "ProductionCompositionUnavailable: recovery found no completed persisted harness run; "
     "provider replay is forbidden"
 )
+_PRE_PROVIDER_FAILURE_PREFIX = "ProviderConfigurationError:"
 
 
 class ProductionCompositionUnavailable(RuntimeError):
@@ -924,7 +925,10 @@ class ProductionHarnessPort:
         # This exact error is emitted before any provider call. It is the safe
         # marker left by the previous recovery implementation, so the stage may
         # be retried once without replaying an in-flight provider execution.
-        return str(row[0]) != _RECOVERY_WITHOUT_HARNESS_RUN_ERROR
+        error = str(row[0])
+        return error != _RECOVERY_WITHOUT_HARNESS_RUN_ERROR and not error.startswith(
+            _PRE_PROVIDER_FAILURE_PREFIX
+        )
 
     def _load_context(self, cycle_id: uuid.UUID) -> tuple[list[JsonObject], JsonObject]:
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:

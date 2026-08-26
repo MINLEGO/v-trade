@@ -179,6 +179,14 @@ class ProviderTests(unittest.TestCase):
         with self.assertRaisesRegex(ProviderConfigurationError, "outside the active model set"):
             OpenRouterRoute.from_config(model_config("deepseek/deepseek-v4-flash"))
 
+    def test_openrouter_accepts_legacy_implicit_owner_fixed_policy(self) -> None:
+        config = model_config()
+        del config["reasoning_effort_policy"]
+
+        route = OpenRouterRoute.from_config(config)
+
+        self.assertEqual(route.reasoning_effort, "max")
+
     def test_openrouter_cross_model_response_fails_closed(self) -> None:
         client = httpx.Client(
             transport=httpx.MockTransport(

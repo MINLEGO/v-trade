@@ -247,7 +247,10 @@ class OpenRouterRoute:
             raise ProviderConfigurationError("cross-model fallback is forbidden")
         if config.get("reasoning_effort") != expected_reasoning_effort:
             raise ProviderConfigurationError("model reasoning effort differs from active policy")
-        if config.get("reasoning_effort_policy") != "owner_fixed":
+        # v1 model_configs are append-only and older registrations predate the
+        # explicit policy field. The exact model and effort checks above still
+        # pin those legacy rows to the active owner-fixed policy.
+        if config.get("reasoning_effort_policy", "owner_fixed") != "owner_fixed":
             raise ProviderConfigurationError("active reasoning effort policy must be owner-fixed")
         return cls(slug, expected_quantizations, expected_reasoning_effort)
 

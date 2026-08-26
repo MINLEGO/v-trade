@@ -514,6 +514,8 @@ class Issue21MarketFreezeTests(unittest.TestCase):
         self.assertFalse(port._harness_stage_requires_persisted_run(claim))
         cursor.row = ("provider call failed",)
         self.assertTrue(port._harness_stage_requires_persisted_run(claim))
+        cursor.row = ("ProviderConfigurationError: legacy model field missing",)
+        self.assertFalse(port._harness_stage_requires_persisted_run(claim))
         self.assertEqual(
             cursor.query and " ".join(cursor.query.split()),
             "SELECT error FROM runtime_cycle_steps "
