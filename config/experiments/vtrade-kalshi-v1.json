@@ -27,7 +27,7 @@
     },
     "compatibility": {
       "path": "spec/vtrade-kalshi-v1-compatibility.md",
-      "sha256": "70d0100cfb33daf13e9b2a7a455a3df7c11677e8c6a416f7e0011632e6c9fef9",
+      "sha256": "7bc71ef5a371b7aeba53664c402966ad618857fff02b2514263954b06125013e",
       "classification": "inferred"
     }
   },

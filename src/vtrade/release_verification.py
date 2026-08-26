@@ -327,7 +327,8 @@ def verify_release(
             ValidationResult(
                 "migration chain",
                 "passed",
-                "ordered canonical migration chain: " + ", ".join(source.name for source in sources),
+                "ordered canonical migration chain: "
+                + ", ".join(source.name for source in sources),
             )
         )
     except (MigrationError, OSError, ReleaseVerificationError, ValueError) as exc:
