@@ -395,7 +395,7 @@ class Issue21MarketFreezeTests(unittest.TestCase):
         class StaleCursor(_RecoveryCursor):
             def execute(self, query: str, params: tuple[object, ...] = ()) -> StaleCursor:
                 super().execute(query, params)
-                if query.startswith("UPDATE agent_cycles SET status = 'failed'"):
+                if query.startswith("UPDATE agent_cycles SET status = CASE"):
                     self.rowcount = 0
                 return self
 
@@ -412,6 +412,24 @@ class Issue21MarketFreezeTests(unittest.TestCase):
                 for query in cursor.queries
             )
         )
+
+    def test_pre_freeze_failure_uses_schema_compatible_interrupted_status(self) -> None:
+        cursor = _RecoveryCursor()
+        repository = PostgresRuntimeRepository(
+            "postgresql://unused",
+            connect=lambda _url: _SingleCursorConnection(cursor),
+        )
+        claim = _claim()
+
+        self.assertEqual(repository.fail_cycle(claim, now=NOW, reason="freeze deadline"), 1)
+
+        update = next(
+            query
+            for query in cursor.queries
+            if query.startswith("UPDATE agent_cycles SET status = CASE")
+        )
+        self.assertIn("THEN 'interrupted'::vtrade_cycle_status", update)
+        self.assertIn("ELSE 'failed'::vtrade_cycle_status", update)
 
 
 if __name__ == "__main__":

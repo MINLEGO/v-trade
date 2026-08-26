@@ -403,7 +403,8 @@ class PostgresRuntimeRepository:
                 return
             cursor.execute(
                 "UPDATE runtime_cycle_steps SET status = 'running', "
-                "attempt_count = attempt_count + 1, started_at = %s, error = NULL "
+                "attempt_count = attempt_count + 1, started_at = %s, "
+                "completed_at = NULL, error = NULL "
                 "WHERE agent_cycle_id = %s AND stage = %s",
                 (now, claim.cycle_id, stage.value),
             )
@@ -496,7 +497,9 @@ class PostgresRuntimeRepository:
         safe_reason = reason[:4000]
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
             cursor.execute(
-                "UPDATE agent_cycles SET status = 'failed', failure_reason = %s, "
+                "UPDATE agent_cycles SET status = CASE WHEN data_cutoff IS NULL "
+                "THEN 'interrupted'::vtrade_cycle_status ELSE 'failed'::vtrade_cycle_status END, "
+                "failure_reason = %s, "
                 "completed_at = %s, lease_owner = NULL, lease_expires_at = NULL "
                 "WHERE id = %s AND status = 'running' AND lease_owner = %s",
                 (safe_reason, now, claim.cycle_id, claim.lease_owner),
