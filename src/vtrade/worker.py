@@ -1512,7 +1512,7 @@ def build_production_worker(
         repository.migration_status()
     except Exception as exc:
         raise ProductionCompositionUnavailable(
-            "private PostgreSQL is not at the verified four-migration readiness point"
+            "private PostgreSQL is not at the verified migration readiness point"
         ) from exc
     maximum_valuation_bid_age = timedelta(
         seconds=_integer(config.raw["limits"], "maximum_archived_bid_age_seconds")

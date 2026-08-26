@@ -71,7 +71,9 @@ def test_load_migration_sources_requires_exact_canonical_chain(tmp_path: Path) -
     directory = _copy_chain(tmp_path)
     sources = load_migration_sources(directory)
     assert tuple(source.name for source in sources) == EXPECTED_MIGRATIONS
-    assert tuple(source.position for source in sources) == (1, 2, 3, 4)
+    assert tuple(source.position for source in sources) == tuple(
+        range(1, len(EXPECTED_MIGRATIONS) + 1)
+    )
     assert all(
         source.sha256 == hashlib.sha256(source.body).hexdigest() for source in sources
     )
@@ -89,7 +91,7 @@ def test_apply_migrations_records_a_prefix_and_is_idempotent(tmp_path: Path) -> 
     assert apply_migrations(directory, database_url="unused", connect=lambda _url: connection)
     applied_sql_count = len(cursor.inserted_sql)
     assert [row[0] for row in cursor.rows] == list(EXPECTED_MIGRATIONS)
-    assert [row[2] for row in cursor.rows] == [1, 2, 3, 4]
+    assert [row[2] for row in cursor.rows] == list(range(1, len(EXPECTED_MIGRATIONS) + 1))
 
     apply_migrations(directory, database_url="unused", connect=lambda _url: connection)
     assert len(cursor.inserted_sql) == applied_sql_count

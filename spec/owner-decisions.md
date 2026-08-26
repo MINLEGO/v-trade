@@ -5,7 +5,7 @@ experiment version and new artifact hashes.
 
 - Venue: public unauthenticated Kalshi REST for read-only ingestion.
 - Instrument scope: ordinary binary markets with exactly YES and NO outcomes.
-- Deployment: a fresh empty PostgreSQL database using exactly four migrations; no
+- Deployment: a fresh empty PostgreSQL database using exactly five migrations; no
   legacy upgrade, conversion, dual write, or dual venue.
 - Execution: paper-only IOC/FOK using real market data, exact microdollars, exact
   hundredths-of-a-contract quantities, and `best-level-haircut-v1`.
@@ -34,4 +34,3 @@ experiment version and new artifact hashes.
 Historical methodology is retained only as explicitly marked archive evidence. It is
 not loaded by runtime, tests, image builds, migrations, or fixture discovery and does
 not establish venue or performance equivalence.
-

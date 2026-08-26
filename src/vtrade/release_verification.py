@@ -287,7 +287,7 @@ def external_validation_matrix() -> tuple[ValidationGate, ...]:
             "real-postgresql",
             "VTRADE_RUN_POSTGRES_INTEGRATION=1 uv run --extra dev python -m pytest "
             "tests/test_postgres_*.py",
-            "real disposable database applies/reruns 0001-0004, rejects checksum drift, "
+            "real disposable database applies/reruns 0001-0005, rejects checksum drift, "
             "and exposes latest migration",
         ),
         ValidationGate(
@@ -327,7 +327,7 @@ def verify_release(
             ValidationResult(
                 "migration chain",
                 "passed",
-                "ordered four-source chain: " + ", ".join(source.name for source in sources),
+                "ordered canonical migration chain: " + ", ".join(source.name for source in sources),
             )
         )
     except (MigrationError, OSError, ReleaseVerificationError, ValueError) as exc:

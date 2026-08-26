@@ -100,7 +100,7 @@ class KalshiFreezePersistence:
 
 
 class PostgresKalshiFreezeRepository:
-    """Persist one complete Kalshi freeze in the clean four-migration schema."""
+    """Persist one complete Kalshi freeze in the clean migration schema."""
 
     def __init__(self, database_url: str, *, connect: _Connect | None = None) -> None:
         if not database_url:

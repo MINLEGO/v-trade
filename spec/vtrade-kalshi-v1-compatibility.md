@@ -18,7 +18,7 @@ WebSocket, order-submission, or real-money fallback is reachable.
 
 There is no compatibility loader, alias, dual venue, dual write, legacy database
 upgrade, historical conversion, or application rollback path. The deployment starts
-from an empty database and uses the exact four-migration chain. Missing external
+from an empty database and uses the exact five-migration chain. Missing external
 resources and unresolved reviewed fixture evidence fail closed.
 
 ## Historical provenance
@@ -31,4 +31,3 @@ establish venue, schema, execution, or performance equivalence.
 Historical provenance (controlled): the agent methodology is informed by the
 PredictionArena Polymarket experiment; this sentence records provenance only and is
 not an active venue, schema, compatibility, or performance claim.
-

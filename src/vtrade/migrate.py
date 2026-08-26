@@ -16,6 +16,7 @@ EXPECTED_MIGRATIONS: tuple[str, ...] = (
     "0002_kalshi_catalogue_and_freezes.sql",
     "0003_execution_portfolio_and_settlement.sql",
     "0004_runtime_audit_and_admin.sql",
+    "0005_runtime_pre_settlement_stage.sql",
 )
 MIGRATION_LOCK_NAME = "vtrade:clean-migrations:v1"
 
@@ -48,7 +49,7 @@ class MigrationSource:
 def load_migration_sources(
     directory: Path = Path("migrations"),
 ) -> tuple[MigrationSource, ...]:
-    """Load exactly the four canonical migration files as their original bytes."""
+    """Load the canonical migration files as their original bytes."""
 
     if not directory.is_dir():
         raise MigrationError(f"migration directory does not exist: {directory}")

@@ -5,7 +5,7 @@ is `vtrade-kalshi-v1`: it discovers ordinary binary Kalshi markets, exposes YES/
 outcomes, and simulates IOC/FOK orders against real public market data without
 submitting orders to a venue.
 
-The active release has one experiment, one clean four-migration database chain, and
+The active release has one experiment, one clean five-migration database chain, and
 no compatibility loader, dual venue, dual write, legacy upgrade, or real-execution
 fallback. Historical research is retained only under
 [`docs/archive/predictionarena/`](docs/archive/predictionarena/); that archive is
@@ -46,4 +46,3 @@ this release.
 See [`docs/runtime-operations.md`](docs/runtime-operations.md) for the operator
 runbook and [`docs/adr/0002-kalshi-only-paper-cutover.md`](docs/adr/0002-kalshi-only-paper-cutover.md)
 for the irreversible fresh-database cutover decision.
-

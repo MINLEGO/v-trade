@@ -3,7 +3,7 @@
 ## Deployment sequence
 
 The target is a fresh empty PostgreSQL database. The image contains only the active
-configuration, four migrations, Kalshi fixture manifest, and frozen tool/prompt
+configuration, five migrations, Kalshi fixture manifest, and frozen tool/prompt
 contracts. Coolify starts one migration job, then the API, then the worker after the
 API's authenticated readiness check is healthy:
 
@@ -95,4 +95,3 @@ Historical evidence lives under `docs/archive/predictionarena/`. It is read-only
 is not imported or loaded by runtime, tests, image builds, migrations, or fixture
 discovery, and does not establish venue, schema, execution, or performance
 equivalence. The release verifier fails when an active path crosses this boundary.
-

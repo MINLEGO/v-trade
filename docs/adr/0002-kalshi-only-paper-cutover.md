@@ -12,12 +12,13 @@ REST data without credentials, and exposes a semantic YES/NO order contract. The
 worker can simulate paper fills but cannot authenticate, sign, or submit a venue
 order.
 
-The active repository contains exactly four dependency-ordered migrations:
+The active repository contains five dependency-ordered migrations:
 
 1. foundation, agent state, raw evidence, and balanced ledger;
 2. Kalshi catalogue, dynamic grids, freezes, and canonical books;
 3. semantic orders, fees, portfolio accounting, risk, and settlement;
 4. runtime checkpoints, retention, admin controls, and readiness projections.
+5. the durable pre-settlement runtime stage contract.
 
 Historical research is retained only below `docs/archive/predictionarena/` with an
 explicit read-only marker. It is not imported or loaded by runtime, tests, image
@@ -58,4 +59,3 @@ The cutover is intentionally irreversible at the application layer. Operators mu
 capture database, object-storage, image, configuration, and artifact digests before
 migration. A failed gate stops the sequence; it is not replaced by a local mock,
 fake provider, old fixture, or historical result.
-
