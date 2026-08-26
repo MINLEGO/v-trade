@@ -11,6 +11,10 @@ API's authenticated readiness check is healthy:
 migrate -> /health/ready -> worker
 ```
 
+Before `migrate`, record the database and object-storage snapshots plus the source,
+image, configuration, artifact, and migration digests. Do not start the worker until
+the cutover evidence record passes `--require-ready`.
+
 A migration failure stops the API and worker. After active data is written there is
 no application rollback or schema downgrade path; use the matching infrastructure
 snapshot or rebuild an empty target.
@@ -23,13 +27,15 @@ From the repository root:
 $env:UV_CACHE_DIR='.uv-cache'
 uv run --extra dev python -m vtrade.release_verification
 uv run --extra dev python -m vtrade.frozen_artifacts config/experiments/vtrade-kalshi-v1.json
+uv run --extra dev python scripts/verify_kalshi_cutover_evidence.py
 docker compose -f compose.coolify.yaml config --quiet
 docker build --pull -t vtrade:kalshi-cutover .
 ```
 
 These commands prove repository and image shape only. A real disposable PostgreSQL
 run, private object-storage readiness, built-image startup, and the French-host
-public REST probe remain separate evidence gates.
+public REST probe remain separate evidence gates. The evidence record must be checked
+with `--require-ready` before starting the worker on a fresh target.
 
 ## Health boundaries
 
@@ -80,7 +86,8 @@ With a real staging database and private storage:
 $env:VTRADE_RUN_POSTGRES_INTEGRATION='1'
 uv run --extra dev python -m pytest tests/test_postgres_*.py
 uv run --extra dev python -m vtrade.migrate
-uv run --extra dev python scripts/probe_kalshi_public_rest.py
+uv run --extra dev python scripts/probe_kalshi_public_rest.py --output <redacted-output>
+uv run --extra dev python scripts/verify_kalshi_cutover_evidence.py --require-ready
 ```
 
 The probe is read-only and credential-free. It captures public catalogue pages with
@@ -88,6 +95,16 @@ complete opaque-cursor traversal, event/series metadata, historical cutoff, an
 ordinary binary order book, bounded concurrency observations, raw bytes, redacted
 headers, and SHA-256 evidence. Geographic or payload failures block cutover and
 must not be replaced by a proxy, VPN, old capture, or local mock.
+
+### Evidence record
+
+Record redacted command output and immutable references in
+`docs/evidence/kalshi-cutover-YYYY-MM-DD.json`. The record is blocked until it
+contains the six gates (`offline`, `postgresql`, `built_image`, `private_resources`,
+`provider_egress`, and `french_host`), database/object-storage snapshots, the image
+digest, the active artifact and seven-migration hashes, the paper-only reachability
+check, and the infrastructure-only rollback record. Never place credentials,
+connection strings, private URLs, or raw authorization headers in the record.
 
 ## Archive boundary
 

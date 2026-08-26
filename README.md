@@ -22,13 +22,14 @@ uv run --extra dev python -m pytest
 uv run --extra dev python -m ruff check src tests
 uv run --extra dev python -m mypy src/vtrade
 uv run --extra dev python -m vtrade.release_verification
+uv run --extra dev python scripts/verify_kalshi_cutover_evidence.py
 docker compose -f compose.coolify.yaml config --quiet
 ```
 
 The release verifier checks frozen artifact hashes, the exact migration chain, the
-archive boundary, the fixture manifest, and the zero-active-legacy-venue sweep. It
-prints PostgreSQL, image, storage, and French-host probe gates separately; local
-tests do not claim those external checks.
+archive boundary, the fixture manifest, and the zero-active-legacy-venue sweep. The
+cutover evidence verifier binds the recorded six-gate handoff to those hashes and
+reports a partial record as blocked; local tests do not claim external checks.
 
 ## Deployment boundary
 
@@ -39,9 +40,10 @@ migration, private configuration, storage, and active artifact contract; it does
 call Kalshi, model, or research providers.
 
 The image verifies active artifacts before dropping privileges. Missing private
-resources, reviewed external fixture evidence, or migrations fail closed. Real
-Kalshi authentication, signing, WebSockets, and order submission are not part of
-this release.
+resources, reviewed external fixture evidence, or migrations fail closed; the
+operator cutover evidence check also fails closed before worker startup. Real Kalshi
+authentication, signing, WebSockets, and order submission are not part of this
+release.
 
 See [`docs/runtime-operations.md`](docs/runtime-operations.md) for the operator
 runbook and [`docs/adr/0002-kalshi-only-paper-cutover.md`](docs/adr/0002-kalshi-only-paper-cutover.md)

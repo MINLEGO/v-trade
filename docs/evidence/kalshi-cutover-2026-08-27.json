@@ -1,0 +1,113 @@
+{
+  "schema_version": "vtrade-kalshi-cutover-evidence-v1",
+  "release": "vtrade-kalshi-v1",
+  "target": "coolify-paper-observation",
+  "status": "blocked",
+  "recorded_at": "2026-08-26T22:56:28Z",
+  "source_commit": "26a57ab2ae6ac63dd02f6660471e0c0acf079bcd",
+  "migration_chain": [
+    {
+      "position": 1,
+      "name": "0001_foundation_agent_state_ledger.sql",
+      "sha256": "ffe22cb2104688c59cf92f3695b7d6a0927a92ba1f9bb54ed8d5570c917392fc"
+    },
+    {
+      "position": 2,
+      "name": "0002_kalshi_catalogue_and_freezes.sql",
+      "sha256": "6d40e1ff0920c90f573e566b0e7ed0ecb4c0b6feb59c8fdfdc20f6248a19ed25"
+    },
+    {
+      "position": 3,
+      "name": "0003_execution_portfolio_and_settlement.sql",
+      "sha256": "6426fab16e00c177bec9649b5a6a2c7d6da70238e54eabe9408adbfd8e45269a"
+    },
+    {
+      "position": 4,
+      "name": "0004_runtime_audit_and_admin.sql",
+      "sha256": "c7649b6b583ad7572b5cb612f28c1c5665a2ec5b9ab0b549f88791b37434dadf"
+    },
+    {
+      "position": 5,
+      "name": "0005_runtime_pre_settlement_stage.sql",
+      "sha256": "4688434cebcc807b53e17c6570b3600198279e1f0d402385183299893be28f42"
+    },
+    {
+      "position": 6,
+      "name": "0006_monthly_budget_alert_flags.sql",
+      "sha256": "1de375a9fc75e3fbde28c7db68c09980a751b8954e39e5e54e1bbc7058b49ce5"
+    },
+    {
+      "position": 7,
+      "name": "0007_exa_quota_contract.sql",
+      "sha256": "d0c5fc00e2a7905dd17be7375dc794d86ce722359f91f14826fe7c8b7c350490"
+    }
+  ],
+  "artifacts": {
+    "experiment_config_sha256": "bd6da947d2a7d1a1957cb87f8b2d9e8076c2e753aa1ab3838190c8c915620c99",
+    "prompt_sha256": "295fcde71d71c17fc62c0f99591cc2bf4a328561906e7416f56b8903fbb578aa",
+    "tool_schemas_sha256": "448707ae5feb72a2dfe325e813853ce9bb6fc50aa6f8126df9adc339fbe01b96",
+    "compatibility_sha256": "afac41c01cde1507345267b6311c7267123f672709a3ea191c6bd7fce0e6d949",
+    "fixture_manifest_sha256": "6f87bfb388f4497d41c077f1c5d71e3f449985b1af26b461028c5cba73ef54c0"
+  },
+  "image": {
+    "reference": "not_recorded",
+    "sha256": null
+  },
+  "snapshots": {
+    "database": {
+      "status": "not_recorded",
+      "reference": null
+    },
+    "object_storage": {
+      "status": "not_recorded",
+      "reference": null
+    }
+  },
+  "gates": {
+    "offline": {
+      "status": "passed",
+      "observed_at": "2026-08-26T22:56:28Z",
+      "command": "uv run --extra dev python -m vtrade.release_verification",
+      "evidence": "Active paths, seven migrations, frozen artifacts, ready fixture, and offline sweep passed locally."
+    },
+    "postgresql": {
+      "status": "not_recorded",
+      "observed_at": "2026-08-26T22:56:28Z",
+      "command": "VTRADE_RUN_POSTGRES_INTEGRATION=1 uv run --extra dev python -m pytest tests/test_postgres_*.py",
+      "evidence": "The deployment sequence proves the migration service completed before API startup, but no disposable fresh-target apply, rerun, and checksum transcript is retained."
+    },
+    "built_image": {
+      "status": "passed",
+      "observed_at": "2026-08-26T22:56:28Z",
+      "command": "docker build --pull -t vtrade:kalshi-cutover .",
+      "evidence": "The current Coolify deployment finished and started API and worker containers; the immutable image digest was not retained."
+    },
+    "private_resources": {
+      "status": "passed",
+      "observed_at": "2026-08-26T22:56:28Z",
+      "command": "authenticated /health/ready",
+      "evidence": "The API readiness healthcheck became healthy before worker startup, covering PostgreSQL, private storage, and the active runnable configuration."
+    },
+    "provider_egress": {
+      "status": "not_recorded",
+      "observed_at": "2026-08-26T22:56:28Z",
+      "command": "uv run --extra dev python scripts/probe_kalshi_public_rest.py --output <redacted-output>",
+      "evidence": "The reviewed fixture is a prior external baseline; a same-cutover provider-egress transcript is not retained here."
+    },
+    "french_host": {
+      "status": "not_recorded",
+      "observed_at": "2026-08-26T22:56:28Z",
+      "command": "uv run --extra dev python scripts/probe_kalshi_public_rest.py --output <redacted-output>",
+      "evidence": "The reviewed fixture is a prior external baseline; a same-cutover French-host transcript is not retained here."
+    }
+  },
+  "paper_only": {
+    "verified": true,
+    "real_execution": "unreachable"
+  },
+  "rollback": {
+    "mode": "infrastructure_only",
+    "status": "not_recorded",
+    "pre_cutover_snapshot_reference": null
+  }
+}

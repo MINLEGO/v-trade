@@ -33,6 +33,7 @@ dev = [
 vtrade-fixture-ingest = "vtrade.fixtures:main"
 vtrade-bootstrap = "vtrade.bootstrap:main"
 vtrade-release-verify = "vtrade.release_verification:main"
+vtrade-cutover-evidence-verify = "vtrade.cutover_evidence:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/vtrade"]

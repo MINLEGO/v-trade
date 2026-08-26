@@ -299,7 +299,8 @@ def external_validation_matrix() -> tuple[ValidationGate, ...]:
         ValidationGate(
             "French-host public REST probe",
             "french-production-host",
-            "uv run --extra dev python scripts/probe_kalshi_public_rest.py",
+            "uv run --extra dev python scripts/probe_kalshi_public_rest.py "
+            "--output <redacted-output>",
             "real Kalshi REST reachability, pagination, cutoff, binary book, bounded "
             "concurrency, and raw hashes",
         ),

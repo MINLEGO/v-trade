@@ -55,6 +55,16 @@ reconciliation step. Future real execution requires a separate architecture revi
 experiment version, eligibility decision, authentication/signing boundary, and
 reconciliation contract.
 
+## Evidence record
+
+Every staging or cutover attempt writes a redacted record under `docs/evidence/`.
+`vtrade-cutover-evidence-verify` binds the record to the active experiment hashes and
+the exact seven-migration chain. It requires six gates—offline, PostgreSQL,
+built-image, private resources, provider egress, and the intended French host—plus
+both pre-cutover snapshots, an image digest, a paper-only reachability check, and the
+rollback record. A record with any missing or failed item remains `blocked`; it cannot
+authorize worker startup.
+
 ## Consequences
 
 The cutover is intentionally irreversible at the application layer. Operators must
