@@ -268,7 +268,7 @@ class PostgresRuntimeRepository:
                 "SELECT 1 FROM runtime_cycle_steps freeze_step "
                 "WHERE freeze_step.agent_cycle_id = cycles.id "
                 "AND freeze_step.stage = 'market_freeze') "
-                "AND cycles.started_at IS NOT NULL AND cycles.started_at <= %s))"
+                "AND cycles.started_at IS NOT NULL AND cycles.started_at <= %s)))"
             )
             recovery_params = (now, now - stale_after, now - stale_after, limit)
         claims: list[CycleClaim] = []
