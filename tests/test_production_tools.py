@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from vtrade.domain.execution import EconomicFill, OrderRequest, OrderResult
 from vtrade.production_tools import ProductionToolRegistry, _execution_output
@@ -22,6 +23,68 @@ def test_registry_has_exact_schema_parity_for_all_27_names() -> None:
     }
     assert names == expected
     assert len(names) == 27
+
+
+def test_get_orderbook_preserves_the_configured_depth_on_all_four_sides() -> None:
+    cutoff = datetime(2026, 8, 21, 10, 0, tzinfo=UTC)
+    snapshot_id = "snapshot-1"
+    level_rows = tuple(
+        (outcome, book_side, level, 100 * side_index + level, 10 + level)
+        for side_index, (outcome, book_side) in enumerate(
+            (("YES", "bid"), ("YES", "ask"), ("NO", "bid"), ("NO", "ask"))
+        )
+        for level in range(3)
+    )
+    snapshot_row = (
+        snapshot_id,
+        cutoff - timedelta(minutes=1),
+        cutoff - timedelta(minutes=2),
+        cutoff,
+        "artifact-1",
+        "sha256-1",
+        cutoff - timedelta(minutes=1),
+    )
+    context = SimpleNamespace(
+        claim=SimpleNamespace(cycle_id="cycle-1"),
+        cutoff=cutoff,
+        maximum_book_age=timedelta(minutes=5),
+        maximum_order_book_depth=2,
+        maximum_default_result_tokens=4_000,
+        portfolio=lambda _arguments: {},
+    )
+    registry = ProductionToolRegistry(context)  # type: ignore[arg-type]
+
+    def query(sql: str, params: tuple[object, ...]) -> tuple[tuple[object, ...], ...]:
+        if "FROM order_book_snapshots" in sql:
+            return (snapshot_row,)
+        if "FROM order_book_levels" in sql:
+            ordered = tuple(sorted(level_rows, key=lambda row: (row[0], row[1], row[2])))
+            depth = int(params[1])
+            if "ROW_NUMBER() OVER" in sql:
+                return tuple(
+                    row
+                    for key in {row[:2] for row in ordered}
+                    for row in ordered
+                    if row[:2] == key and row[2] < depth
+                )
+            return ordered[:depth]
+        raise AssertionError(f"unexpected query: {sql}")
+
+    with patch.object(registry, "_query", side_effect=query), patch.object(
+        registry, "_fee_policy", return_value=None
+    ):
+        output = registry._get_orderbook({"market_ref": "KXTEST-1"})
+
+    book = output["book"]
+    assert {
+        side: [level["price_micros"] for level in book[side]]
+        for side in ("yes_bids", "yes_asks", "no_bids", "no_asks")
+    } == {
+        "yes_bids": [0, 1],
+        "yes_asks": [100, 101],
+        "no_bids": [200, 201],
+        "no_asks": [300, 301],
+    }
 
 
 def test_order_output_uses_contract_units_prices_fees_and_reconciliation() -> None:

@@ -483,10 +483,14 @@ class ProductionToolRegistry:
                 "canonical order book is older than the configured age limit"
             )
         level_rows = self._query(
+            "WITH ranked_levels AS ("
+            "SELECT outcome_side, book_side, level_index, price_micros, contract_units, "
+            "ROW_NUMBER() OVER (PARTITION BY outcome_side, book_side ORDER BY level_index) "
+            "AS side_level FROM order_book_levels WHERE snapshot_id = %s) "
             "SELECT outcome_side, book_side, level_index, price_micros, contract_units "
-            "FROM order_book_levels WHERE snapshot_id = %s "
-            "ORDER BY outcome_side, book_side, level_index LIMIT %s",
-            (snapshot[0], self._context.maximum_order_book_depth * 4),
+            "FROM ranked_levels WHERE side_level <= %s "
+            "ORDER BY outcome_side, book_side, level_index",
+            (snapshot[0], self._context.maximum_order_book_depth),
         )
         levels: dict[tuple[str, str], list[JsonObject]] = {
             (side, book_side): [] for side in ("YES", "NO") for book_side in ("bid", "ask")
