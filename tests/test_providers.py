@@ -34,6 +34,7 @@ from vtrade.providers import (
 NOW = datetime(2026, 7, 16, 15, 0, tzinfo=UTC)
 DEEPSEEK_MODEL = "deepseek/deepseek-v4-flash-0731"
 LUNA_MODEL = "openai/gpt-5.6-luna"
+GLM_FLASH_MODEL = "z-ai/glm-5.3-flash"
 
 
 class CapturingBudget:
@@ -84,10 +85,16 @@ def model_config(slug: str = DEEPSEEK_MODEL) -> dict:
         "maximum_context_tokens": 100_000,
         "maximum_prompt_tokens": 10_000,
         "maximum_output_tokens": 1_000,
-        "provider_max_price": {"prompt": "0.1", "completion": "0.1", "request": "0"},
+        "provider_max_price": (
+            {"prompt": "0.15", "completion": "0.5", "request": "0"}
+            if slug == GLM_FLASH_MODEL
+            else {"prompt": "0.1", "completion": "0.1", "request": "0"}
+        ),
     }
-    if slug == DEEPSEEK_MODEL:
+    if slug in {DEEPSEEK_MODEL, GLM_FLASH_MODEL}:
         config["allowed_quantizations"] = ["fp8"]
+    if slug == GLM_FLASH_MODEL:
+        config["provider_order"] = ["z-ai"]
     return config
 
 
@@ -174,6 +181,47 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(body["model"], LUNA_MODEL)
         self.assertEqual(body["reasoning"], {"effort": "xhigh"})
         self.assertNotIn("quantizations", body["provider"])
+
+    def test_openrouter_glm_flash_uses_fp8_and_prefers_z_ai(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, content=model_payload(model=GLM_FLASH_MODEL))
+
+        gateway = OpenRouterModelGateway(
+            "secret-key",
+            self.store,
+            self.budget,
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        gateway.complete([], [WEB_SEARCH_TOOL_SCHEMA], model_config(GLM_FLASH_MODEL))
+
+        body = json.loads(requests[0].content)
+        self.assertEqual(body["model"], GLM_FLASH_MODEL)
+        self.assertEqual(body["reasoning"], {"effort": "max"})
+        self.assertEqual(
+            body["provider"],
+            {
+                "quantizations": ["fp8"],
+                "order": ["z-ai"],
+                "sort": "price",
+                "allow_fallbacks": True,
+                "require_parameters": True,
+                "max_price": {"completion": "0.5", "prompt": "0.15", "request": "0"},
+            },
+        )
+
+    def test_openrouter_rejects_glm_flash_policy_drift(self) -> None:
+        for key, value, message in (
+            ("allowed_quantizations", ["fp16"], "model quantizations differ"),
+            ("provider_order", ["novita"], "provider order differs"),
+        ):
+            with self.subTest(key=key):
+                config = model_config(GLM_FLASH_MODEL)
+                config[key] = value
+                with self.assertRaisesRegex(ProviderConfigurationError, message):
+                    OpenRouterRoute.from_config(config)
 
     def test_openrouter_rejects_models_outside_active_set(self) -> None:
         with self.assertRaisesRegex(ProviderConfigurationError, "outside the active model set"):

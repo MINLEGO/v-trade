@@ -1,16 +1,23 @@
 # Active owner decisions
 
-These decisions are frozen for `vtrade-kalshi-v1`. A contract change requires a new
-experiment version and new artifact hashes.
+These decisions are frozen for the current `vtrade-kalshi-v1` revision. This revision
+adds the discovery-metric contract and refreshes the active artifact hashes; a later
+incompatible contract change requires a new experiment version.
 
 - Venue: public unauthenticated Kalshi REST for read-only ingestion.
 - Instrument scope: ordinary binary markets with exactly YES and NO outcomes.
-- Deployment: a fresh empty PostgreSQL database using exactly seven migrations; no
+- Deployment: a fresh empty PostgreSQL database using exactly eight migrations; no
   legacy upgrade, conversion, dual write, or dual venue.
 - Execution: paper-only IOC/FOK using real market data, exact microdollars, exact
   hundredths-of-a-contract quantities, and `best-level-haircut-v1`.
 - Haircut: capture six levels, ignore the best level, retain at least 50% of raw
   depth, and fail closed when the evidence cannot satisfy the floor.
+- Discovery metrics: use the batched Kalshi market-candlestick endpoint at 60-minute
+  intervals over a 48-hour lookback; compare complete recent and baseline 24-hour
+  windows; expose `(recent - baseline) / baseline` as a ten-decimal delta; represent
+  incomplete windows as `insufficient_data`; retain indicative reciprocal-book
+  midpoints; and calculate the bounded competitive heuristic from spread, balanced
+  near-midpoint depth, and `volume_24h_fp` activity.
 - Order boundary: `market_ref`, YES/NO, BUY/SELL, CASH/CONTRACTS, optional limit,
   agent-scoped idempotency, frozen decision context, refreshed execution context,
   lifecycle state, reconciliation state, and audit references.

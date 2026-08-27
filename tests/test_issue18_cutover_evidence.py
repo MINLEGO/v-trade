@@ -18,7 +18,7 @@ def test_recorded_issue18_evidence_is_structurally_valid_and_bound_to_release() 
     evidence = validate_cutover_evidence(EVIDENCE_PATH, root=".")
 
     assert evidence.release == "vtrade-kalshi-v1"
-    assert len(evidence.migration_chain) == 7
+    assert len(evidence.migration_chain) == 8
     assert tuple(evidence.gates) == REQUIRED_GATES
     assert evidence.status == "blocked"
     assert not evidence.ready
@@ -45,5 +45,5 @@ def test_evidence_rejects_a_noncanonical_migration_chain(tmp_path: Path) -> None
     destination = tmp_path / "evidence.json"
     destination.write_text(json.dumps(raw) + "\n", encoding="utf-8", newline="\n")
 
-    with pytest.raises(CutoverEvidenceError, match="canonical seven-file chain"):
+    with pytest.raises(CutoverEvidenceError, match="canonical active chain"):
         validate_cutover_evidence(destination)

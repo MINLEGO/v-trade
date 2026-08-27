@@ -31,6 +31,7 @@ from vtrade.harness import (
     ToolSpec,
 )
 from vtrade.harness_repository import PostgresHarnessRepository
+from vtrade.market_metrics import format_metric_decimal
 from vtrade.portfolio import PostgresContractPortfolioHandler
 from vtrade.providers import ExaResearchProvider
 from vtrade.runtime import CycleClaim
@@ -261,7 +262,7 @@ class ProductionToolRegistry:
             for row in rows
             if _as_int(row[8]) >= minimum_volume and _as_int(row[9]) >= minimum_liquidity
         ]
-        keyword = arguments.get("keyword")
+        keyword = arguments.get("keyword") if name != "search_tags" else None
         keywords = _keywords(keyword)
         if keywords:
             rows = [
@@ -298,14 +299,21 @@ class ProductionToolRegistry:
             minimum_volatility = _nonnegative_int(
                 arguments.get("min_volatility_micros", 0), "min_volatility_micros"
             )
-            rows = [row for row in rows if _row_volatility(row) >= minimum_volatility]
+            rows = [
+                row
+                for row in rows
+                if (value := _row_volatility(row)) is not None and value >= minimum_volatility
+            ]
             rows.sort(
-                key=lambda row: (_row_volatility(row), _as_int(row[8]), str(row[0])), reverse=True
+                key=lambda row: (_row_volatility(row) or -1, _as_int(row[8]), str(row[0])),
+                reverse=True,
             )
         elif name == "discover_by_volume_trend":
             trend = str(arguments.get("trend", "increasing"))
-            if trend not in {"increasing", "decreasing"}:
-                raise ValueError("trend must be increasing or decreasing")
+            if trend not in {"increasing", "decreasing", "flat", "insufficient_data"}:
+                raise ValueError(
+                    "trend must be increasing, decreasing, flat, or insufficient_data"
+                )
             rows = [row for row in rows if _row_trend(row) == trend]
         elif name == "discover_by_competitive_score":
             minimum_score = _decimal(
@@ -314,17 +322,26 @@ class ProductionToolRegistry:
             rows = [
                 row
                 for row in rows
-                if Decimal(str(_market_card(row)["competitive_score"])) >= minimum_score
+                if (
+                    (value := _market_card(row)["competitive_score"]) is not None
+                    and Decimal(str(value)) >= minimum_score
+                )
             ]
             rows.sort(
-                key=lambda row: (Decimal(str(_market_card(row)["competitive_score"])), str(row[0])),
+                key=lambda row: (
+                    Decimal(str(_market_card(row)["competitive_score"] or "-1")),
+                    str(row[0]),
+                ),
                 reverse=True,
             )
         elif name == "search_tags":
+            tag_keywords = _keywords(arguments.get("query"))
             rows = [
                 row
                 for row in rows
-                if any(term in " ".join(_tags(row)).casefold() for term in keywords)
+                if any(
+                    term in {tag.casefold() for tag in _tags(row)} for term in tag_keywords
+                )
             ]
         else:
             rows.sort(
@@ -355,6 +372,10 @@ class ProductionToolRegistry:
                 },
             )
             cast(list[JsonObject], item["markets"]).append(_market_card(row))
+            volume_24h = _row_volume_24h(row)
+            if volume_24h is None:
+                raise ToolContextUnavailable("market metrics lack volume_24h_units")
+            item["volume_24h_units"] = _as_int(item["volume_24h_units"]) + volume_24h
             item["total_volume_units"] = _as_int(item["total_volume_units"]) + _as_int(row[8])
             opened = _iso(row[6])
             current = item["newest_market_open_time"]
@@ -950,16 +971,33 @@ _MARKET_SELECT = (
     "m.eligible, m.tradeable, m.observed_at, m.source_updated_at, m.raw_artifact_id, "
     "ra.sha256, ra.observed_at, COALESCE((SELECT jsonb_agg(jsonb_build_object("
     "'outcome', o.outcome_side, 'label', o.label, 'eligible', o.eligible, "
-    "'indicative_price_micros', NULL) ORDER BY o.outcome_side) FROM outcomes o "
-    "WHERE o.market_id = m.id), '[]'::jsonb), m.resolution_rules "
+    "'indicative_price_micros', CASE WHEN o.outcome_side = 'YES' "
+    "THEN metric.indicative_yes_price_micros ELSE metric.indicative_no_price_micros END) "
+    "ORDER BY o.outcome_side) FROM outcomes o WHERE o.market_id = m.id), '[]'::jsonb), "
+    "m.resolution_rules, metric.volume_24h_units, metric.volatility_micros, "
+    "metric.volume_trend, metric.volume_trend_delta, metric.competitive_score, "
+    "metric.indicative_yes_price_micros, metric.indicative_no_price_micros, "
+    "series_metadata.tags "
     "FROM markets m JOIN series s ON s.id = m.series_id JOIN events e ON e.id = m.event_id "
     "JOIN market_freezes mf ON mf.agent_cycle_id = %s "
     "AND mf.publication_status = 'published' "
     "JOIN frozen_market_states state ON state.freeze_id = mf.id AND state.market_id = m.id "
     "JOIN raw_artifacts ra ON ra.id = m.raw_artifact_id "
+    "LEFT JOIN market_metric_snapshots metric ON metric.freeze_id = mf.id "
+    "AND metric.market_id = m.id "
+    "LEFT JOIN series_metadata_snapshots series_metadata ON series_metadata.freeze_id = mf.id "
+    "AND series_metadata.series_id = s.id "
     "WHERE m.venue = 'kalshi' AND m.kind = 'binary' AND mf.data_cutoff <= %s"
 )
 _MARKET_RESOLUTION_RULES_INDEX = 19
+_MARKET_VOLUME_24H_INDEX = 20
+_MARKET_VOLATILITY_INDEX = 21
+_MARKET_TREND_INDEX = 22
+_MARKET_TREND_DELTA_INDEX = 23
+_MARKET_COMPETITIVE_SCORE_INDEX = 24
+_MARKET_INDICATIVE_YES_INDEX = 25
+_MARKET_INDICATIVE_NO_INDEX = 26
+_MARKET_TAGS_INDEX = 27
 
 
 def _market_card(row: Sequence[object]) -> JsonObject:
@@ -1003,11 +1041,15 @@ def _market_card(row: Sequence[object]) -> JsonObject:
         "open_time": _iso(row[6]),
         "close_time": _iso(row[7]),
         "volume_units": _as_int(row[8]),
+        "volume_24h_units": _row_volume_24h(row),
         "liquidity_micros": _as_int(row[9]),
         "status": str(row[10]).upper(),
         "eligible": bool(row[11]),
         "tradeable": bool(row[12]),
-        "competitive_score": "0",
+        "volatility_micros": _row_volatility(row),
+        "volume_trend": _row_trend(row),
+        "volume_trend_delta": _row_trend_delta(row),
+        "competitive_score": _row_competitive_score(row),
         "tag_names": _tags(row),
         "outcomes": outcomes,
         "audit": _audit(row),
@@ -1023,7 +1065,19 @@ def _audit(row: Sequence[object]) -> JsonObject:
 
 
 def _tags(row: Sequence[object]) -> list[str]:
-    return []
+    value = row[_MARKET_TAGS_INDEX] if len(row) > _MARKET_TAGS_INDEX else None
+    if value is None:
+        return []
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ToolContextUnavailable("series tags are malformed") from exc
+    if not isinstance(value, (list, tuple)):
+        raise ToolContextUnavailable("series tags are malformed")
+    if any(not isinstance(tag, str) or not tag.strip() for tag in value):
+        raise ToolContextUnavailable("series tags are malformed")
+    return [str(tag) for tag in value]
 
 
 def _page(
@@ -1300,12 +1354,55 @@ def _within_hours(value: object, cutoff: datetime, maximum: Decimal) -> bool:
     return Decimal(0) <= remaining <= maximum
 
 
-def _row_volatility(row: Sequence[object]) -> int:
-    return 0
+def _row_value(row: Sequence[object], index: int) -> object | None:
+    return row[index] if len(row) > index else None
 
 
-def _row_trend(row: Sequence[object]) -> str:
-    return "increasing" if _as_int(row[8]) > 0 else "decreasing"
+def _row_volume_24h(row: Sequence[object]) -> int | None:
+    value = _row_value(row, _MARKET_VOLUME_24H_INDEX)
+    if value is None:
+        return None
+    parsed = _as_int(value)
+    if parsed < 0:
+        raise ToolContextUnavailable("market metrics contain negative volume_24h_units")
+    return parsed
+
+
+def _row_volatility(row: Sequence[object]) -> int | None:
+    value = _row_value(row, _MARKET_VOLATILITY_INDEX)
+    if value is None:
+        return None
+    parsed = _as_int(value)
+    if parsed < 0:
+        raise ToolContextUnavailable("market metrics contain negative volatility")
+    return parsed
+
+
+def _row_trend(row: Sequence[object]) -> str | None:
+    value = _row_value(row, _MARKET_TREND_INDEX)
+    if value is None:
+        return None
+    trend = str(value)
+    if trend not in {"increasing", "decreasing", "flat", "insufficient_data"}:
+        raise ToolContextUnavailable("market metrics contain an unknown volume trend")
+    return trend
+
+
+def _row_trend_delta(row: Sequence[object]) -> str | None:
+    value = _row_value(row, _MARKET_TREND_DELTA_INDEX)
+    if value is None:
+        return None
+    return format_metric_decimal(_decimal(value, "volume_trend_delta"))
+
+
+def _row_competitive_score(row: Sequence[object]) -> str | None:
+    value = _row_value(row, _MARKET_COMPETITIVE_SCORE_INDEX)
+    if value is None:
+        return None
+    score = _decimal(value, "competitive_score", minimum=Decimal(0))
+    if score > Decimal(1):
+        raise ToolContextUnavailable("market metrics contain a competitive score above one")
+    return format_metric_decimal(score)
 
 
 def _average_price(gross: object, units: object) -> int:

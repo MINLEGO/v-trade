@@ -168,6 +168,9 @@ Current API fields use fixed-point strings:
 - quantities ending in `_fp` support up to two decimal places and a 0.01-contract minimum;
 - every market publishes `price_ranges`, an array of `{start, end, step}` bands that is the source
   of truth for valid prices;
+- `GET /markets` exposes `volume_24h_fp` separately from cumulative `volume_fp`; the active
+  discovery card preserves the former as exact contract units rather than deriving it from a
+  stale or differently scoped cumulative value;
 - `price_level_structure` is descriptive only and must not drive validation.
 
 Ticks are not globally one cent. Published structures include $0.01, $0.005, $0.002, $0.001, and
@@ -184,6 +187,15 @@ The complementary asks are derived as:
 
 Thus a YES bid at price `x` is a NO ask at `1-x`, and vice versa.
 ([order-book responses](https://docs.kalshi.com/getting_started/orderbook_responses))
+
+The batch market-candlestick endpoint accepts up to 100 comma-separated market tickers
+and returns candlesticks grouped by market. Hourly candles expose a traded `price`
+aggregate, `volume_fp`, and an optional synthetic continuity candle when requested;
+the v1 adapter disables that synthetic candle and uses the 48 real hourly observations
+for freeze-scoped volatility and volume-trend calculations. The resulting competitive
+score uses the two independent YES/NO bid arrays and never double-counts derived asks.
+([batch market candlesticks](https://docs.kalshi.com/api-reference/market/batch-get-market-candlesticks),
+[market candlesticks](https://docs.kalshi.com/api-reference/market/get-market-candlesticks))
 
 The WebSocket order-book stream sends a snapshot followed by sequenced deltas. By default its NO
 levels use NO-leg prices, but `use_yes_price: true` requests a unified YES-price scale. Kalshi says

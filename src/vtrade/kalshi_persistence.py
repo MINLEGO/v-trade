@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -168,6 +169,11 @@ class PostgresKalshiFreezeRepository:
         market_snapshot_ids: list[uuid.UUID] = []
         order_book_snapshot_ids: list[uuid.UUID] = []
         resolution_ids: list[uuid.UUID] = []
+        market_metrics = tuple(getattr(freeze, "market_metrics", ()))
+        if tuple(metric.market_key for metric in market_metrics) != tuple(
+            freeze.discovery_market_keys
+        ):
+            raise ValueError("freeze metrics do not cover the discovery market universe")
 
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
             if deadline is not None:
@@ -331,6 +337,86 @@ class PostgresKalshiFreezeRepository:
             ):
                 raise ValueError("Kalshi freeze idempotency evidence conflicts")
             _check_deadline(deadline, "after freeze publication")
+
+            for series_item in series.values():
+                _check_deadline(deadline, "series metadata snapshot persistence")
+                series_snapshot_id = _stable_id(
+                    "series-metadata-snapshot",
+                    f"{freeze_id}:{series_item.key.canonical}",
+                )
+                cursor.execute(
+                    "INSERT INTO series_metadata_snapshots "
+                    "(id, freeze_id, series_id, tags, observed_at, source_timestamp, "
+                    "cutoff, raw_artifact_id) VALUES "
+                    "(%s, %s, %s, %s::jsonb, %s, NULL, %s, %s) "
+                    "ON CONFLICT (id) DO NOTHING",
+                    (
+                        series_snapshot_id,
+                        freeze_id,
+                        series_item.key.stable_id,
+                        json.dumps(list(series_item.tags), separators=(",", ":")),
+                        _aware(series_item.observed_at),
+                        _aware(freeze.data_cutoff),
+                        self._artifact_id(raw_artifact_ids, series_item.audit),
+                    ),
+                )
+
+            metric_by_key = {metric.market_key: metric for metric in market_metrics}
+            for market_key in sorted(metric_by_key, key=lambda value: value.canonical):
+                _check_deadline(deadline, "market metric persistence")
+                metric = metric_by_key[market_key]
+                if market_key not in market_ids:
+                    raise ValueError(
+                        "market metric is absent from the persisted freeze: "
+                        f"{market_key.market_ref}"
+                    )
+                metric_id = _stable_id(
+                    "market-metric-snapshot",
+                    f"{freeze_id}:{market_key.canonical}",
+                )
+                cursor.execute(
+                    "INSERT INTO market_metric_snapshots "
+                    "(id, freeze_id, market_id, volume_24h_units, volatility_micros, "
+                    "volume_trend, volume_trend_delta, competitive_score, "
+                    "indicative_yes_price_micros, indicative_no_price_micros, "
+                    "recent_volume_units, baseline_volume_units, volatility_sample_count, "
+                    "recent_bucket_count, baseline_bucket_count, as_of_at, formula_version, "
+                    "cutoff) VALUES "
+                    "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                    "ON CONFLICT (id) DO NOTHING",
+                    (
+                        metric_id,
+                        freeze_id,
+                        market_ids[market_key],
+                        metric.volume_24h_units,
+                        metric.volatility_micros,
+                        metric.volume_trend,
+                        metric.volume_trend_delta,
+                        metric.competitive_score,
+                        metric.indicative_yes_price_micros,
+                        metric.indicative_no_price_micros,
+                        metric.recent_volume_units,
+                        metric.baseline_volume_units,
+                        metric.volatility_sample_count,
+                        metric.recent_bucket_count,
+                        metric.baseline_bucket_count,
+                        _aware(metric.as_of_at),
+                        metric.formula_version,
+                        _aware(freeze.data_cutoff),
+                    ),
+                )
+                for artifact_index, artifact in enumerate(metric.source_artifacts):
+                    _check_deadline(deadline, "market metric artifact persistence")
+                    cursor.execute(
+                        "INSERT INTO market_metric_snapshot_artifacts "
+                        "(metric_snapshot_id, raw_artifact_id, artifact_role) "
+                        "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+                        (
+                            metric_id,
+                            self._artifact_id(raw_artifact_ids, artifact),
+                            f"source_{artifact_index}",
+                        ),
+                    )
 
             discovery_keys = {context.market.key for context in freeze.contexts}
             memberships = (

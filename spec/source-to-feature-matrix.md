@@ -13,6 +13,8 @@ or runtime input.
 | Reciprocal canonical order book | vtrade_deviation | `build_canonical_order_book` and adapter tests |
 | Complete opaque-cursor catalogue traversal | vtrade_deviation | public REST adapter tests and probe script |
 | Live/historical routing and cutoff causality | vtrade_deviation | adapter and fixture-manifest checks |
+| Freeze-scoped market metrics | vtrade_deviation | `market_metrics.py`, batched candlestick capture, metric persistence |
+| `volume_24h_fp` and exact series tags | vtrade_deviation | Kalshi normalization and series metadata snapshots |
 | Six-level best-level haircut | vtrade_deviation | `best-level-haircut-v1` audit and floor tests |
 | IOC/FOK semantic paper order | vtrade_deviation | order request/result and execution tests |
 | Exact fee rounding and cent alignment | vtrade_deviation | fee policy and calculation tests |
@@ -24,5 +26,5 @@ or runtime input.
 | Content-addressed raw evidence | inferred | artifact and fixture manifest validation |
 | Paper-only real-data simulation | owner decision | active configuration and disabled real adapter |
 
-Every active row is subject to the seven-migration persistence boundary, frozen artifact
+Every active row is subject to the eight-migration persistence boundary, frozen artifact
 hashes, the active-venue sweep, and the external evidence gates in the release matrix.

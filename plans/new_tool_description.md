@@ -119,7 +119,10 @@ The tool rejects missing, causally invalid or stale books. A missing or rejected
 
 **Proposed description**
 
-Find open, tradeable markets whose recorded price volatility is at least `min_volatility`. Volatility is currently defined as the larger absolute value of the recorded one-hour and one-day price changes.
+Find open, tradeable markets whose recorder price volatility is at
+least `min_volatility_micros`. Volatility is the sample standard deviation of available
+consecutive hourly close changes in the recent 24-hour window; missing or insufficient
+price observations are not converted to zero.
 
 Results are ordered by volatility magnitude descending, then by total market volume.
 
@@ -159,9 +162,12 @@ Results are ordered primarily by total historical volume and liquidity. Use this
 
 **Proposed description**
 
-Find open, tradeable markets whose volume trend is classified as `increasing` or `decreasing`. The current classification compares the market’s 24-hour volume with one seventh of its recorded one-week volume.
+Find open, tradeable markets whose volume trend is classified as `increasing`,
+`decreasing`, `flat`, or `insufficient_data`. The current classification compares two
+complete consecutive 24-hour windows from hourly market candlesticks and exposes
+`volume_trend_delta = (recent - baseline) / baseline` when the baseline is non-zero.
 
-A market is classified as increasing when its latest 24-hour volume is at least its average daily volume over the recorded week; otherwise it is classified as decreasing.
+A market is classified by comparing the two windows. If either required window is incomplete, the classification is `insufficient_data`; a zero baseline leaves the trend valid but the delta null.
 
 ---
 
@@ -169,9 +175,13 @@ A market is classified as increasing when its latest 24-hour volume is at least 
 
 **Proposed description**
 
-Find open, tradeable markets whose metadata `competitive` score is at least `min_score`.
+Find open, tradeable markets whose competitive score is at least
+`min_score`.
 
-The competitive score is supplied by the market-data source and should be treated as a discovery heuristic rather than a probability or expected-value estimate. Results are ordered by competitive score descending, then by total market volume.
+The score is a bounded Kalshi-native discovery heuristic combining reciprocal-book
+spread, balanced near-midpoint depth, and `volume_24h_fp` activity. It should be
+treated as a discovery heuristic rather than a probability or expected-value estimate.
+Results are ordered by score descending, then by total market volume.
 
 ---
 
@@ -187,7 +197,8 @@ Find open, tradeable markets whose `closes_at` calendar date falls within the in
 
 **Proposed description**
 
-Search open, tradeable markets using a case-insensitive text query over their associated tags. Use this tool to locate markets associated with a topic, category, label or tag that may not be easy to find through event names alone.
+Search open, tradeable markets using exact case-insensitive membership over their associated tags. Use this tool to locate markets associated with
+a topic, category, label or tag that may not be easy to find through event names alone.
 
 Results are ordered primarily by total market volume. Returned cards are summaries and must be followed by `get_market_details` and, when trading, `get_orderbook`.
 

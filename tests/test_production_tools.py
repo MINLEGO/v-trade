@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -108,8 +109,29 @@ def test_get_market_details_returns_resolution_rules_not_question() -> None:
         "artifact-1",
         "sha256-1",
         cutoff - timedelta(minutes=1),
-        [],
+        [
+            {
+                "outcome": "YES",
+                "label": "YES",
+                "eligible": True,
+                "indicative_price_micros": 425_000,
+            },
+            {
+                "outcome": "NO",
+                "label": "NO",
+                "eligible": True,
+                "indicative_price_micros": 575_000,
+            },
+        ],
         "Resolve from the official source, as defined by the market rules.",
+        567,
+        12_345,
+        "increasing",
+        Decimal("0.0200000000"),
+        Decimal("0.8000000000"),
+        425_000,
+        575_000,
+        '["Macro", "Test"]',
     )
     context = SimpleNamespace(
         claim=SimpleNamespace(cycle_id="cycle-1"),
@@ -132,6 +154,64 @@ def test_get_market_details_returns_resolution_rules_not_question() -> None:
     assert output["resolution_rules"] == (
         "Resolve from the official source, as defined by the market rules."
     )
+    assert output["market"]["volume_24h_units"] == 567
+    assert output["market"]["volatility_micros"] == 12_345
+    assert output["market"]["volume_trend"] == "increasing"
+    assert output["market"]["volume_trend_delta"] == "0.0200000000"
+    assert output["market"]["competitive_score"] == "0.8000000000"
+    assert output["market"]["tag_names"] == ["Macro", "Test"]
+    assert {
+        item["outcome"]: item["indicative_price_micros"]
+        for item in output["market"]["outcomes"]
+    } == {"YES": 425_000, "NO": 575_000}
+
+
+def test_search_tags_uses_exact_case_insensitive_membership() -> None:
+    cutoff = datetime(2026, 8, 21, 10, 0, tzinfo=UTC)
+    context = SimpleNamespace(
+        claim=SimpleNamespace(cycle_id="cycle-1"),
+        cutoff=cutoff,
+        maximum_default_result_tokens=4_000,
+        portfolio=lambda _arguments: {},
+    )
+    registry = ProductionToolRegistry(context)  # type: ignore[arg-type]
+    common = (
+        "KXTEST-1",
+        "SERIES-1",
+        "EVENT-1",
+        "Event title",
+        "category",
+        "Question",
+        cutoff - timedelta(days=1),
+        cutoff + timedelta(days=1),
+        100,
+        100,
+        "active",
+        True,
+        True,
+        cutoff,
+        cutoff,
+        "artifact-1",
+        "a" * 64,
+        cutoff,
+        [],
+        "Rules",
+        50,
+        100,
+        "flat",
+        None,
+        Decimal("0.5000000000"),
+        500_000,
+        500_000,
+    )
+    exact = (*common, '["Macro"]')
+    substring_only = (*common[:0], "KXTEST-2", *common[1:], '["Macroeconomics"]')
+
+    filtered = registry._filter_market_rows(
+        "search_tags", [exact, substring_only], {"query": "macro"}
+    )
+
+    assert [row[0] for row in filtered] == ["KXTEST-1"]
 
 
 def test_order_output_uses_contract_units_prices_fees_and_reconciliation() -> None:

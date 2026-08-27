@@ -48,7 +48,9 @@ from vtrade.domain.types import (
     build_canonical_order_book,
     to_contract_quantity,
     to_money_micros,
+    to_price_micros,
 )
+from vtrade.market_metrics import MarketCandlestick, MarketCandlestickBatch
 
 KALSHI_PUBLIC_REST_ROOT = "https://external-api.kalshi.com/trade-api/v2"
 KALSHI_SCHEMA_VERSION = "vtrade-binary-market-v1"
@@ -329,6 +331,20 @@ def _resolution_source(payload: Mapping[str, Any]) -> str | None:
     return "\n".join(sources) if sources else None
 
 
+def _series_tags(payload: Mapping[str, Any]) -> tuple[str, ...]:
+    value = payload.get("tags")
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple)):
+        raise KalshiPayloadError("series tags must be an array")
+    tags: list[str] = []
+    for index, tag in enumerate(value):
+        if not isinstance(tag, str) or not tag.strip():
+            raise KalshiPayloadError(f"series tags[{index}] must be a non-empty string")
+        tags.append(tag)
+    return tuple(tags)
+
+
 def _root(payload: object, label: str = "response") -> Mapping[str, Any]:
     if not isinstance(payload, Mapping) or any(not isinstance(key, str) for key in payload):
         raise KalshiPayloadError(f"{label} must be a JSON object")
@@ -372,6 +388,24 @@ def _resolution_timestamp(payload: Mapping[str, Any]) -> datetime | None:
 def _check_cutoff(value: datetime | None, cutoff: datetime | None, field: str) -> None:
     if value is not None and cutoff is not None and _aware(value, field) > _aware(cutoff, "cutoff"):
         raise KalshiLookAheadError(f"{field} is newer than the requested cutoff")
+
+
+def _optional_price_micros(
+    payload: Mapping[str, Any], fields: Sequence[str], label: str
+) -> int | None:
+    values = [
+        payload[field]
+        for field in fields
+        if field in payload and payload[field] not in (None, "")
+    ]
+    if not values:
+        return None
+    if len(values) > 1 and values[0] != values[1]:
+        raise KalshiPayloadError(f"{label} has conflicting aliases")
+    try:
+        return int(to_price_micros(values[0], field=label))
+    except ValueError as exc:
+        raise KalshiPayloadError(str(exc)) from exc
 
 
 def _artifact_from_reference(
@@ -423,7 +457,7 @@ def _artifact_from_reference(
 
 
 class KalshiPublicRestAdapter:
-    """Deep public REST adapter implementing the three semantic data ports."""
+    """Deep public REST adapter implementing catalogue, context, resolution, and metric ports."""
 
     def __init__(
         self,
@@ -1002,13 +1036,10 @@ class KalshiPublicRestAdapter:
                 label="series ticker",
             )
             assert series_ref is not None
-        series_metadata: Mapping[str, Any] | None = None
-        series_archived: _ArchivedResponse | None = None
-        if event_metadata is not None:
-            deadline.check()
-            series_metadata, series_archived = self._fetch_series_metadata(
-                series_ref, deadline=deadline
-            )
+        deadline.check()
+        series_metadata, series_archived = self._fetch_series_metadata(
+            series_ref, deadline=deadline
+        )
         market = self._normalize_market(
             payload,
             archived,
@@ -1080,6 +1111,130 @@ class KalshiPublicRestAdapter:
         cached = (payload, archived)
         self._series_metadata_cache[series_ref] = cached
         return cached
+
+    def get_market_candlesticks(
+        self,
+        market_keys: Sequence[MarketKey],
+        *,
+        start: datetime,
+        end: datetime,
+        period_interval_minutes: int = 60,
+        deadline: float | None = None,
+    ) -> tuple[MarketCandlestickBatch, ...]:
+        """Fetch complete, auditable candle batches for selected active markets."""
+
+        requested = tuple(market_keys)
+        if len(set(requested)) != len(requested):
+            raise ValueError("candlestick request contains duplicate market identities")
+        if not requested:
+            return ()
+        start = _aware(start, "candlestick start")
+        end = _aware(end, "candlestick end")
+        if start >= end:
+            raise ValueError("candlestick start must be before end")
+        if period_interval_minutes not in {1, 60, 1440}:
+            raise ValueError("candlestick interval must be 1, 60, or 1440 minutes")
+        operation_deadline = self._deadline(deadline)
+        batches: dict[MarketKey, MarketCandlestickBatch] = {}
+        for offset in range(0, len(requested), 100):
+            operation_deadline.check()
+            chunk = requested[offset : offset + 100]
+            params = {
+                "market_tickers": ",".join(item.market_ref for item in chunk),
+                "start_ts": str(int(start.timestamp())),
+                "end_ts": str(int(end.timestamp())),
+                "period_interval": str(period_interval_minutes),
+                "include_latest_before_start": "false",
+            }
+            archived = self._request("/markets/candlesticks", params, deadline=operation_deadline)
+            _check_cutoff(archived.observed_at, end, "candlestick observation")
+            root = _root(archived.payload)
+            values = root.get("markets")
+            if not isinstance(values, list):
+                raise KalshiPayloadError("market candlesticks response lacks a markets array")
+            expected = set(chunk)
+            returned: set[MarketKey] = set()
+            for index, value in enumerate(values):
+                item = _root(value, f"markets[{index}]")
+                market_ref = _first_string(
+                    item,
+                    ("market_ticker", "ticker", "market_ref"),
+                    label=f"markets[{index}] ticker",
+                )
+                assert market_ref is not None
+                key = MarketKey(market_ref)
+                if key not in expected or key in returned:
+                    raise KalshiPayloadError(
+                        "market candlesticks response has an unexpected ticker"
+                    )
+                returned.add(key)
+                raw_candles = item.get("candlesticks")
+                if not isinstance(raw_candles, list):
+                    raise KalshiPayloadError(
+                        f"market candlesticks for {market_ref} lacks a candlesticks array"
+                    )
+                parsed: list[MarketCandlestick] = []
+                for candle_index, raw_candle in enumerate(raw_candles):
+                    candle = _root(raw_candle, f"{market_ref}.candlesticks[{candle_index}]")
+                    end_period = _parse_timestamp(
+                        candle.get("end_period_ts"),
+                        f"{market_ref}.candlesticks[{candle_index}].end_period_ts",
+                    )
+                    if end_period is None:
+                        raise KalshiPayloadError("candlestick end_period_ts is required")
+                    end_period = _aware(end_period, "candlestick end_period_ts")
+                    if end_period > archived.observed_at:
+                        raise KalshiLookAheadError(
+                            "candlestick end_period_ts is newer than local observation "
+                            f"for {market_ref}"
+                        )
+                    if end_period < start or end_period > end:
+                        raise KalshiLookAheadError(
+                            "candlestick end_period_ts is outside the requested range "
+                            f"for {market_ref}"
+                        )
+                    price_value = candle.get("price")
+                    price = (
+                        _root(price_value, f"{market_ref}.candlestick.price")
+                        if price_value is not None
+                        else {}
+                    )
+                    if "volume_fp" in candle:
+                        volume_value = candle["volume_fp"]
+                    elif "volume" in candle:
+                        volume_value = candle["volume"]
+                    else:
+                        raise KalshiPayloadError("candlestick volume_fp is required")
+                    try:
+                        volume_units = int(
+                            to_contract_quantity(volume_value, field="candlestick volume_fp")
+                        )
+                    except ValueError as exc:
+                        raise KalshiPayloadError(str(exc)) from exc
+                    close_price = _optional_price_micros(
+                        price,
+                        ("close_dollars", "close"),
+                        "candlestick close price",
+                    )
+                    previous_price = _optional_price_micros(
+                        price,
+                        ("previous_dollars", "previous"),
+                        "candlestick previous price",
+                    )
+                    parsed.append(
+                        MarketCandlestick(
+                            end_period,
+                            close_price,
+                            previous_price,
+                            volume_units,
+                            synthetic=close_price is None and previous_price is not None,
+                        )
+                    )
+                batches[key] = MarketCandlestickBatch(key, tuple(parsed), archived.artifact)
+            if returned != expected:
+                raise KalshiPayloadError("market candlesticks response omitted a requested ticker")
+        operation_deadline.check()
+        return tuple(batches[key] for key in requested)
 
     def _remember_market(self, market: BinaryMarket) -> None:
         previous = self._market_cache.get(market.key)
@@ -1206,6 +1361,12 @@ class KalshiPublicRestAdapter:
             volume = to_contract_quantity(volume_raw, field="volume_fp")
         except ValueError as exc:
             raise KalshiPayloadError(str(exc)) from exc
+        if "volume_24h_fp" not in payload:
+            raise KalshiPayloadError("volume_24h_fp is required")
+        try:
+            volume_24h = to_contract_quantity(payload["volume_24h_fp"], field="volume_24h_fp")
+        except ValueError as exc:
+            raise KalshiPayloadError(str(exc)) from exc
         try:
             liquidity = to_money_micros(liquidity_raw, field="liquidity_dollars")
         except ValueError as exc:
@@ -1235,6 +1396,7 @@ class KalshiPublicRestAdapter:
             source_updated,
             ContractQuantity(int(volume)),
             MoneyMicros(int(liquidity)),
+            ContractQuantity(int(volume_24h)),
         )
 
     @staticmethod
@@ -1287,6 +1449,7 @@ class KalshiPublicRestAdapter:
             rules,
             metadata_archived.observed_at if metadata_archived else archived.observed_at,
             metadata_archived.artifact if metadata_archived else archived.artifact,
+            _series_tags(source),
         )
 
     def _market_path(self, market: BinaryMarket, historical_cutoff: HistoricalCutoff) -> str:
@@ -1561,7 +1724,14 @@ class KalshiPublicRestAdapter:
             payload, ("rules_primary", "rules"), label="series rules", required=False
         )
         assert title is not None
-        return Series(series_key, title, rules, archived.observed_at, archived.artifact)
+        return Series(
+            series_key,
+            title,
+            rules,
+            archived.observed_at,
+            archived.artifact,
+            _series_tags(payload),
+        )
 
 
 # Names used by the implementation notes and by callers that prefer the

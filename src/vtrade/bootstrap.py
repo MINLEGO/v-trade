@@ -396,6 +396,7 @@ class PostgresExperimentBootstrap:
             "cross_model_fallback",
             "provider_max_price",
             "allowed_quantizations",
+            "provider_order",
         }
         provider_policy = {key: model[key] for key in sorted(policy_keys) if key in model}
         parameters = {key: value for key, value in model.items() if key not in policy_keys}

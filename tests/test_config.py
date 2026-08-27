@@ -24,6 +24,28 @@ def test_active_configuration_is_kalshi_paper_only() -> None:
     assert config.raw["fixtures"]["manifest_path"] == "spec/fixtures/kalshi/manifest.json"
 
 
+def test_active_configuration_exposes_all_three_model_routes() -> None:
+    config = load_experiment_config(ACTIVE_CONFIG)
+    models = {model["slug"]: model for model in config.raw["models"]}
+
+    assert set(models) == {
+        "deepseek/deepseek-v4-flash-0731",
+        "openai/gpt-5.6-luna",
+        "z-ai/glm-5.3-flash",
+    }
+    glm = models["z-ai/glm-5.3-flash"]
+    assert glm["label"] == "GLM 5.3 Flash"
+    assert glm["maximum_quantization_bits"] == 8
+    assert glm["allowed_quantizations"] == ["fp8"]
+    assert glm["provider_max_price"] == {
+        "prompt": "0.15",
+        "completion": "0.5",
+        "request": "0",
+    }
+    assert glm["estimated_max_cost_micros"] == 19_200
+    assert glm["provider_order"] == ["z-ai"]
+
+
 def test_active_configuration_accepts_the_reviewed_fixture_gate() -> None:
     config = load_experiment_config(ACTIVE_CONFIG)
     config.assert_runnable()

@@ -3,7 +3,7 @@
 ## Deployment sequence
 
 The target is a fresh empty PostgreSQL database. The image contains only the active
-configuration, seven migrations, Kalshi fixture manifest, and frozen tool/prompt
+configuration, eight migrations, Kalshi fixture manifest, and frozen tool/prompt
 contracts. Coolify starts one migration job, then the API, then the worker after the
 API's authenticated readiness check is healthy:
 
@@ -34,7 +34,7 @@ docker build --pull -t vtrade:kalshi-cutover .
 
 These commands prove repository and image shape only. A real disposable PostgreSQL
 run, private object-storage readiness, built-image startup, and the French-host
-public REST probe remain separate evidence gates. The evidence record must be checked
+public REST and market-candlestick probes remain separate evidence gates. The evidence record must be checked
 with `--require-ready` before starting the worker on a fresh target.
 
 ## Health boundaries
@@ -92,7 +92,7 @@ uv run --extra dev python scripts/verify_kalshi_cutover_evidence.py --require-re
 
 The probe is read-only and credential-free. It captures public catalogue pages with
 complete opaque-cursor traversal, event/series metadata, historical cutoff, an
-ordinary binary order book, bounded concurrency observations, raw bytes, redacted
+ordinary binary order book, market candlesticks, bounded concurrency observations, raw bytes, redacted
 headers, and SHA-256 evidence. Geographic or payload failures block cutover and
 must not be replaced by a proxy, VPN, old capture, or local mock.
 
@@ -102,7 +102,7 @@ Record redacted command output and immutable references in
 `docs/evidence/kalshi-cutover-YYYY-MM-DD.json`. The record is blocked until it
 contains the six gates (`offline`, `postgresql`, `built_image`, `private_resources`,
 `provider_egress`, and `french_host`), database/object-storage snapshots, the image
-digest, the active artifact and seven-migration hashes, the paper-only reachability
+digest, the active artifact and eight-migration hashes, the paper-only reachability
 check, and the infrastructure-only rollback record. Never place credentials,
 connection strings, private URLs, or raw authorization headers in the record.
 

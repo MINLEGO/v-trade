@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -54,9 +54,31 @@ def market_payload(
         "yes_sub_title": "YES",
         "no_sub_title": "NO",
         "volume_fp": "12.34",
+        "volume_24h_fp": "5.67",
         "liquidity_dollars": "12.50",
         "result": None,
     }
+
+
+def candlestick_payload(
+    request: httpx.Request, market_ref: str = "KXTEST-1"
+) -> dict[str, object]:
+    start = int(request.url.params["start_ts"])
+    candles = []
+    for index in range(48):
+        end_period = start + (index + 1) * 60 * 60
+        close = 0.40 + (index % 4) * 0.01
+        candles.append(
+            {
+                "end_period_ts": end_period,
+                "price": {
+                    "close_dollars": f"{close:.2f}",
+                    "previous_dollars": f"{close:.2f}",
+                },
+                "volume_fp": "1.00" if index < 24 else "2.00",
+            }
+        )
+    return {"markets": [{"market_ticker": market_ref, "candlesticks": candles}]}
 
 
 class Replay:
@@ -101,6 +123,20 @@ class Replay:
                 request,
                 {"orderbook_fp": {"yes_dollars": [], "no_dollars": []}},
             )
+        if path == "/series/KX":
+            return self.response(
+                request,
+                {
+                    "series": {
+                        "ticker": "KX",
+                        "title": "Test series",
+                        "rules_primary": "Series rules",
+                        "tags": ["macro", "test"],
+                    }
+                },
+            )
+        if path == "/markets/candlesticks":
+            return self.response(request, candlestick_payload(request))
         if path == "/markets/KXTEST-1":
             return self.response(request, market_payload())
         if path == "/markets/KXTEST-2":
@@ -200,6 +236,11 @@ class KalshiDomainTests(unittest.TestCase):
             snapshot = adapter.sync_catalogue(cutoff=NOW)
             self.assertEqual(len(snapshot.pages), 2)
             context = adapter.get_context(MarketKey("KXTEST-1"), cutoff=NOW)
+            batches = adapter.get_market_candlesticks(
+                (MarketKey("KXTEST-1"),),
+                start=NOW - timedelta(hours=48),
+                end=NOW,
+            )
             self.assertEqual(context.order_book.best_bid(OutcomeSide.YES).price, 420_000)
             self.assertEqual(context.order_book.best_ask(OutcomeSide.YES).price, 440_000)
             self.assertEqual(context.order_book.best_ask(OutcomeSide.YES).quantity, 200)
@@ -211,7 +252,12 @@ class KalshiDomainTests(unittest.TestCase):
             self.assertEqual(context.market.question, "Question KXTEST-1")
             self.assertEqual(context.market.resolution_rules, "Resolve from the official source.")
             self.assertEqual(context.market.volume, 1234)
+            self.assertEqual(context.market.volume_24h, 567)
             self.assertEqual(context.market.liquidity_micros, 12_500_000)
+            self.assertEqual(snapshot.pages[0].series[0].tags, ("macro", "test"))
+            self.assertEqual(len(batches), 1)
+            self.assertEqual(len(batches[0].candlesticks), 48)
+            self.assertEqual(batches[0].candlesticks[-1].end_period, NOW)
 
     def test_repeated_cursor_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -401,6 +447,12 @@ class KalshiDomainTests(unittest.TestCase):
                 tuple(context.market.key for context in freeze.contexts),
                 freeze.discovery_market_keys,
             )
+            self.assertEqual(len(freeze.market_metrics), 1)
+            metric = freeze.market_metrics[0]
+            self.assertEqual(metric.volume_24h_units, 567)
+            self.assertEqual(metric.volume_trend, "increasing")
+            self.assertEqual(metric.volume_trend_delta, 1)
+            self.assertIsNotNone(metric.competitive_score)
             self.assertTrue(freeze.artifacts)
 
     def test_large_catalogue_scan_keeps_only_global_top_k_and_selected_metadata(self) -> None:

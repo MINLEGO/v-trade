@@ -18,6 +18,11 @@ from vtrade.domain.types import (
     RawArtifact,
     ResolutionObservation,
 )
+from vtrade.market_metrics import (
+    MarketCandlestickBatch,
+    MarketMetricSnapshot,
+    calculate_market_metrics,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -60,6 +65,7 @@ class KalshiMarketFreeze:
     resolutions: tuple[ResolutionObservation, ...]
     data_cutoff: datetime
     artifacts: tuple[RawArtifact, ...]
+    market_metrics: tuple[MarketMetricSnapshot, ...] = ()
 
     def __post_init__(self) -> None:
         if self.data_cutoff.tzinfo is None or self.data_cutoff.utcoffset() is None:
@@ -67,6 +73,9 @@ class KalshiMarketFreeze:
         context_keys = tuple(context.market.key for context in self.contexts)
         if context_keys != self.discovery_market_keys:
             raise ValueError("freeze context order/membership is incomplete")
+        metric_keys = tuple(metric.market_key for metric in self.market_metrics)
+        if metric_keys != self.discovery_market_keys:
+            raise ValueError("freeze metric order/membership is incomplete")
         if any(
             observation.observed_at > self.data_cutoff
             or (
@@ -102,6 +111,16 @@ class _KalshiFreezeVenue(Protocol):
         cutoff: datetime,
         deadline: float | None = None,
     ) -> tuple[ResolutionObservation, ...]: ...
+
+    def get_market_candlesticks(
+        self,
+        market_keys: Sequence[MarketKey],
+        *,
+        start: datetime,
+        end: datetime,
+        period_interval_minutes: int = 60,
+        deadline: float | None = None,
+    ) -> tuple[MarketCandlestickBatch, ...]: ...
 
 
 class KalshiMarketFreezeService:
@@ -157,6 +176,25 @@ class KalshiMarketFreezeService:
         discovery_keys = catalogue.discovery_market_keys
         context_keys = tuple(key for key in discovery_keys if key in by_key)
         contexts = self._read_contexts(context_keys, operation_cutoff, freeze_deadline)
+        metric_cutoff = self._aware(
+            freeze_request.cutoff or operation_cutoff, "metric request cutoff"
+        )
+        self._check_deadline(freeze_deadline, "before candlestick reads")
+        candle_batches = (
+            self._venue.get_market_candlesticks(
+                context_keys,
+                start=metric_cutoff - timedelta(hours=48),
+                end=metric_cutoff,
+                period_interval_minutes=60,
+                deadline=freeze_deadline,
+            )
+            if context_keys
+            else ()
+        )
+        self._check_deadline(freeze_deadline, "after candlestick reads")
+        candles_by_key = {batch.market_key: batch for batch in candle_batches}
+        if set(candles_by_key) != set(context_keys):
+            raise RuntimeError("candlestick reads are incomplete for the discovery universe")
         resolution_keys = tuple(
             dict.fromkeys(
                 (
@@ -188,6 +226,15 @@ class KalshiMarketFreezeService:
             )
             for context in contexts
         )
+        market_metrics = tuple(
+            calculate_market_metrics(
+                context.market,
+                context.order_book,
+                candles_by_key[context.market.key],
+                data_cutoff=data_cutoff,
+            )
+            for context in finalized_contexts
+        )
         for context in finalized_contexts:
             if (
                 context.order_book.observed_at > data_cutoff
@@ -200,6 +247,7 @@ class KalshiMarketFreezeService:
             catalogue,
             finalized_contexts,
             resolutions,
+            market_metrics,
             extra=(cutoff_artifact,) if cutoff_artifact is not None else (),
         )
         result = KalshiMarketFreeze(
@@ -210,6 +258,7 @@ class KalshiMarketFreezeService:
             resolutions,
             data_cutoff,
             artifacts,
+            market_metrics,
         )
         _LOGGER.info(
             "market_freeze stage_boundary event=venue_complete pages=%s "
@@ -276,6 +325,7 @@ class KalshiMarketFreezeService:
         catalogue: CatalogueScanResult,
         contexts: Sequence[MarketContext],
         resolutions: Sequence[ResolutionObservation],
+        market_metrics: Sequence[MarketMetricSnapshot],
         *,
         extra: Sequence[RawArtifact] = (),
     ) -> tuple[RawArtifact, ...]:
@@ -285,6 +335,9 @@ class KalshiMarketFreezeService:
         values.extend(market.audit for market in catalogue.markets)
         values.extend(context.market.audit for context in contexts)
         values.extend(context.order_book.artifact for context in contexts)
+        values.extend(
+            artifact for metric in market_metrics for artifact in metric.source_artifacts
+        )
         values.extend(observation.audit for observation in resolutions)
         unique: dict[str, RawArtifact] = {}
         for artifact in values:

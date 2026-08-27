@@ -11,6 +11,7 @@ These are implementation-ready V-Trade defaults. Values described as recommendat
 | --- | --- |
 | Catalogue | Use `GET /markets?status=open&mve_filter=exclude&limit=1000` as the authoritative active-market scan. Locally normalize the returned open market to `active`, validate the ordinary binary YES/NO contract from its documented fields, and reject multivariate/scalar inputs; use `ticker` as the stable identity. Do not invent or parse a ticker-derived market type. `mve_filter=exclude` removes multivariate markets. |
 | Supporting metadata | Use `GET /events` only for event metadata, with `status=open`, `with_nested_markets=false`, and `limit=200`; do not use event membership as the market universe because event status is derived from child markets. Fetch `GET /series/{series_ticker}` on demand for series rules/tags. |
+| Discovery metrics | Capture batch `GET /markets/candlesticks` data at 60-minute intervals over 48 hours for the bounded discovery set. Compare complete recent and preceding 24-hour windows; use `volume_24h_fp` for current 24-hour volume; calculate volatility from consecutive hourly closes; and persist `insufficient_data` instead of fabricating a zero when a required window is incomplete. |
 | Historical boundary | Read `GET /historical/cutoff` during every freeze. Route settled markets older than `market_settled_ts` to `GET /historical/markets`; do not expect them from live `/markets`. |
 | Pages and cursors | Request the documented maxima: 1,000 markets/page and 200 events/page. Follow every returned cursor until it is empty. Do not add a smaller numeric page cap; bound traversal by the freeze deadline, reject a repeated cursor or malformed/duplicate page, and fail closed if the chain cannot finish. |
 | Poll/cache cadence | Recommended defaults: one shared full-catalogue refresh at most once per 60 seconds; catalogue cache TTL 60 seconds; event/series metadata TTL 300 seconds. `min_updated_ts` is for metadata polling, not a replacement for the active `/markets` scan because Kalshi documents it as non-trading metadata change tracking. Orderbooks have no cross-cycle cache; reuse one response only within the same freeze. |
@@ -35,6 +36,18 @@ active held markets
 
 Books are fetched only for that active union. Resolution synchronization remains separate and must continue for all known held/touched markets, using live or historical endpoints according to Kalshi's moving cutoff.
 
+## Metric contract
+
+The active v1 metric formula is `kalshi-market-metrics-v1`. Each selected market gets a
+freeze-scoped snapshot backed by its market row, reciprocal book, and candle response.
+`volume_trend_delta` is `(recent_volume - baseline_volume) / baseline_volume`, rendered
+with ten decimal places; a zero baseline keeps the qualitative trend but produces a null
+delta. Volatility is the sample standard deviation, in microdollars, of available
+consecutive hourly close changes in the recent 24-hour window. The competitive heuristic
+uses only Kalshi's two independent bid arrays: spread score `1/(1 + spread_cents/10)`,
+balanced near-midpoint depth saturation, and 24-hour activity saturation. The resulting
+score is bounded to `[0, 1]` and is not a probability.
+
 ## Evidence and limits of the evidence
 
 Issue #3 reports that the intended French VPS reached unauthenticated markets/events/market/orderbook REST endpoints; cursor pages had distinct tickers; orderbook requests returned 10/10 HTTP 200 at bounded concurrency 1, 2, 4, and 8; no timeout, 4xx, 5xx, or 429 occurred; and no retry was exercised. It does not establish a sustained public rate ceiling, latency percentile, or retry delay.
@@ -57,6 +70,8 @@ Kalshi documents that single-market orderbooks are public and support `depth=0` 
 - [Kalshi Market Lifecycle](https://docs.kalshi.com/getting_started/market_lifecycle)
 - [Kalshi Orderbook Responses](https://docs.kalshi.com/getting_started/orderbook_responses)
 - [Kalshi Get Market Orderbook](https://docs.kalshi.com/api-reference/market/get-market-orderbook)
+- [Kalshi Batch Get Market Candlesticks](https://docs.kalshi.com/api-reference/market/batch-get-market-candlesticks)
+- [Kalshi Get Market Candlesticks](https://docs.kalshi.com/api-reference/market/get-market-candlesticks)
 - [Kalshi Rate Limits and Tiers](https://docs.kalshi.com/getting_started/rate_limits)
 - [Kalshi Historical Data](https://docs.kalshi.com/getting_started/historical_data)
 - [Kalshi Get Historical Cutoff Timestamps](https://docs.kalshi.com/api-reference/historical/get-historical-cutoff-timestamps)

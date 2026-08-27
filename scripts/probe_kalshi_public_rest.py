@@ -266,12 +266,24 @@ def run(args: argparse.Namespace) -> Path:
                         range(level),
                     )
                 )
-            concurrency[str(level)] = {
-                "request_count": len(results),
-                "status_codes": [capture.status_code for capture in results],
-                "retry_count": sum(capture.retries for capture in results),
-                "maximum_workers": level,
-            }
+        concurrency[str(level)] = {
+            "request_count": len(results),
+            "status_codes": [capture.status_code for capture in results],
+            "retry_count": sum(capture.retries for capture in results),
+            "maximum_workers": level,
+        }
+        candle_end_ts = int(time.time())
+        probe.get(
+            "market-candlesticks",
+            "/markets/candlesticks",
+            {
+                "market_tickers": market_ref,
+                "start_ts": str(candle_end_ts - 48 * 60 * 60),
+                "end_ts": str(candle_end_ts),
+                "period_interval": "60",
+                "include_latest_before_start": "false",
+            },
+        )
         manifest = {
             "schema_version": "vtrade-kalshi-probe-v1",
             "captured_at": _now().isoformat(),

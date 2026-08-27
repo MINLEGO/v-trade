@@ -60,3 +60,22 @@ def test_orderbook_and_settlement_schemas_expose_audit_and_finalization_data() -
     assert "fee_policy" in orderbook
     assert "audit" in document["$defs"]["book"]["properties"]
     assert settlement["items"]["$ref"] == "#/$defs/settlement"
+
+
+def test_market_card_schema_exposes_freeze_metrics_and_nullable_missing_data() -> None:
+    document = json.loads(SCHEMA.read_text(encoding="utf-8"))
+    card = document["$defs"]["market_card"]
+    properties = card["properties"]
+
+    assert properties["volume_24h_units"]["type"] == ["integer", "null"]
+    assert properties["volatility_micros"]["type"] == ["integer", "null"]
+    assert properties["volume_trend"]["enum"] == [
+        "increasing",
+        "decreasing",
+        "flat",
+        "insufficient_data",
+        None,
+    ]
+    assert properties["competitive_score"]["type"] == ["string", "null"]
+    assert "volume_trend_delta" in card["required"]
+    assert "indicative_price_micros" in document["$defs"]["outcome_summary"]["required"]

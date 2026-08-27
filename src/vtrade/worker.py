@@ -42,6 +42,7 @@ from vtrade.harness_repository import PostgresBudgetGuard, PostgresHarnessReposi
 from vtrade.kalshi import KalshiPublicRestAdapter
 from vtrade.kalshi_freeze import KalshiFreezeRequest, KalshiMarketFreezeService
 from vtrade.kalshi_persistence import PostgresKalshiFreezeRepository
+from vtrade.market_metrics import format_metric_decimal
 from vtrade.postgres_runtime import PostgresRuntimeRepository
 from vtrade.production_tools import ProductionToolRegistry, production_tool_context
 from vtrade.providers import (
@@ -1329,7 +1330,26 @@ def _kalshi_freeze_payload(
     def level(value: Any) -> JsonObject:
         return {"price_micros": int(value.price), "contract_units": int(value.quantity)}
 
+    metrics_by_key = {
+        item.market_key: item for item in getattr(result, "market_metrics", ())
+    }
+    series_by_key = {
+        item.key: item
+        for page in result.catalogue.pages
+        for item in page.series
+    }
+
     def market(value: Any) -> JsonObject:
+        metric = metrics_by_key.get(value.key)
+        series = series_by_key.get(value.series_key)
+        indicative_by_side = (
+            {
+                "YES": metric.indicative_yes_price_micros,
+                "NO": metric.indicative_no_price_micros,
+            }
+            if metric is not None
+            else {"YES": None, "NO": None}
+        )
         return {
             "market_ref": value.market_ref,
             "series_ref": value.series_ref,
@@ -1345,13 +1365,26 @@ def _kalshi_freeze_payload(
             "eligible": value.eligible,
             "tradeable": value.tradeable,
             "volume_units": int(value.volume),
+            "volume_24h_units": (
+                metric.volume_24h_units if metric is not None else None
+            ),
             "liquidity_micros": int(value.liquidity_micros),
+            "volatility_micros": metric.volatility_micros if metric is not None else None,
+            "volume_trend": metric.volume_trend if metric is not None else "insufficient_data",
+            "volume_trend_delta": (
+                format_metric_decimal(metric.volume_trend_delta) if metric is not None else None
+            ),
+            "competitive_score": (
+                format_metric_decimal(metric.competitive_score) if metric is not None else None
+            ),
+            "tag_names": list(series.tags) if series is not None else [],
             "observed_at": timestamp(value.observed_at),
             "outcomes": [
                 {
                     "outcome": str(item.side),
                     "label": item.label,
                     "eligible": item.eligible,
+                    "indicative_price_micros": indicative_by_side[str(item.side).upper()],
                 }
                 for item in value.outcomes
             ],

@@ -172,6 +172,13 @@ def frozen_context(frozen: Mapping[str, object], market_ref: str) -> MarketConte
     market_observed_at = _timestamp(market_payload.get("observed_at"), "market observed_at")
     open_time = _timestamp(market_payload.get("open_time"), "market open_time")
     assert market_observed_at is not None and open_time is not None
+    volume_24h_units = market_payload.get("volume_24h_units")
+    if (
+        isinstance(volume_24h_units, bool)
+        or not isinstance(volume_24h_units, int)
+        or volume_24h_units < 0
+    ):
+        raise RuntimeError("freeze payload lacks valid volume_24h_units metric")
     market = BinaryMarket(
         key=market_key,
         series_key=series_key,
@@ -205,6 +212,7 @@ def frozen_context(frozen: Mapping[str, object], market_ref: str) -> MarketConte
         audit=_artifact(market_payload.get("audit"), observed_at=market_observed_at),
         volume=ContractQuantity(int(str(market_payload.get("volume_units") or 0))),
         liquidity_micros=MoneyMicros(int(str(market_payload.get("liquidity_micros") or 0))),
+        volume_24h=ContractQuantity(volume_24h_units),
     )
 
     book_payload = _mapping(selected.get("order_book"))

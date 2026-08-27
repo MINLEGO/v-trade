@@ -7,8 +7,8 @@ shape.
 
 | Capability | Active contract | Evidence boundary |
 |---|---|---|
-| Market discovery | frozen Kalshi catalogue and bounded filters | cycle cutoff |
-| Market details | opaque `market_ref`, binary rules, dynamic grid | cycle cutoff |
+| Market discovery | frozen Kalshi catalogue, exact series tags, and freeze-scoped metrics | cycle cutoff |
+| Market details | opaque `market_ref`, binary rules, dynamic grid, indicative midpoint, and metric context | cycle cutoff |
 | Order book | reciprocal YES/NO bids and asks with exact levels | content-addressed snapshot |
 | Portfolio | contract units, gross basis, entry fees, realized P&L | calling agent only |
 | Orders | CASH/CONTRACTS, BUY/SELL, optional limit, IOC/FOK | frozen plus refreshed context |
@@ -17,7 +17,7 @@ shape.
 | Research | configured provider with bounded calls and redacted evidence | provider budget |
 | Plans and beliefs | agent-scoped, paginated, length-bounded state | append-only audit |
 
-The active schema is `spec/tool-schemas-vtrade-kalshi-v1.json`. Changes require a
-new experiment version; hashes are not refreshed silently. The historical archive is
+The active schema is `spec/tool-schemas-vtrade-kalshi-v1.json`. The current v1
+revision adds the metric and tag fields and refreshes the bound hashes. Later
+incompatible changes require a new experiment version. The historical archive is
 not a tool-schema source.
-

@@ -207,9 +207,12 @@ class SearchResponse:
     telemetry: ProviderTelemetry
 
 
-_ACTIVE_MODEL_POLICIES: dict[str, tuple[tuple[str, ...] | None, str]] = {
-    "deepseek/deepseek-v4-flash-0731": (("fp8",), "max"),
-    "openai/gpt-5.6-luna": (None, "xhigh"),
+_ACTIVE_MODEL_POLICIES: dict[
+    str, tuple[tuple[str, ...] | None, str, tuple[str, ...] | None]
+] = {
+    "deepseek/deepseek-v4-flash-0731": (("fp8",), "max", None),
+    "openai/gpt-5.6-luna": (None, "xhigh", None),
+    "z-ai/glm-5.3-flash": (("fp8",), "max", ("z-ai",)),
 }
 
 
@@ -218,6 +221,7 @@ class OpenRouterRoute:
     model: str
     quantizations: tuple[str, ...] | None
     reasoning_effort: str
+    provider_order: tuple[str, ...] | None = None
     allow_provider_fallbacks: bool = True
 
     @classmethod
@@ -225,7 +229,11 @@ class OpenRouterRoute:
         slug = config.get("slug")
         if not isinstance(slug, str) or slug not in _ACTIVE_MODEL_POLICIES:
             raise ProviderConfigurationError("model slug is outside the active model set")
-        expected_quantizations, expected_reasoning_effort = _ACTIVE_MODEL_POLICIES[slug]
+        (
+            expected_quantizations,
+            expected_reasoning_effort,
+            expected_provider_order,
+        ) = _ACTIVE_MODEL_POLICIES[slug]
         quantizations = config.get("allowed_quantizations")
         if expected_quantizations is None:
             if quantizations is not None:
@@ -245,6 +253,16 @@ class OpenRouterRoute:
             raise ProviderConfigurationError("same-model provider fallback must be enabled")
         if config.get("cross_model_fallback") is not False:
             raise ProviderConfigurationError("cross-model fallback is forbidden")
+        provider_order = config.get("provider_order")
+        if expected_provider_order is None:
+            if provider_order is not None:
+                raise ProviderConfigurationError("active policy must not define a provider order")
+        elif (
+            not isinstance(provider_order, list)
+            or not all(isinstance(item, str) and item for item in provider_order)
+            or tuple(provider_order) != expected_provider_order
+        ):
+            raise ProviderConfigurationError("provider order differs from active policy")
         if config.get("reasoning_effort") != expected_reasoning_effort:
             raise ProviderConfigurationError("model reasoning effort differs from active policy")
         # v1 model_configs are append-only and older registrations predate the
@@ -252,7 +270,7 @@ class OpenRouterRoute:
         # pin those legacy rows to the active owner-fixed policy.
         if config.get("reasoning_effort_policy", "owner_fixed") != "owner_fixed":
             raise ProviderConfigurationError("active reasoning effort policy must be owner-fixed")
-        return cls(slug, expected_quantizations, expected_reasoning_effort)
+        return cls(slug, expected_quantizations, expected_reasoning_effort, expected_provider_order)
 
 
 class OpenRouterModelGateway:
@@ -315,6 +333,8 @@ class OpenRouterModelGateway:
         }
         if route.quantizations is not None:
             provider_preferences["quantizations"] = list(route.quantizations)
+        if route.provider_order is not None:
+            provider_preferences["order"] = list(route.provider_order)
         payload: JsonObject = {
             "model": route.model,
             "messages": list(messages),

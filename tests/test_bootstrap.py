@@ -87,7 +87,7 @@ def test_register_is_inert_and_inserts_all_frozen_records(
     filename: str,
 ) -> None:
     path, prompt = ready_config(tmp_path, filename)
-    cursor = Cursor([None, None, None, None, None])
+    cursor = Cursor([None, None, None, None, None, None])
     service = PostgresExperimentBootstrap(
         "postgres://test",
         connect=connector(cursor),
@@ -103,10 +103,18 @@ def test_register_is_inert_and_inserts_all_frozen_records(
         )
     sql = "\n".join(query for query, _ in cursor.queries)
     assert result.run_id
-    assert len(result.model_ids) == 2
+    assert len(result.model_ids) == 3
     assert "INSERT INTO experiment_definitions" in sql
     assert "INSERT INTO prompt_versions" in sql
-    assert sql.count("INSERT INTO model_configs") == 2
+    assert sql.count("INSERT INTO model_configs") == 3
+    glm_params = next(
+        params
+        for query, params in cursor.queries
+        if query.startswith("INSERT INTO model_configs")
+        and params[3] == "z-ai/glm-5.3-flash"
+    )
+    assert json.loads(str(glm_params[4]))["provider_order"] == ["z-ai"]
+    assert "provider_order" not in json.loads(str(glm_params[5]))
     assert "INSERT INTO experiment_runs" in sql
     assert "INSERT INTO agents" not in sql
     assert "'ready'" in sql

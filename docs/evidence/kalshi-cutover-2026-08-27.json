@@ -40,13 +40,18 @@
       "position": 7,
       "name": "0007_exa_quota_contract.sql",
       "sha256": "d0c5fc00e2a7905dd17be7375dc794d86ce722359f91f14826fe7c8b7c350490"
+    },
+    {
+      "position": 8,
+      "name": "0008_market_metrics.sql",
+      "sha256": "71014233155e4d4b3b3d313c060abce6496396d3c889225c0a832268cde6ebf2"
     }
   ],
   "artifacts": {
-    "experiment_config_sha256": "bd6da947d2a7d1a1957cb87f8b2d9e8076c2e753aa1ab3838190c8c915620c99",
-    "prompt_sha256": "295fcde71d71c17fc62c0f99591cc2bf4a328561906e7416f56b8903fbb578aa",
-    "tool_schemas_sha256": "448707ae5feb72a2dfe325e813853ce9bb6fc50aa6f8126df9adc339fbe01b96",
-    "compatibility_sha256": "afac41c01cde1507345267b6311c7267123f672709a3ea191c6bd7fce0e6d949",
+    "experiment_config_sha256": "fc492caee9f001ede8aa522e745992426f12d05623b42b798cf0a3448637bfb7",
+    "prompt_sha256": "b3b11dd16e66e2d64227b6d85b7c2ac9e676bf879bd204f6af2f2c247129d482",
+    "tool_schemas_sha256": "d7a81f961653bf8b6eb6f8e8709f964b799377024fa9ffb1d951fdd3d2a7705b",
+    "compatibility_sha256": "61709df40cd9ebc05c687f4b5eb6cbc870f549117bb19968796f3bda6ab88f6a",
     "fixture_manifest_sha256": "6f87bfb388f4497d41c077f1c5d71e3f449985b1af26b461028c5cba73ef54c0"
   },
   "image": {
@@ -68,7 +73,7 @@
       "status": "passed",
       "observed_at": "2026-08-26T22:56:28Z",
       "command": "uv run --extra dev python -m vtrade.release_verification",
-      "evidence": "Active paths, seven migrations, frozen artifacts, ready fixture, and offline sweep passed locally."
+      "evidence": "Active paths, eight migrations, frozen artifacts, ready fixture, and offline sweep passed locally; external readiness remains separately blocked."
     },
     "postgresql": {
       "status": "not_recorded",

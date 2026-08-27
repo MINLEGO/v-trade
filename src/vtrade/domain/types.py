@@ -534,11 +534,14 @@ class Series:
     rules: str | None
     observed_at: datetime
     audit: RawArtifact
+    tags: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.title:
             raise ValueError("series title is required")
         _require_aware(self.observed_at, "series observed_at")
+        if any(not isinstance(tag, str) or not tag.strip() for tag in self.tags):
+            raise ValueError("series tags must contain non-empty strings")
 
     @property
     def series_ref(self) -> str:
@@ -742,6 +745,7 @@ class BinaryMarket:
     source_updated_at: datetime | None = None
     volume: ContractQuantity = ContractQuantity(0)
     liquidity_micros: MoneyMicros = MoneyMicros(0)
+    volume_24h: ContractQuantity = ContractQuantity(0)
 
     def __post_init__(self) -> None:
         if not self.question or not self.resolution_rules:
@@ -772,7 +776,7 @@ class BinaryMarket:
             raise ValueError("market open_time must be timezone-aware")
         if self.source_updated_at is not None:
             _require_aware(self.source_updated_at, "market source_updated_at")
-        if self.volume < 0 or self.liquidity_micros < 0:
+        if self.volume < 0 or self.liquidity_micros < 0 or self.volume_24h < 0:
             raise ValueError("market volume and liquidity cannot be negative")
 
     @property
@@ -877,4 +881,3 @@ KalshiMarketStatus = MarketStatus
 NormalizedMarket = BinaryMarket
 NormalizedOutcome = BinaryOutcome
 CanonicalBook = CanonicalOrderBook
-

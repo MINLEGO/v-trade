@@ -222,13 +222,15 @@ def _parse_evidence(path: Path, raw: Mapping[str, object]) -> CutoverEvidence:
         name = _required_string(item, "name")
         if name != EXPECTED_MIGRATIONS[position - 1]:
             raise CutoverEvidenceError(
-                "evidence migration chain is not the canonical seven-file chain"
+                "evidence migration chain is not the canonical active chain"
             )
         migrations.append(
             MigrationEvidence(position, name, _digest(item.get("sha256"), f"migration {name}"))
         )
     if len(migrations) != len(EXPECTED_MIGRATIONS):
-        raise CutoverEvidenceError("evidence migration chain must contain exactly seven files")
+        raise CutoverEvidenceError(
+            "evidence migration chain must contain exactly the active migration files"
+        )
 
     artifact_values = _as_mapping(raw.get("artifacts"), "artifacts")
     expected_artifacts = (

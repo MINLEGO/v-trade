@@ -44,6 +44,11 @@ class ProbeReplay:
                 request,
                 {"orderbook_fp": {"yes_dollars": [], "no_dollars": []}},
             )
+        if path == "/markets/candlesticks":
+            return self.response(
+                request,
+                {"markets": [{"market_ticker": "KXTEST-1", "candlesticks": []}]},
+            )
         return httpx.Response(404, request=request)
 
     @staticmethod
@@ -104,4 +109,8 @@ class KalshiPublicRestProbeTests(unittest.TestCase):
             self.assertEqual(
                 {capture["status_code"] for capture in manifest["responses"]},
                 {200},
+            )
+            self.assertIn(
+                "market-candlesticks",
+                {capture["label"] for capture in manifest["responses"]},
             )
