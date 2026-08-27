@@ -400,7 +400,7 @@ class ProductionToolRegistry:
             "as_of": self._context.cutoff.isoformat(),
             "data_cutoff": self._context.cutoff.isoformat(),
             "market": _market_card(row),
-            "resolution_rules": str(row[5]),
+            "resolution_rules": str(row[_MARKET_RESOLUTION_RULES_INDEX]),
             "price_ranges": [
                 {
                     "start_price_micros": _as_int(item[0]),
@@ -951,7 +951,7 @@ _MARKET_SELECT = (
     "ra.sha256, ra.observed_at, COALESCE((SELECT jsonb_agg(jsonb_build_object("
     "'outcome', o.outcome_side, 'label', o.label, 'eligible', o.eligible, "
     "'indicative_price_micros', NULL) ORDER BY o.outcome_side) FROM outcomes o "
-    "WHERE o.market_id = m.id), '[]'::jsonb) "
+    "WHERE o.market_id = m.id), '[]'::jsonb), m.resolution_rules "
     "FROM markets m JOIN series s ON s.id = m.series_id JOIN events e ON e.id = m.event_id "
     "JOIN market_freezes mf ON mf.agent_cycle_id = %s "
     "AND mf.publication_status = 'published' "
@@ -959,6 +959,7 @@ _MARKET_SELECT = (
     "JOIN raw_artifacts ra ON ra.id = m.raw_artifact_id "
     "WHERE m.venue = 'kalshi' AND m.kind = 'binary' AND mf.data_cutoff <= %s"
 )
+_MARKET_RESOLUTION_RULES_INDEX = 19
 
 
 def _market_card(row: Sequence[object]) -> JsonObject:

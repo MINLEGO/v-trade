@@ -208,6 +208,8 @@ class KalshiDomainTests(unittest.TestCase):
                 context.order_book.artifact.source_endpoint,
                 "GET /trade-api/v2/markets/KXTEST-1/orderbook",
             )
+            self.assertEqual(context.market.question, "Question KXTEST-1")
+            self.assertEqual(context.market.resolution_rules, "Resolve from the official source.")
             self.assertEqual(context.market.volume, 1234)
             self.assertEqual(context.market.liquidity_micros, 12_500_000)
 

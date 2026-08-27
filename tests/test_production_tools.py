@@ -87,6 +87,53 @@ def test_get_orderbook_preserves_the_configured_depth_on_all_four_sides() -> Non
     }
 
 
+def test_get_market_details_returns_resolution_rules_not_question() -> None:
+    cutoff = datetime(2026, 8, 21, 10, 0, tzinfo=UTC)
+    market_row = (
+        "KXTEST-1",
+        "SERIES-1",
+        "EVENT-1",
+        "Event title",
+        "category",
+        "Will this market resolve YES?",
+        cutoff - timedelta(days=1),
+        cutoff + timedelta(days=1),
+        1234,
+        12_500_000,
+        "active",
+        True,
+        True,
+        cutoff - timedelta(minutes=1),
+        cutoff - timedelta(minutes=2),
+        "artifact-1",
+        "sha256-1",
+        cutoff - timedelta(minutes=1),
+        [],
+        "Resolve from the official source, as defined by the market rules.",
+    )
+    context = SimpleNamespace(
+        claim=SimpleNamespace(cycle_id="cycle-1"),
+        cutoff=cutoff,
+        maximum_default_result_tokens=4_000,
+        portfolio=lambda _arguments: {},
+    )
+    registry = ProductionToolRegistry(context)  # type: ignore[arg-type]
+
+    def query(sql: str, _params: tuple[object, ...]) -> tuple[tuple[object, ...], ...]:
+        if "FROM market_price_grid_ranges" in sql:
+            return ((0, 1_000_000, 10_000),)
+        assert "m.resolution_rules" in sql
+        return (market_row,)
+
+    with patch.object(registry, "_query", side_effect=query):
+        output = registry._get_market_details({"market_ref": "KXTEST-1"})
+
+    assert output["market"]["question"] == "Will this market resolve YES?"
+    assert output["resolution_rules"] == (
+        "Resolve from the official source, as defined by the market rules."
+    )
+
+
 def test_order_output_uses_contract_units_prices_fees_and_reconciliation() -> None:
     now = datetime(2026, 8, 21, 10, 0, tzinfo=UTC)
     request = OrderRequest(
