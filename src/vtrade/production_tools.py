@@ -288,12 +288,18 @@ class ProductionToolRegistry:
             ]
             rows.sort(key=lambda row: (_hours_until(row[7], self._context.cutoff), str(row[0])))
         elif name == "discover_by_date_range":
+            date_basis = str(arguments.get("date_basis", "close_time"))
+            if date_basis not in {"close_time", "open_time"}:
+                raise ValueError("date_basis must be close_time or open_time")
             start = str(arguments.get("start_date", ""))
             end = str(arguments.get("end_date", ""))
+            date_index = 7 if date_basis == "close_time" else 6
             rows = [
                 row
                 for row in rows
-                if (not start or str(row[6])[:10] >= start) and (not end or str(row[6])[:10] <= end)
+                if row[date_index] is not None
+                and (not start or str(row[date_index])[:10] >= start)
+                and (not end or str(row[date_index])[:10] <= end)
             ]
         elif name == "discover_by_price_volatility":
             minimum_volatility = _nonnegative_int(

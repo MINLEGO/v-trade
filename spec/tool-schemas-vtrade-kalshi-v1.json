@@ -1642,6 +1642,14 @@
             "type": "string",
             "format": "date"
           },
+          "date_basis": {
+            "type": "string",
+            "enum": [
+              "close_time",
+              "open_time"
+            ],
+            "default": "close_time"
+          },
           "limit": {
             "type": "integer",
             "minimum": 1,

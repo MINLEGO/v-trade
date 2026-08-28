@@ -166,6 +166,65 @@ def test_get_market_details_returns_resolution_rules_not_question() -> None:
     } == {"YES": 425_000, "NO": 575_000}
 
 
+def test_date_range_supports_close_and_open_basis() -> None:
+    cutoff = datetime(2026, 8, 21, 10, 0, tzinfo=UTC)
+    context = SimpleNamespace(
+        claim=SimpleNamespace(cycle_id="cycle-1"),
+        cutoff=cutoff,
+        maximum_default_result_tokens=4_000,
+        portfolio=lambda _arguments: {},
+    )
+    registry = ProductionToolRegistry(context)  # type: ignore[arg-type]
+
+    def market_row(
+        market_ref: str, open_time: datetime, close_time: datetime | None
+    ) -> tuple[object, ...]:
+        return (
+            market_ref,
+            "SERIES-1",
+            "EVENT-1",
+            "Event title",
+            "category",
+            "Question",
+            open_time,
+            close_time,
+            100,
+            100,
+        )
+
+    rows = [
+        market_row(
+            "KXCLOSE",
+            datetime(2026, 8, 1, tzinfo=UTC),
+            datetime(2026, 8, 20, tzinfo=UTC),
+        ),
+        market_row(
+            "KXOPEN",
+            datetime(2026, 8, 20, tzinfo=UTC),
+            datetime(2026, 9, 1, tzinfo=UTC),
+        ),
+        market_row("KXMISSING", datetime(2026, 8, 20, tzinfo=UTC), None),
+    ]
+
+    close_matches = registry._filter_market_rows(
+        "discover_by_date_range",
+        rows,
+        {"start_date": "2026-08-20", "end_date": "2026-08-20"},
+    )
+    open_matches = registry._filter_market_rows(
+        "discover_by_date_range",
+        rows,
+        {
+            "date_basis": "open_time",
+            "start_date": "2026-08-20",
+            "end_date": "2026-08-20",
+        },
+    )
+
+    assert [row[0] for row in close_matches] == ["KXCLOSE"]
+    assert [row[0] for row in open_matches] == ["KXOPEN", "KXMISSING"]
+
+
 def test_search_tags_uses_exact_case_insensitive_membership() -> None:
     cutoff = datetime(2026, 8, 21, 10, 0, tzinfo=UTC)
     context = SimpleNamespace(
