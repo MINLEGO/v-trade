@@ -2,7 +2,7 @@
 
 ## Shared conventions
 
-Discovery, market-details, and order-book tools inspect the open and tradeable markets in the current cycle’s frozen market universe. Their results are reproducible as of the returned `as_of` cutoff and are decision inputs, not live execution guarantees. `place_market_order` refreshes execution context at order time and may fill partially or reject when the live context no longer supports the request.
+Discovery, market-details, and order-book tools inspect the open and tradeable markets in the current cycle’s frozen market universe. Their results are reproducible as of the returned `as_of` cutoff and are decision inputs, not live execution guarantees. `place_market_order` attempts to refresh the execution context at order time and may fill partially or reject when the live context no longer supports the request.
 
 Discovery cards contain indicative prices, not guaranteed executable quotes. Before trading, retrieve the full market with `get_market_details` and the relevant executable book with `get_orderbook`. Filters help identify candidates, but do not guarantee positive expected value. Validate your thesis with current evidence, official resolution rules, and executable liquidity.
 
@@ -342,28 +342,35 @@ The optional cycle_date is descriptive scheduling metadata. It does not schedule
 
 **Proposed description**
 
-Submit and immediately evaluate a market order using execution context refreshed at order time. The current cycle’s frozen order book is for decision-making and is not a fill guarantee. `token_id` must be the venue token identifier for the exact outcome being bought or sold.
+Submit and evaluate one order for the specified binary market using an
+execution context refreshed at order time. The current cycle’s frozen order
+book is decision evidence, not a fill guarantee. `market_ref` plus `outcome`
+(`YES` or `NO`) identifies the requested contract.
 
-For BUY orders, `amount_type` defaults to `CASH`, meaning `amount` is a dollar budget. BUY orders may instead use `SHARES`. For SELL orders, `amount_type` defaults to `SHARES`; SELL with `CASH` is not supported.
+`CASH` amounts are integer microdollars. `CONTRACTS` amounts are integer hundredths-of-a-contract units. You may submit a BUY in either unit type, but a SELL must only be done in `CONTRACTS` units.
 
-`time_in_force` defaults to `IOC`:
-
-* `IOC` executes available eligible liquidity immediately and cancels any unfilled remainder.
+* `IOC` executes available eligible liquidity immediately and rejects any unfilled remainder.
 * `FOK` executes only if the complete requested quantity can be filled under the order constraints; otherwise it is rejected.
-
-The optional `limit_price` restricts live execution prices to the interval between 0 and 1. For a BUY it is the maximum acceptable per-share price; for a SELL it is the minimum acceptable per-share price. It does not guarantee a fill and does not replace the fee, expected-value, or risk checks. The optional `conviction` value is a 0-to-1 audit value; it does not replace an explicit probability, expected-value or risk analysis.
+* `limit_price_micros` restricts execution prices to the interval between 0 and 1 000 000. For a BUY it is the maximum acceptable per-unit price; for a SELL it is the minimum acceptable per-unit price. It does not guarantee a fill and does not replace the fee, expected-value, or risk checks. Set the value to null to ignore price limits and accept any available liquidity.
 
 Before calling this tool:
 
 1. retrieve the complete market details and resolution rules;
-2. verify the exact YES/NO outcome and token;
+2. verify the exact YES/NO outcome;
 3. retrieve the current frozen order book;
 4. verify a non-null fee policy and calculate net edge and expected P&L using executable depth and the fee estimate;
-5. confirm available cash or shares;
+5. confirm available cash or contracts;
 6. check existing exposure and risk limits.
 
-The result status is `rejected`, `filled`, `partial`, or `pending_broker_validation`. A pending result records the order intent but does not establish that any execution occurred; do not treat it as filled. For `rejected`, inspect `rejection_code`, `message`, and `portfolio_after`. For `filled` or `partial`, inspect `execution.filled_shares`, `execution.cancelled_shares`, `execution.average_price`, `execution.gross_micros`, `execution.fee_micros`, `execution.cash_delta_micros`, `execution.remainder_status`, and `portfolio_after.affected_position`. `execution.fee_micros` is authoritative and must replace the pre-order estimate in the post-order accounting.
+A result may be `REJECTED`, `PENDING`, `PARTIALLY_FILLED`, `FILLED`, or
+`CANCELLED`. `PENDING` means that no fill is confirmed and reconciliation is
+required; do not treat it as filled or submit another order for the affected
+account until reconciliation is resolved.
+
+Inspect `operation_id`, `status`, `reconciliation_state`, `error_code`,
+`message`, contract-unit quantities, `fills`, cash deltas, fees, context IDs,
+timestamps, and audit references. Reuse an idempotency key only for the same
+request. Returned fees are authoritative.
 
 Never assume that submitting an order means it executed. After a rejection or partial fill, recalculate cash, exposure, remaining edge and liquidity before deciding whether to submit another order. Do not retry unchanged orders repeatedly.
-
 ---
