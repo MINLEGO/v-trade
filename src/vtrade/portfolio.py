@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import uuid
@@ -47,6 +49,7 @@ class _Connection(Protocol):
 
 _Connect = Callable[[str], AbstractContextManager[_Connection]]
 
+
 class PostgresContractPortfolioHandler:
     """Read the Kalshi portfolio projection in the semantic vocabulary."""
 
@@ -63,37 +66,70 @@ class PostgresContractPortfolioHandler:
         self._agent_id = agent_id
         self._connect = connect or _default_connect
 
-    def __call__(self, _arguments: JsonObject | None = None) -> JsonObject:
+    def __call__(self, arguments: JsonObject | None = None) -> JsonObject:
+        cursor_token, limit = _validate_arguments(arguments or {})
+        after_position_id = (
+            _position_id_from_cursor(cursor_token, self._agent_id)
+            if cursor_token is not None
+            else None
+        )
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
             cursor.execute(
                 "SELECT p.id, m.market_ref, p.outcome_side, p.contract_units, "
                 "p.gross_cost_basis_micros, p.entry_fees_micros, p.realized_pnl_micros, "
                 "p.updated_at FROM positions p JOIN markets m ON m.id = p.market_id "
                 "WHERE p.agent_id = %s AND p.contract_units > 0 "
-                "ORDER BY m.market_ref, p.outcome_side",
-                (self._agent_id,),
+                "AND (%s::uuid IS NULL OR p.id > %s::uuid) "
+                "ORDER BY p.id ASC LIMIT %s",
+                (self._agent_id, after_position_id, after_position_id, limit + 1),
             )
             rows = cursor.fetchall()
-        items: list[JsonObject] = []
+
+        position_rows: list[tuple[uuid.UUID, JsonObject]] = []
         for row in rows:
+            position_id = uuid.UUID(str(row[0]))
             updated_at = row[7]
-            items.append(
-                {
-                    "position_id": str(row[0]),
-                    "market_ref": str(row[1]),
-                    "outcome": str(row[2]),
-                    "contract_units": int(str(row[3])),
-                    "gross_cost_basis_micros": int(str(row[4])),
-                    "entry_fees_micros": int(str(row[5])),
-                    "realized_pnl_micros": int(str(row[6])),
-                    "updated_at": (
-                        updated_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
-                        if isinstance(updated_at, datetime)
-                        else str(updated_at)
-                    ),
-                }
+            position_rows.append(
+                (
+                    position_id,
+                    {
+                        "position_id": str(position_id),
+                        "market_ref": str(row[1]),
+                        "outcome": str(row[2]),
+                        "contract_units": int(str(row[3])),
+                        "gross_cost_basis_micros": int(str(row[4])),
+                        "entry_fees_micros": int(str(row[5])),
+                        "realized_pnl_micros": int(str(row[6])),
+                        "updated_at": (
+                            updated_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
+                            if isinstance(updated_at, datetime)
+                            else str(updated_at)
+                        ),
+                    },
+                )
             )
-        return {"items": items, "next_cursor": None, "has_more": False}
+        position_rows.sort(key=lambda item: item[0])
+        if after_position_id is not None:
+            position_rows = [row for row in position_rows if row[0] > after_position_id]
+
+        selected, has_more = _bounded_items(
+            position_rows,
+            requested_limit=limit,
+            maximum_result_tokens=MAXIMUM_RESULT_TOKENS,
+        )
+        if has_more and not selected:
+            raise PortfolioPaginationError(
+                "one portfolio item exceeds the 24000-token result ceiling"
+            )
+        next_cursor = _cursor_for_position(self._agent_id, selected[-1][0]) if has_more else None
+        output: JsonObject = {
+            "items": [item[1] for item in selected],
+            "next_cursor": next_cursor,
+            "has_more": has_more,
+        }
+        if _token_upper_bound(output) > MAXIMUM_RESULT_TOKENS:
+            raise RuntimeError("portfolio page bound invariant violated")
+        return output
 
 
 ContractPortfolioHandler = PostgresContractPortfolioHandler
@@ -118,6 +154,27 @@ def _validate_arguments(arguments: JsonObject) -> tuple[str | None, int]:
 def _validate_cursor_token(token: str) -> None:
     if not token or len(token.encode("utf-8")) > 64:
         raise PortfolioPaginationError("cursor must be a non-empty opaque string")
+
+
+def _cursor_for_position(agent_id: uuid.UUID, position_id: uuid.UUID) -> str:
+    binding = hashlib.sha256(agent_id.bytes + position_id.bytes).digest()[:8]
+    payload = b"\x01" + position_id.bytes + binding
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _position_id_from_cursor(token: str, agent_id: uuid.UUID) -> uuid.UUID:
+    try:
+        padded = token + "=" * (-len(token) % 4)
+        raw = base64.b64decode(padded, altchars=b"-_", validate=True)
+        if len(raw) != 25 or raw[0] != 1:
+            raise ValueError("cursor does not contain a position identifier")
+        position_id = uuid.UUID(bytes=raw[1:17])
+        expected_binding = hashlib.sha256(agent_id.bytes + position_id.bytes).digest()[:8]
+        if raw[17:] != expected_binding:
+            raise ValueError("cursor is foreign to this agent")
+        return position_id
+    except (binascii.Error, ValueError) as exc:
+        raise PortfolioPaginationError("cursor is invalid or foreign") from exc
 
 
 def _bounded_items(
@@ -166,9 +223,7 @@ def _pro_rata(total: int, part: int, whole: int) -> int:
     if part == whole:
         return total
     return int(
-        (Decimal(total) * Decimal(part) / Decimal(whole)).to_integral_value(
-            rounding=ROUND_HALF_UP
-        )
+        (Decimal(total) * Decimal(part) / Decimal(whole)).to_integral_value(rounding=ROUND_HALF_UP)
     )
 
 
@@ -215,8 +270,9 @@ class ContractPosition:
         if self.contract_units == 0:
             return 0
         return int(
-            (Decimal(self.gross_cost_basis_micros) * Decimal(100) / Decimal(self.contract_units))
-            .to_integral_value(rounding=ROUND_HALF_UP)
+            (
+                Decimal(self.gross_cost_basis_micros) * Decimal(100) / Decimal(self.contract_units)
+            ).to_integral_value(rounding=ROUND_HALF_UP)
         )
 
 
@@ -384,10 +440,7 @@ def apply_order_fills(
             remaining_basis = int(current.gross_cost_basis_micros) - removed_basis
             remaining_fees = int(current.entry_fees_micros) - removed_fees
             realized = (
-                int(fill.gross_cash_micros)
-                - removed_basis
-                - removed_fees
-                - int(fill.fee_micros)
+                int(fill.gross_cash_micros) - removed_basis - removed_fees - int(fill.fee_micros)
             )
             updated = ContractPosition(
                 request.market_ref,
@@ -463,8 +516,9 @@ def apply_order_fills(
         tuple(
             sorted(
                 working.positions,
-                key=lambda item: _market_key(item.market_ref).canonical
-                + OutcomeSide(item.outcome).value,
+                key=lambda item: (
+                    _market_key(item.market_ref).canonical + OutcomeSide(item.outcome).value
+                ),
             )
         ),
         portfolio.version + 1,
@@ -494,8 +548,9 @@ def _replace_position(
         tuple(
             sorted(
                 positions,
-                key=lambda item: _market_key(item.market_ref).canonical
-                + OutcomeSide(item.outcome).value,
+                key=lambda item: (
+                    _market_key(item.market_ref).canonical + OutcomeSide(item.outcome).value
+                ),
             )
         ),
         portfolio.version,
@@ -614,4 +669,3 @@ def _default_connect(database_url: str) -> AbstractContextManager[_Connection]:
     import psycopg
 
     return cast(AbstractContextManager[_Connection], psycopg.connect(database_url))
-
