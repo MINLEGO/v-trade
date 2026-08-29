@@ -13,10 +13,13 @@ from vtrade.portfolio import PortfolioPaginationError, PostgresContractPortfolio
 AGENT_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
-def _position_row(index: int) -> tuple[object, ...]:
+def _position_row(index: int, market_question: str | None = None) -> tuple[object, ...]:
+    if market_question is None:
+        market_question = f"Will KX-{index} resolve YES?"
     return (
         uuid.UUID(int=index),
         f"KX-{index}",
+        market_question,
         "YES",
         100,
         1_000,
@@ -49,6 +52,25 @@ def _handler(
     )
 
 
+def test_get_portfolio_exposes_the_complete_market_question() -> None:
+    question = "Will KX-1 resolve YES before 2026-01-02? É"
+    handler = _handler([_position_row(1, question)])
+
+    page = handler({"limit": 1})
+
+    assert page["items"][0]["market_question"] == question
+
+
+@pytest.mark.parametrize("market_question", [None, ""])
+def test_get_portfolio_rejects_missing_market_question(market_question: object) -> None:
+    row = _position_row(1)
+    invalid_row = (*row[:2], market_question, *row[3:])
+    handler = _handler([invalid_row])
+
+    with pytest.raises(RuntimeError, match="portfolio market question is missing"):
+        handler({"limit": 1})
+
+
 def test_get_portfolio_pages_are_bounded_and_resume_without_gaps() -> None:
     handler = _handler([_position_row(index) for index in range(1, 6)])
 
@@ -73,7 +95,7 @@ def test_get_portfolio_pages_are_bounded_and_resume_without_gaps() -> None:
 
 def test_get_portfolio_trims_large_pages_to_the_result_ceiling() -> None:
     rows = [_position_row(index) for index in range(1, 6)]
-    rows = [(*row[:1], "x" * 8_000, *row[2:]) for row in rows]
+    rows = [(*row[:2], "x" * 8_000, *row[3:]) for row in rows]
     handler = _handler(rows)
 
     page = handler({"limit": 5})
@@ -82,6 +104,7 @@ def test_get_portfolio_trims_large_pages_to_the_result_ceiling() -> None:
     assert len(encoded.encode("utf-8")) <= 24_000
     assert 0 < len(page["items"]) < 5
     assert page["has_more"] is True
+    assert all(item["market_question"] == "x" * 8_000 for item in page["items"])
 
 
 def test_get_portfolio_rejects_invalid_arguments_before_connecting() -> None:

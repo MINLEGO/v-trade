@@ -75,7 +75,7 @@ class PostgresContractPortfolioHandler:
         )
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
             cursor.execute(
-                "SELECT p.id, m.market_ref, p.outcome_side, p.contract_units, "
+                "SELECT p.id, m.market_ref, m.question, p.outcome_side, p.contract_units, "
                 "p.gross_cost_basis_micros, p.entry_fees_micros, p.realized_pnl_micros, "
                 "p.updated_at FROM positions p JOIN markets m ON m.id = p.market_id "
                 "WHERE p.agent_id = %s AND p.contract_units > 0 "
@@ -88,18 +88,22 @@ class PostgresContractPortfolioHandler:
         position_rows: list[tuple[uuid.UUID, JsonObject]] = []
         for row in rows:
             position_id = uuid.UUID(str(row[0]))
-            updated_at = row[7]
+            market_question = row[2]
+            if not isinstance(market_question, str) or not market_question:
+                raise RuntimeError("portfolio market question is missing")
+            updated_at = row[8]
             position_rows.append(
                 (
                     position_id,
                     {
                         "position_id": str(position_id),
                         "market_ref": str(row[1]),
-                        "outcome": str(row[2]),
-                        "contract_units": int(str(row[3])),
-                        "gross_cost_basis_micros": int(str(row[4])),
-                        "entry_fees_micros": int(str(row[5])),
-                        "realized_pnl_micros": int(str(row[6])),
+                        "market_question": market_question,
+                        "outcome": str(row[3]),
+                        "contract_units": int(str(row[4])),
+                        "gross_cost_basis_micros": int(str(row[5])),
+                        "entry_fees_micros": int(str(row[6])),
+                        "realized_pnl_micros": int(str(row[7])),
                         "updated_at": (
                             updated_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
                             if isinstance(updated_at, datetime)

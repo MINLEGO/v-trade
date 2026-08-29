@@ -45,6 +45,14 @@ def test_active_order_contract_is_exact_and_venue_neutral() -> None:
     assert properties["amount"]["type"] == "string"
 
 
+def test_portfolio_position_schema_exposes_non_empty_market_question() -> None:
+    document = json.loads(SCHEMA.read_text(encoding="utf-8"))
+    position = document["$defs"]["position"]
+
+    assert position["properties"]["market_question"] == {"type": "string", "minLength": 1}
+    assert "market_question" in position["required"]
+
+
 def test_active_prompt_has_no_unresolved_template_or_legacy_surface() -> None:
     prompt = Path("spec/prompt/vtrade-kalshi-v1.md").read_text(encoding="utf-8").casefold()
     assert "{" not in prompt and "}" not in prompt

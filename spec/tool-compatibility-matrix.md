@@ -10,7 +10,7 @@ shape.
 | Market discovery | frozen Kalshi catalogue, exact series tags, and freeze-scoped metrics | cycle cutoff |
 | Market details | opaque `market_ref`, binary rules, dynamic grid, indicative midpoint, and metric context | cycle cutoff |
 | Order book | reciprocal YES/NO bids and asks with exact levels | content-addressed snapshot |
-| Portfolio | contract units, gross basis, entry fees, realized P&L | calling agent only |
+| Portfolio | market_ref, market_question, contract units, gross basis, entry fees, realized P&L | calling agent only |
 | Orders | CASH/CONTRACTS, BUY/SELL, optional limit, IOC/FOK | frozen plus refreshed context |
 | Order result | lifecycle, fills, fees, reconciliation, risk, audit | idempotent operation |
 | Settlements | FINALIZED result, settlement timestamp, payout, audit | cutoff and terminal gate |
