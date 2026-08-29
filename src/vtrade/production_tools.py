@@ -253,6 +253,9 @@ class ProductionToolRegistry:
         rows: list[Sequence[object]],
         arguments: Mapping[str, object],
     ) -> list[Sequence[object]]:
+        if name == "get_event_markets":
+            event_ref = _required_string(arguments, "event_ref")
+            rows = [row for row in rows if str(row[2]) == event_ref]
         minimum_liquidity = _nonnegative_int(
             arguments.get("min_liquidity_micros", 0), "min_liquidity_micros"
         )

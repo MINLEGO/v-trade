@@ -7,6 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from vtrade.domain.execution import EconomicFill, OrderRequest, OrderResult
 from vtrade.production_tools import ProductionToolRegistry, _execution_output
 
@@ -223,6 +225,155 @@ def test_date_range_supports_close_and_open_basis() -> None:
 
     assert [row[0] for row in close_matches] == ["KXCLOSE"]
     assert [row[0] for row in open_matches] == ["KXOPEN", "KXMISSING"]
+
+
+def test_get_event_markets_filters_by_exact_event_ref() -> None:
+    cutoff = datetime(2026, 8, 21, 10, 0, tzinfo=UTC)
+    context = SimpleNamespace(
+        claim=SimpleNamespace(cycle_id="cycle-1"),
+        cutoff=cutoff,
+        maximum_default_result_tokens=4_000,
+        portfolio=lambda _arguments: {},
+    )
+    registry = ProductionToolRegistry(context)  # type: ignore[arg-type]
+    rows = [
+        (
+            "KX-A-1",
+            "SERIES-1",
+            "EVENT-A",
+            "Event A",
+            None,
+            "Question A1",
+            None,
+            None,
+            300,
+            30,
+        ),
+        (
+            "KX-A-2",
+            "SERIES-1",
+            "EVENT-A",
+            "Event A",
+            None,
+            "Question A2",
+            None,
+            None,
+            200,
+            20,
+        ),
+        (
+            "KX-A-OTHER",
+            "SERIES-1",
+            "EVENT-A-OTHER",
+            "Other",
+            None,
+            "Question O",
+            None,
+            None,
+            1_000,
+            100,
+        ),
+        (
+            "KX-A-CASE",
+            "SERIES-1",
+            "event-a",
+            "Case variant",
+            None,
+            "Question C",
+            None,
+            None,
+            900,
+            90,
+        ),
+    ]
+
+    filtered = registry._filter_market_rows(
+        "get_event_markets", rows, {"event_ref": "EVENT-A"}
+    )
+
+    assert [row[0] for row in filtered] == ["KX-A-1", "KX-A-2"]
+
+
+@pytest.mark.parametrize("arguments", [{}, {"event_ref": " "}])
+def test_get_event_markets_requires_a_nonempty_event_ref(arguments: dict[str, object]) -> None:
+    cutoff = datetime(2026, 8, 21, 10, 0, tzinfo=UTC)
+    context = SimpleNamespace(
+        claim=SimpleNamespace(cycle_id="cycle-1"),
+        cutoff=cutoff,
+        maximum_default_result_tokens=4_000,
+        portfolio=lambda _arguments: {},
+    )
+    registry = ProductionToolRegistry(context)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="event_ref is required"):
+        registry._filter_market_rows("get_event_markets", [], arguments)
+
+
+def test_get_event_markets_filters_before_pagination() -> None:
+    cutoff = datetime(2026, 8, 21, 10, 0, tzinfo=UTC)
+
+    def market_row(market_ref: str, event_ref: str, volume: int) -> tuple[object, ...]:
+        return (
+            market_ref,
+            "SERIES-1",
+            event_ref,
+            f"{event_ref} title",
+            "category",
+            f"Question {market_ref}",
+            cutoff - timedelta(days=1),
+            cutoff + timedelta(days=1),
+            volume,
+            100,
+            "active",
+            True,
+            True,
+            cutoff,
+            cutoff,
+            "artifact-1",
+            "a" * 64,
+            cutoff,
+            [],
+            "Rules",
+            volume,
+            0,
+            "flat",
+            None,
+            Decimal("0.5000000000"),
+            500_000,
+            500_000,
+            "[]",
+        )
+
+    rows = [
+        market_row("KX-OTHER", "EVENT-OTHER", 1_000),
+        market_row("KX-TARGET-1", "EVENT-TARGET", 300),
+        market_row("KX-TARGET-2", "EVENT-TARGET", 200),
+    ]
+    context = SimpleNamespace(
+        claim=SimpleNamespace(cycle_id="cycle-1"),
+        cutoff=cutoff,
+        maximum_default_result_tokens=4_000,
+        portfolio=lambda _arguments: {},
+    )
+    registry = ProductionToolRegistry(context)  # type: ignore[arg-type]
+
+    with patch.object(registry, "_market_rows", return_value=rows):
+        first_page = registry._discover(
+            "get_event_markets", {"event_ref": "EVENT-TARGET", "limit": 1}
+        )
+        second_page = registry._discover(
+            "get_event_markets",
+            {
+                "event_ref": "EVENT-TARGET",
+                "limit": 1,
+                "cursor": first_page["next_cursor"],
+            },
+        )
+
+    assert [item["market_ref"] for item in first_page["markets"]] == ["KX-TARGET-1"]
+    assert first_page["has_more"] is True
+    assert [item["market_ref"] for item in second_page["markets"]] == ["KX-TARGET-2"]
+    assert second_page["has_more"] is False
 
 
 def test_search_tags_uses_exact_case_insensitive_membership() -> None:
