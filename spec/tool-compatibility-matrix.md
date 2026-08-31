@@ -13,7 +13,7 @@ shape.
 | Portfolio | market_ref, market_question, contract units, gross basis, entry fees, realized P&L | calling agent only |
 | Orders | CASH/CONTRACTS, BUY/SELL, optional limit, IOC/FOK | frozen plus refreshed context |
 | Order result | lifecycle, fills, fees, reconciliation, risk, audit | idempotent operation |
-| Settlements | FINALIZED result, settlement timestamp, payout, audit | cutoff and terminal gate |
+| Settlements | FINALIZED result, market_question, settlement timestamp, payout, audit | cutoff and terminal gate |
 | Research | configured provider with bounded calls and redacted evidence | provider budget |
 | Plans and beliefs | agent-scoped, paginated, length-bounded state | append-only audit |
 

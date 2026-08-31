@@ -168,6 +168,82 @@ def test_get_market_details_returns_resolution_rules_not_question() -> None:
     } == {"YES": 425_000, "NO": 575_000}
 
 
+def _settlement_row(market_question: object) -> tuple[object, ...]:
+    settled_at = datetime(2026, 8, 21, 10, 0, tzinfo=UTC)
+    return (
+        "settlement-1",
+        "position-1",
+        "KXTEST-1",
+        "YES",
+        "YES",
+        "FINALIZED",
+        100,
+        100_000,
+        1_000,
+        50_000,
+        settled_at,
+        settled_at,
+        "artifact-1",
+        "a" * 64,
+        settled_at,
+        market_question,
+    )
+
+
+def _settlement_registry() -> ProductionToolRegistry:
+    return ProductionToolRegistry(
+        SimpleNamespace(
+            claim=SimpleNamespace(agent_id="agent-1"),
+            maximum_default_result_tokens=4_000,
+            portfolio=lambda _arguments: {},
+        )
+    )  # type: ignore[arg-type]
+
+
+def test_get_settlements_exposes_the_complete_market_question_last() -> None:
+    question = "  Will KXTEST-1 resolve YES? É  "
+    registry = _settlement_registry()
+
+    def query(sql: str, params: tuple[object, ...]) -> tuple[tuple[object, ...], ...]:
+        assert "m.question" in sql
+        assert params == ("agent-1", 1)
+        return (_settlement_row(question),)
+
+    with patch.object(registry, "_query", side_effect=query):
+        output = registry._get_settlements({"limit": 1})
+
+    item = output["settlements"][0]
+    assert item["market_question"] == question
+    assert list(item) == [
+        "settlement_id",
+        "position_id",
+        "market_ref",
+        "outcome",
+        "result",
+        "resolution_status",
+        "contract_units",
+        "gross_payout_micros",
+        "entry_fees_deducted_micros",
+        "realized_pnl_micros",
+        "settlement_ts",
+        "settled_at",
+        "audit",
+        "market_question",
+    ]
+
+
+@pytest.mark.parametrize("market_question", [None, "", " \t\n"])
+def test_get_settlements_returns_null_for_missing_market_question(
+    market_question: object,
+) -> None:
+    registry = _settlement_registry()
+
+    with patch.object(registry, "_query", return_value=(_settlement_row(market_question),)):
+        output = registry._get_settlements({"limit": 1})
+
+    assert output["settlements"][0]["market_question"] is None
+
+
 def test_date_range_supports_close_and_open_basis() -> None:
     cutoff = datetime(2026, 8, 21, 10, 0, tzinfo=UTC)
     context = SimpleNamespace(

@@ -651,7 +651,7 @@ class ProductionToolRegistry:
             "SELECT s.id, s.position_id, m.market_ref, s.outcome_side, r.result, "
             "r.lifecycle_status, s.contract_units, s.gross_payout_micros, "
             "s.entry_fees_deducted_micros, s.realized_pnl_micros, s.settlement_ts, "
-            "s.settled_at, r.raw_artifact_id, ra.sha256, ra.observed_at "
+            "s.settled_at, r.raw_artifact_id, ra.sha256, ra.observed_at, m.question "
             "FROM settlements s JOIN positions p ON p.id = s.position_id "
             "JOIN markets m ON m.id = s.market_id JOIN resolution_observations r "
             "ON r.id = s.resolution_id JOIN raw_artifacts ra ON ra.id = r.raw_artifact_id "
@@ -678,6 +678,7 @@ class ProductionToolRegistry:
                         "sha256": str(row[13]),
                         "observed_at": _iso(row[14]),
                     },
+                    "market_question": _nullable_market_question(row[15]),
                 }
                 for row in rows
             ]
@@ -1336,6 +1337,12 @@ def _datetime(value: object, field: str) -> datetime:
 
 def _optional_datetime(value: object, field: str) -> datetime | None:
     return None if value is None else _datetime(value, field)
+
+
+def _nullable_market_question(value: object) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value
 
 
 def _iso(value: object) -> str | None:

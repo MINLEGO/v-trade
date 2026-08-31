@@ -970,6 +970,13 @@
         },
         "audit": {
           "$ref": "#/$defs/audit_ref"
+        },
+        "market_question": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
         }
       },
       "required": [
@@ -985,7 +992,8 @@
         "realized_pnl_micros",
         "settlement_ts",
         "settled_at",
-        "audit"
+        "audit",
+        "market_question"
       ]
     },
     "market_page_input": {
@@ -1889,7 +1897,7 @@
     },
     {
       "name": "get_settlements",
-      "description": "Return FINALIZED-only settlement records and their resolution evidence.",
+      "description": "Return FINALIZED-only settlement records and their resolution evidence, including the persisted market question when available.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,

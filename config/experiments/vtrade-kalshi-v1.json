@@ -22,12 +22,12 @@
     },
     "tool_schemas": {
       "path": "spec/tool-schemas-vtrade-kalshi-v1.json",
-      "sha256": "be0954ae3b87452d984459ce86e11f436662f28be18f095e0a2a8f50c810af0c",
+      "sha256": "9b3f04236c6062ff95f55e6cea0e2fd7fdac86165396cbee2ac9a21d51d15588",
       "classification": "inferred"
     },
     "compatibility": {
       "path": "spec/vtrade-kalshi-v1-compatibility.md",
-      "sha256": "fd5cfbd9065abeb04cdbcb2c78216c4bd8fba28b10c41485f85bd6f05365f712",
+      "sha256": "18acb6557ace98fe2af9aa1c7c038a0217cf4189acbc80c723fa17a2b9b9d8c4",
       "classification": "inferred"
     }
   },

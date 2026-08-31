@@ -17,6 +17,11 @@ competitive score combines reciprocal-book spread, balanced near-midpoint depth,
 24-hour activity. These values are discovery heuristics and never substitute for an
 executable order book or a probability estimate.
 
+Settlement tool records expose the associated catalogue question as required nullable
+`market_question`. It is read from the current `markets.question` value without a
+settlement snapshot; existing settlement ordering, limits, and terminal evidence remain
+unchanged.
+
 ## Boundary
 
 Paper execution and a future real adapter share the venue-neutral semantic order and

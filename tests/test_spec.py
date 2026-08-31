@@ -70,6 +70,17 @@ def test_orderbook_and_settlement_schemas_expose_audit_and_finalization_data() -
     assert settlement["items"]["$ref"] == "#/$defs/settlement"
 
 
+def test_settlement_schema_exposes_nullable_market_question() -> None:
+    document = json.loads(SCHEMA.read_text(encoding="utf-8"))
+    settlement = document["$defs"]["settlement"]
+
+    assert settlement["properties"]["market_question"] == {
+        "type": ["string", "null"],
+        "minLength": 1,
+    }
+    assert settlement["required"][-1] == "market_question"
+
+
 def test_market_card_schema_exposes_freeze_metrics_and_nullable_missing_data() -> None:
     document = json.loads(SCHEMA.read_text(encoding="utf-8"))
     card = document["$defs"]["market_card"]
