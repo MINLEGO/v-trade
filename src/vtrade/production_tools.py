@@ -822,6 +822,7 @@ class ProductionToolRegistry:
         time_in_force = TimeInForce(_required_string(arguments, "time_in_force"))
         amount = _positive_integer_string(arguments.get("amount"), "amount")
         idempotency_key = _required_string(arguments, "idempotency_key", max_length=512)
+        requested_at = self._context.now()
         limit_value = arguments.get("limit_price_micros")
         limit_price = (
             None if limit_value is None else _exact_integer(limit_value, "limit_price_micros")
@@ -838,10 +839,7 @@ class ProductionToolRegistry:
             time_in_force=time_in_force,
             frozen_context_id=str(self._context.claim.cycle_id),
             frozen_cutoff=self._context.cutoff,
-            # Orders are decisions against the immutable cycle cutoff.  The
-            # database guard intentionally rejects an execution timestamp
-            # newer than that cutoff, even when the model call finished later.
-            created_at=self._context.cutoff,
+            created_at=requested_at,
         )
         executor = self._context.immediate_order_executor
         if executor is None:
@@ -865,8 +863,10 @@ class ProductionToolRegistry:
             return None
         rows = self._query(
             "SELECT obs.raw_artifact_id, ra.sha256, ra.observed_at "
-            "FROM order_book_snapshots obs JOIN raw_artifacts ra "
-            "ON ra.id = obs.raw_artifact_id WHERE obs.id = %s",
+            "FROM execution_contexts context "
+            "JOIN order_book_snapshots obs ON obs.execution_context_id = context.id "
+            "JOIN raw_artifacts ra ON ra.id = obs.raw_artifact_id "
+            "WHERE context.id = %s",
             (execution_context_id,),
         )
         if not rows:

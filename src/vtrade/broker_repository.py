@@ -5,18 +5,33 @@ import json
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from typing import Protocol, cast
 
 from vtrade.domain.execution import (
+    EconomicFill,
     FeeParticipantRole,
     FeePolicySnapshot,
+    OrderRequest,
     OrderResult,
+    OrderState,
     ReconciliationState,
     SettlementRecord,
+    SubmissionState,
+    operation_uuid,
 )
-from vtrade.domain.types import MarketKey, OutcomeSide, ResolutionObservation
+from vtrade.domain.types import (
+    CanonicalLevel,
+    ContractQuantity,
+    MarketContext,
+    MarketKey,
+    MoneyMicros,
+    OutcomeSide,
+    PriceMicros,
+    RawArtifact,
+    ResolutionObservation,
+)
 from vtrade.ledger import LedgerEntry
 from vtrade.portfolio import ContractPortfolio
 from vtrade.risk import ConcentrationCheck
@@ -46,6 +61,18 @@ class PersistenceResult:
     fingerprint: str
 
 
+@dataclass(frozen=True, slots=True)
+class OrderIntentReservation:
+    operation_id: uuid.UUID
+    market_id: uuid.UUID | None
+    outcome_id: uuid.UUID | None
+    created: bool
+    existing_result: OrderResult | None = None
+    conflict: bool = False
+    blocked: bool = False
+    in_flight: bool = False
+
+
 class PostgresBrokerRepository:
     """Atomic persistence for semantic orders, accounting, and settlement evidence."""
 
@@ -54,6 +81,153 @@ class PostgresBrokerRepository:
             raise ValueError("database_url is required")
         self._database_url = database_url
         self._connect = connect or _default_connect
+
+    def prepare_order_intent(
+        self,
+        request: OrderRequest,
+        *,
+        agent_id: uuid.UUID,
+        agent_cycle_id: uuid.UUID,
+    ) -> OrderIntentReservation:
+        """Record an order intention under the agent lock before venue I/O.
+
+        The intent table is deliberately separate from the append-only operation
+        table.  This lets a refresh happen outside the transaction while keeping
+        strict idempotency and a durable request timestamp.
+        """
+
+        if request.agent_id != str(agent_id):
+            raise ValueError("database agent does not own the semantic order")
+        if request.frozen_cutoff is None:
+            raise ValueError("order intent requires a frozen decision cutoff")
+        if request.created_at < request.frozen_cutoff:
+            raise ValueError("order intent timestamp predates the frozen decision cutoff")
+        operation_id = _stable_database_uuid(
+            "order-operation", operation_uuid(request.agent_id, request.idempotency_key)
+        )
+        with self._connect(self._database_url) as connection, connection.cursor() as cursor:
+            _lock_agent(cursor, agent_id)
+            cursor.execute(
+                "SELECT id, request_fingerprint, market_id, outcome_id FROM order_operations "
+                "WHERE agent_id = %s AND idempotency_key = %s FOR UPDATE",
+                (agent_id, request.idempotency_key),
+            )
+            existing = cursor.fetchone()
+            if existing is not None:
+                existing_id = uuid.UUID(str(existing[0]))
+                if str(existing[1]) != request.fingerprint:
+                    return OrderIntentReservation(
+                        existing_id,
+                        uuid.UUID(str(existing[2])),
+                        uuid.UUID(str(existing[3])),
+                        False,
+                        conflict=True,
+                    )
+                return OrderIntentReservation(
+                    existing_id,
+                    uuid.UUID(str(existing[2])),
+                    uuid.UUID(str(existing[3])),
+                    False,
+                    existing_result=_load_order_result_cursor(cursor, request, existing_id),
+                )
+            cursor.execute(
+                "SELECT id, request_fingerprint, operation_id, status, market_id, outcome_id "
+                "FROM order_operation_intents WHERE agent_id = %s AND idempotency_key = %s "
+                "FOR UPDATE",
+                (agent_id, request.idempotency_key),
+            )
+            intent = cursor.fetchone()
+            if intent is not None:
+                if str(intent[1]) != request.fingerprint:
+                    return OrderIntentReservation(
+                        operation_id,
+                        uuid.UUID(str(intent[4])),
+                        uuid.UUID(str(intent[5])),
+                        False,
+                        conflict=True,
+                    )
+                return OrderIntentReservation(
+                    operation_id,
+                    uuid.UUID(str(intent[4])),
+                    uuid.UUID(str(intent[5])),
+                    False,
+                    in_flight=intent[2] is None and str(intent[3]) == "OPEN",
+                )
+            cursor.execute(
+                "SELECT paused_at FROM agents WHERE id = %s FOR UPDATE",
+                (agent_id,),
+            )
+            agent_row = cursor.fetchone()
+            if agent_row is None:
+                raise ValueError("agent does not exist")
+            if agent_row[0] is not None:
+                raise ValueError("agent is paused")
+            cursor.execute(
+                "SELECT data_cutoff FROM agent_cycles WHERE id = %s AND agent_id = %s",
+                (agent_cycle_id, agent_id),
+            )
+            cycle_row = cursor.fetchone()
+            if cycle_row is None or cycle_row[0] is None:
+                raise ValueError("order intent cycle cutoff is not finalized")
+            if _aware(cast(datetime, cycle_row[0])) != request.frozen_cutoff:
+                raise ValueError("order intent cutoff differs from the cycle cutoff")
+            cursor.execute(
+                "SELECT 1 FROM order_operation_current WHERE agent_id = %s "
+                "AND reconciliation_state IN ('REQUIRED', 'CONFLICT') LIMIT 1",
+                (agent_id,),
+            )
+            if cursor.fetchone() is not None:
+                return OrderIntentReservation(
+                    operation_id,
+                    None,
+                    None,
+                    False,
+                    blocked=True,
+                )
+            cursor.execute(
+                "SELECT m.id, o.id FROM markets m JOIN outcomes o "
+                "ON o.market_id = m.id AND o.outcome_side = %s "
+                "WHERE m.venue = 'kalshi' AND m.market_ref = %s",
+                (OutcomeSide(request.outcome).value, request.market_key.market_ref),
+            )
+            identity = cursor.fetchone()
+            if identity is None:
+                raise ValueError("semantic order market identity is not persisted")
+            market_id = uuid.UUID(str(identity[0]))
+            outcome_id = uuid.UUID(str(identity[1]))
+            intent_id = _stable_database_uuid(
+                "order-intent", f"{request.agent_id}:{request.idempotency_key}"
+            )
+            cursor.execute(
+                "INSERT INTO order_operation_intents "
+                "(id, agent_id, agent_cycle_id, market_id, outcome_id, outcome_side, "
+                "order_side, amount_kind, cash_amount_micros, contract_units, "
+                "limit_price_micros, time_in_force, frozen_context_id, frozen_cutoff, "
+                "requested_at, idempotency_key, request_fingerprint, status, created_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+                "'OPEN', %s)",
+                (
+                    intent_id,
+                    agent_id,
+                    agent_cycle_id,
+                    market_id,
+                    outcome_id,
+                    OutcomeSide(request.outcome).value,
+                    _enum_value(request.action),
+                    _enum_value(request.amount_type),
+                    request.cash_amount_micros,
+                    request.contract_units,
+                    request.limit_price_micros,
+                    _enum_value(request.time_in_force),
+                    request.frozen_context_id,
+                    request.frozen_cutoff,
+                    request.created_at,
+                    request.idempotency_key,
+                    request.fingerprint,
+                    request.created_at,
+                ),
+            )
+        return OrderIntentReservation(operation_id, market_id, outcome_id, True)
 
     def persist_order_result(
         self,
@@ -65,6 +239,9 @@ class PostgresBrokerRepository:
         outcome_id: uuid.UUID,
         operation_id: uuid.UUID | None = None,
         book_snapshot_id: uuid.UUID | None = None,
+        execution_context: MarketContext | None = None,
+        fee_policy: FeePolicySnapshot | None = None,
+        execution_context_refreshed_at: datetime | None = None,
     ) -> PersistenceResult:
         """Persist one semantic order and its fill/accounting evidence atomically."""
 
@@ -88,6 +265,15 @@ class PostgresBrokerRepository:
                     raise ValueError("semantic idempotency key was reused with different evidence")
                 _assert_semantic_replay(cursor, existing_id, result)
                 return PersistenceResult(existing_id, False, fingerprint)
+            cursor.execute(
+                "SELECT paused_at FROM agents WHERE id = %s FOR UPDATE",
+                (agent_id,),
+            )
+            agent_row = cursor.fetchone()
+            if agent_row is None:
+                raise ValueError("agent does not exist")
+            if agent_row[0] is not None:
+                raise ValueError("agent is paused")
             frozen_cutoff = result.request.frozen_cutoff or result.submitted_at
             execution_cutoff = result.updated_at
             cursor.execute(
@@ -153,17 +339,7 @@ class PostgresBrokerRepository:
                 (
                     operation_uuid_value,
                     _enum_value(result.reconciliation_state),
-                    json.dumps(
-                        {
-                            "contract_version": result.contract_version,
-                            "error_code": (
-                                _enum_value(result.error_code)
-                                if result.error_code is not None
-                                else None
-                            ),
-                        },
-                        sort_keys=True,
-                    ),
+                    json.dumps(_reconciliation_evidence(result), sort_keys=True),
                     result.updated_at,
                     f"reconciliation:{result.operation_id}:0",
                 ),
@@ -178,6 +354,27 @@ class PostgresBrokerRepository:
                     operation_uuid_value,
                 ),
             )
+            persisted_book_snapshot_id = _persist_execution_context_cursor(
+                cursor,
+                result,
+                execution_context,
+                fee_policy=fee_policy,
+                execution_context_refreshed_at=execution_context_refreshed_at,
+                operation_id=operation_uuid_value,
+                agent_id=agent_id,
+                market_id=market_id,
+            )
+            cursor.execute(
+                "UPDATE order_operation_intents SET status = 'FINALIZED', operation_id = %s "
+                "WHERE agent_id = %s AND idempotency_key = %s "
+                "AND request_fingerprint = %s AND status = 'OPEN'",
+                (
+                    operation_uuid_value,
+                    agent_id,
+                    result.request.idempotency_key,
+                    result.request.fingerprint,
+                ),
+            )
             if result.fills:
                 if not isinstance(result.portfolio_before, ContractPortfolio) or not isinstance(
                     result.portfolio_after, ContractPortfolio
@@ -189,11 +386,13 @@ class PostgresBrokerRepository:
                 for fill in result.fills:
                     cursor.execute(
                         "INSERT INTO fills "
-                        "(operation_id, fill_id, fill_fingerprint, contract_units, price_micros, "
+                        "(id, operation_id, fill_id, fill_fingerprint, contract_units, "
+                        "price_micros, "
                         "gross_cash_micros, authoritative_fee_micros, net_cash_delta_micros, "
                         "frozen_context_id, execution_context_id, adapter_evidence, filled_at) "
-                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)",
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)",
                         (
+                            _stable_database_uuid("fill", f"{result.operation_id}:{fill.fill_id}"),
                             operation_uuid_value,
                             fill.fill_id,
                             fill.fingerprint,
@@ -209,7 +408,8 @@ class PostgresBrokerRepository:
                         ),
                     )
                 audit = result.liquidity_audit
-                if audit is not None and book_snapshot_id is not None:
+                audit_snapshot_id = persisted_book_snapshot_id or book_snapshot_id
+                if audit is not None and audit_snapshot_id is not None:
                     cursor.execute(
                         "INSERT INTO liquidity_haircut_audits "
                         "(snapshot_id, outcome_side, rule_version, captured_raw_levels, "
@@ -219,7 +419,7 @@ class PostgresBrokerRepository:
                         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                         "ON CONFLICT (snapshot_id, outcome_side) DO NOTHING",
                         (
-                            book_snapshot_id,
+                            audit_snapshot_id,
                             audit.outcome.value,
                             audit.rule_version,
                             audit.captured_level_count,
@@ -622,6 +822,124 @@ class PostgresBrokerRepository:
             )
         return PersistenceResult(event_id, True, evidence_fingerprint)
 
+    def reconcile_not_submitted_operations(
+        self, *, now: datetime
+    ) -> tuple[uuid.UUID, ...]:
+        """Cancel only pending operations explicitly proven not to be submitted."""
+
+        now = _aware(now)
+        unresolved_agents: set[uuid.UUID] = set()
+        with self._connect(self._database_url) as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT operation.id, operation.agent_id "
+                "FROM order_operations operation "
+                "JOIN order_operation_current current_state "
+                "ON current_state.operation_id = operation.id "
+                "WHERE current_state.reconciliation_state IN ('REQUIRED', 'CONFLICT') "
+                "ORDER BY operation.agent_id, operation.id "
+            )
+            candidates = tuple(cursor.fetchall())
+            for candidate in candidates:
+                operation_id = uuid.UUID(str(candidate[0]))
+                agent_id = uuid.UUID(str(candidate[1]))
+                _lock_agent(cursor, agent_id)
+                cursor.execute(
+                    "SELECT operation.id, operation.agent_id, operation.contract_units, "
+                    "operation.cash_amount_micros, current_state.state, "
+                    "current_state.reconciliation_state, latest.evidence, "
+                    "EXISTS (SELECT 1 FROM fills WHERE fills.operation_id = operation.id) "
+                    "AS has_fills "
+                    "FROM order_operations operation "
+                    "JOIN order_operation_current current_state "
+                    "ON current_state.operation_id = operation.id "
+                    "LEFT JOIN LATERAL (SELECT evidence FROM order_reconciliation_events event "
+                    "WHERE event.operation_id = operation.id ORDER BY event.sequence_number DESC, "
+                    "event.id DESC LIMIT 1) latest ON true "
+                    "WHERE operation.id = %s AND operation.agent_id = %s "
+                    "AND current_state.agent_id = %s FOR UPDATE OF operation, current_state",
+                    (operation_id, agent_id, agent_id),
+                )
+                current = cursor.fetchone()
+                if current is None or str(current[5]) not in {"REQUIRED", "CONFLICT"}:
+                    continue
+                if str(current[4]) != "PENDING" or str(current[5]) != "REQUIRED":
+                    unresolved_agents.add(agent_id)
+                    continue
+                if bool(current[7]):
+                    unresolved_agents.add(agent_id)
+                    continue
+                evidence = _json_mapping(current[6])
+                if evidence.get("submission_state") != SubmissionState.NOT_SUBMITTED.value:
+                    unresolved_agents.add(agent_id)
+                    continue
+                cursor.execute(
+                    "SELECT COALESCE(max(sequence_number), -1) FROM "
+                    "order_reconciliation_events WHERE operation_id = %s",
+                    (operation_id,),
+                )
+                reconciliation_row = cursor.fetchone()
+                reconciliation_sequence = (
+                    int(str(reconciliation_row[0])) + 1 if reconciliation_row is not None else 0
+                )
+                cancellation_evidence = {
+                    "automatic": True,
+                    "submission_state": SubmissionState.NOT_SUBMITTED.value,
+                    "venue_submission_occurred": False,
+                    "cancelled_contract_units": (
+                        None if current[2] is None else int(str(current[2]))
+                    ),
+                    "cancelled_cash_amount_micros": (
+                        None if current[3] is None else int(str(current[3]))
+                    ),
+                }
+                cursor.execute(
+                    "INSERT INTO order_reconciliation_events "
+                    "(id, operation_id, sequence_number, reconciliation_state, evidence, "
+                    "observed_at, idempotency_key) VALUES "
+                    "(%s, %s, %s, 'RESOLVED', %s::jsonb, %s, %s)",
+                    (
+                        _stable_database_uuid(
+                            "reconciliation-event", f"{operation_id}:{reconciliation_sequence}"
+                        ),
+                        operation_id,
+                        reconciliation_sequence,
+                        json.dumps(cancellation_evidence, sort_keys=True),
+                        now,
+                        f"reconciliation:{operation_id}:{reconciliation_sequence}",
+                    ),
+                )
+                cursor.execute(
+                    "SELECT COALESCE(max(sequence_number), -1) FROM order_lifecycle_events "
+                    "WHERE operation_id = %s",
+                    (operation_id,),
+                )
+                lifecycle_row = cursor.fetchone()
+                lifecycle_sequence = (
+                    int(str(lifecycle_row[0])) + 1 if lifecycle_row is not None else 0
+                )
+                cursor.execute(
+                    "INSERT INTO order_lifecycle_events "
+                    "(id, operation_id, sequence_number, state, reason, observed_at, "
+                    "idempotency_key) VALUES (%s, %s, %s, 'CANCELLED', %s, %s, %s)",
+                    (
+                        _stable_database_uuid(
+                            "lifecycle-event", f"{operation_id}:cancelled:{lifecycle_sequence}"
+                        ),
+                        operation_id,
+                        lifecycle_sequence,
+                        "automatic reconciliation: NOT_SUBMITTED",
+                        now,
+                        f"lifecycle:{operation_id}:cancelled:{lifecycle_sequence}",
+                    ),
+                )
+                cursor.execute(
+                    "UPDATE order_operation_current SET state = 'CANCELLED', "
+                    "reconciliation_state = 'RESOLVED', state_version = state_version + 1, "
+                    "updated_at = %s WHERE operation_id = %s AND agent_id = %s",
+                    (now, operation_id, agent_id),
+                )
+        return tuple(sorted(unresolved_agents, key=str))
+
     def persist_settlement_record(
         self,
         record: SettlementRecord,
@@ -778,6 +1096,348 @@ def _assert_semantic_replay(
         raise ValueError("semantic order replay has divergent fill evidence")
 
 
+def _load_order_result_cursor(
+    cursor: _Cursor, request: OrderRequest, operation_id: uuid.UUID
+) -> OrderResult:
+    cursor.execute(
+        "SELECT operation.amount_kind, operation.contract_units, operation.created_at, "
+        "current_state.state, current_state.reconciliation_state, current_state.updated_at "
+        "FROM order_operations operation JOIN order_operation_current current_state "
+        "ON current_state.operation_id = operation.id WHERE operation.id = %s",
+        (operation_id,),
+    )
+    operation = cursor.fetchone()
+    if operation is None:
+        raise ValueError("semantic order operation disappeared")
+    submitted_at = _aware(cast(datetime, operation[2]))
+    replay_request = replace(request, created_at=submitted_at)
+    cursor.execute(
+        "SELECT fill_id, fill_fingerprint, contract_units, price_micros, gross_cash_micros, "
+        "authoritative_fee_micros, net_cash_delta_micros, frozen_context_id, "
+        "execution_context_id, filled_at FROM fills WHERE operation_id = %s "
+        "ORDER BY fill_id",
+        (operation_id,),
+    )
+    fills = tuple(
+        EconomicFill(
+            fill_id=str(row[0]),
+            contract_units=ContractQuantity(int(str(row[2]))),
+            price_micros=PriceMicros(int(str(row[3]))),
+            gross_cash_micros=MoneyMicros(int(str(row[4]))),
+            fee_micros=MoneyMicros(int(str(row[5]))),
+            net_cash_delta_micros=int(str(row[6])),
+            filled_at=_aware(cast(datetime, row[9])),
+            frozen_context_id=None if row[7] is None else str(row[7]),
+            execution_context_id=None if row[8] is None else str(row[8]),
+            fingerprint=str(row[1]),
+        )
+        for row in cursor.fetchall()
+    )
+    cursor.execute(
+        "SELECT evidence FROM order_reconciliation_events WHERE operation_id = %s "
+        "ORDER BY sequence_number DESC, id DESC LIMIT 1",
+        (operation_id,),
+    )
+    reconciliation_row = cursor.fetchone()
+    evidence = _json_mapping(reconciliation_row[0]) if reconciliation_row is not None else {}
+    cursor.execute(
+        "SELECT reason FROM order_lifecycle_events WHERE operation_id = %s "
+        "ORDER BY sequence_number DESC, id DESC LIMIT 1",
+        (operation_id,),
+    )
+    lifecycle_row = cursor.fetchone()
+    reason = None if lifecycle_row is None or lifecycle_row[0] is None else str(lifecycle_row[0])
+    cursor.execute(
+        "SELECT id FROM execution_contexts WHERE operation_id = %s",
+        (operation_id,),
+    )
+    context_row = cursor.fetchone()
+    state = OrderState(str(operation[3]))
+    filled_units = sum(int(fill.contract_units) for fill in fills)
+    requested_units = (
+        int(str(operation[1]))
+        if operation[1] is not None
+        else filled_units
+    )
+    cancelled_units = (
+        requested_units - filled_units if state is OrderState.CANCELLED else 0
+    )
+    remaining_units = (
+        0
+        if state is OrderState.CANCELLED
+        else max(0, requested_units - filled_units)
+    )
+    gross_delta = sum(
+        int(fill.gross_cash_micros)
+        if replay_request.side.value == "SELL"
+        else -int(fill.gross_cash_micros)
+        for fill in fills
+    )
+    fee = sum(int(fill.fee_micros) for fill in fills)
+    raw_error_code = evidence.get("error_code")
+    if raw_error_code is None and state is OrderState.REJECTED:
+        raw_error_code = reason
+    error_code = None if raw_error_code is None else str(raw_error_code)
+    raw_submission_state = evidence.get("submission_state")
+    submission_state = (
+        SubmissionState(str(raw_submission_state))
+        if raw_submission_state in {item.value for item in SubmissionState}
+        else None
+    )
+    return OrderResult(
+        request=replay_request,
+        operation_id=operation_uuid(request.agent_id, request.idempotency_key),
+        state=state,
+        reconciliation_state=ReconciliationState(str(operation[4])),
+        requested_units=ContractQuantity(requested_units),
+        filled_units=ContractQuantity(filled_units),
+        remaining_units=ContractQuantity(remaining_units),
+        cancelled_units=ContractQuantity(cancelled_units),
+        fills=fills,
+        gross_cash_delta_micros=gross_delta,
+        fee_micros=MoneyMicros(fee),
+        net_cash_delta_micros=gross_delta - fee,
+        frozen_context_id=request.frozen_context_id,
+        execution_context_id=(
+            str(context_row[0])
+            if context_row is not None
+            else (fills[0].execution_context_id if fills else None)
+        ),
+        submitted_at=submitted_at,
+        updated_at=_aware(cast(datetime, operation[5])),
+        error_code=error_code,
+        message=(
+            str(evidence["message"])
+            if isinstance(evidence.get("message"), str)
+            else None
+        ),
+        submission_state=submission_state,
+        reconciliation_evidence=evidence,
+    )
+
+
+def _persist_execution_context_cursor(
+    cursor: _Cursor,
+    result: OrderResult,
+    context: MarketContext | None,
+    *,
+    fee_policy: FeePolicySnapshot | None,
+    execution_context_refreshed_at: datetime | None,
+    operation_id: uuid.UUID,
+    agent_id: uuid.UUID,
+    market_id: uuid.UUID,
+) -> uuid.UUID | None:
+    if context is None:
+        return None
+    if result.execution_context_id is None:
+        raise ValueError("fresh execution context id is required for context persistence")
+    try:
+        execution_context_id = uuid.UUID(result.execution_context_id)
+    except (ValueError, AttributeError) as exc:
+        raise ValueError("fresh execution context id must be a UUID") from exc
+    if context.market.key.stable_id != market_id:
+        raise ValueError("fresh execution market identity differs from the operation")
+    execution_cutoff = _aware(result.updated_at)
+    refreshed_at = _aware(execution_context_refreshed_at or execution_cutoff)
+    frozen_cutoff = _aware(result.request.frozen_cutoff or result.submitted_at)
+    if frozen_cutoff > refreshed_at or refreshed_at > execution_cutoff:
+        raise ValueError("fresh execution context timestamps are not ordered")
+    if context.market.observed_at > execution_cutoff:
+        raise ValueError("fresh execution market is newer than its execution cutoff")
+    if (
+        context.market.source_updated_at is not None
+        and context.market.source_updated_at > execution_cutoff
+    ):
+        raise ValueError("fresh execution market update is newer than its execution cutoff")
+    if (
+        context.market.source_updated_at is not None
+        and context.market.source_updated_at > context.market.observed_at
+    ):
+        raise ValueError("fresh execution market update postdates its observation")
+    if context.order_book.observed_at > execution_cutoff:
+        raise ValueError("fresh execution book is newer than its execution cutoff")
+    if context.order_book.cutoff > execution_cutoff:
+        raise ValueError("fresh execution book cutoff is newer than its execution cutoff")
+    if context.order_book.cutoff < frozen_cutoff:
+        raise ValueError("fresh execution book predates the frozen decision cutoff")
+    if (
+        context.order_book.source_timestamp is not None
+        and context.order_book.source_timestamp > context.order_book.observed_at
+    ):
+        raise ValueError("fresh execution book timestamp postdates its observation")
+    market_artifact_id = _persist_raw_artifact_cursor(cursor, context.market.audit)
+    book_artifact_id = _persist_raw_artifact_cursor(cursor, context.order_book.artifact)
+    fee_policy_id: uuid.UUID | None = None
+    if fee_policy is not None:
+        cursor.execute(
+            "SELECT id FROM fee_policy_snapshots WHERE market_id = %s "
+            "AND policy_fingerprint = %s ORDER BY id DESC LIMIT 1",
+            (market_id, fee_policy.fingerprint),
+        )
+        policy_row = cursor.fetchone()
+        if policy_row is None:
+            raise ValueError("fee policy snapshot is not persisted")
+        fee_policy_id = uuid.UUID(str(policy_row[0]))
+    cursor.execute(
+        "INSERT INTO execution_contexts "
+        "(id, operation_id, agent_id, market_id, frozen_context_id, frozen_cutoff, "
+        "refreshed_at, execution_cutoff, fee_policy_snapshot_id, created_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
+        (
+            execution_context_id,
+            operation_id,
+            agent_id,
+            market_id,
+            result.frozen_context_id,
+            frozen_cutoff,
+            refreshed_at,
+            execution_cutoff,
+            fee_policy_id,
+            execution_cutoff,
+        ),
+    )
+    market_snapshot_id = _stable_database_uuid(
+        "execution-market-snapshot", f"{execution_context_id}:{context.market.snapshot_id}"
+    )
+    cursor.execute(
+        "INSERT INTO execution_market_snapshots "
+        "(id, execution_context_id, market_id, market_ref, lifecycle_status, eligible, "
+        "tradeable, question, resolution_rules, resolution_source, open_time, close_time, "
+        "expected_expiration_time, latest_expiration_time, volume_units, liquidity_micros, "
+        "observed_at, source_updated_at, cutoff, raw_artifact_id) VALUES "
+        "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+        "ON CONFLICT (id) DO NOTHING",
+        (
+            market_snapshot_id,
+            execution_context_id,
+            market_id,
+            context.market.market_ref,
+            context.market.status.value,
+            context.market.eligible,
+            context.market.tradeable,
+            context.market.question,
+            context.market.resolution_rules,
+            context.market.resolution_source,
+            context.market.open_time,
+            context.market.close_time,
+            context.market.expected_expiration_time,
+            context.market.latest_expiration_time,
+            int(context.market.volume),
+            int(context.market.liquidity_micros),
+            context.market.observed_at,
+            context.market.source_updated_at,
+            execution_cutoff,
+            market_artifact_id,
+        ),
+    )
+    book_snapshot_id = _stable_database_uuid(
+        "execution-order-book", f"{execution_context_id}:{context.order_book.snapshot_id}"
+    )
+    cursor.execute(
+        "INSERT INTO order_book_snapshots "
+        "(id, freeze_id, execution_context_id, market_id, observed_at, source_timestamp, "
+        "cutoff, raw_artifact_id) VALUES (%s, NULL, %s, %s, %s, %s, %s, %s) "
+        "ON CONFLICT (id) DO NOTHING",
+        (
+            book_snapshot_id,
+            execution_context_id,
+            market_id,
+            context.order_book.observed_at,
+            context.order_book.source_timestamp,
+            execution_cutoff,
+            book_artifact_id,
+        ),
+    )
+    for outcome_side, book_side, levels in _book_levels(context):
+        for level_index, level in enumerate(levels):
+            cursor.execute(
+                "INSERT INTO order_book_levels "
+                "(snapshot_id, outcome_side, book_side, level_index, price_micros, contract_units) "
+                "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
+                (
+                    book_snapshot_id,
+                    outcome_side,
+                    book_side,
+                    level_index,
+                    int(level.price),
+                    int(level.quantity),
+                ),
+            )
+    return book_snapshot_id
+
+
+def _book_levels(
+    context: MarketContext,
+) -> tuple[tuple[str, str, tuple[CanonicalLevel, ...]], ...]:
+    book = context.order_book
+    return (
+        ("YES", "bid", book.yes_bids),
+        ("YES", "ask", book.yes_asks),
+        ("NO", "bid", book.no_bids),
+        ("NO", "ask", book.no_asks),
+    )
+
+
+def _persist_raw_artifact_cursor(cursor: _Cursor, artifact: RawArtifact) -> uuid.UUID:
+    artifact_id = uuid.uuid5(uuid.NAMESPACE_URL, f"vtrade:raw-artifact:{artifact.sha256}")
+    cursor.execute(
+        "INSERT INTO raw_artifacts "
+        "(id, sha256, uri, byte_length, source_endpoint, request_identity, source_timestamp, "
+        "observed_at, captured_cutoff, schema_version, audit_metadata) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NULL, %s, '{}'::jsonb) "
+        "ON CONFLICT (sha256) DO NOTHING",
+        (
+            artifact_id,
+            artifact.sha256,
+            artifact.uri,
+            artifact.byte_length,
+            artifact.source_endpoint,
+            artifact.request_identity,
+            artifact.source_timestamp,
+            artifact.observed_at,
+            artifact.schema_version,
+        ),
+    )
+    cursor.execute(
+        "SELECT id, byte_length, uri, request_identity FROM raw_artifacts "
+        "WHERE sha256 = %s FOR UPDATE",
+        (artifact.sha256,),
+    )
+    existing = cursor.fetchone()
+    if existing is None:
+        raise ValueError("raw artifact disappeared during persistence")
+    if (
+        int(str(existing[1])) != artifact.byte_length
+        or str(existing[2]) != artifact.uri
+        or (existing[3] or None) != artifact.request_identity
+    ):
+        raise ValueError("raw artifact digest was reused with different metadata")
+    return uuid.UUID(str(existing[0]))
+
+
+def _json_mapping(value: object) -> dict[str, object]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _reconciliation_evidence(result: OrderResult) -> dict[str, object]:
+    evidence: dict[str, object] = {
+        "contract_version": result.contract_version,
+        "error_code": (
+            _enum_value(result.error_code) if result.error_code is not None else None
+        ),
+        "message": result.message,
+    }
+    if result.submission_state is not None:
+        evidence["submission_state"] = _enum_value(result.submission_state)
+    evidence.update(dict(result.reconciliation_evidence))
+    return evidence
+
+
 def _settlement_record_fingerprint(record: SettlementRecord) -> str:
     market_ref = (
         record.market_ref
@@ -916,3 +1576,9 @@ def _lock_agent(cursor: _Cursor, agent_id: uuid.UUID) -> None:
 
 def _stable_database_uuid(kind: str, value: str) -> uuid.UUID:
     return uuid.uuid5(uuid.NAMESPACE_URL, f"vtrade:{kind}:{value}")
+
+
+def _aware(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("timestamps must be timezone-aware")
+    return value.astimezone(UTC)

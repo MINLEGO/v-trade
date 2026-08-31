@@ -287,7 +287,8 @@ def external_validation_matrix() -> tuple[ValidationGate, ...]:
             "real-postgresql",
             "VTRADE_RUN_POSTGRES_INTEGRATION=1 uv run --extra dev python -m pytest "
             "tests/test_postgres_*.py",
-            "real disposable database applies/reruns 0001-0008, rejects checksum drift, "
+            "real disposable database applies/reruns the clean migration chain, "
+            "rejects checksum drift, "
             "and exposes latest migration",
         ),
         ValidationGate(

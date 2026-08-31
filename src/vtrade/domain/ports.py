@@ -17,6 +17,21 @@ from vtrade.domain.types import (
 JsonObject = dict[str, Any]
 
 
+class FreshExecutionContextError(RuntimeError):
+    """A fresh execution context could not be obtained at the venue boundary."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool,
+        error_code: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+        self.error_code = error_code
+
+
 class ModelGateway(Protocol):
     def complete(
         self, messages: Sequence[JsonObject], tools: Sequence[JsonObject], model_config: JsonObject
@@ -48,6 +63,14 @@ class MarketContextPort(Protocol):
         *,
         cutoff: datetime,
         deadline: float | None = None,
+    ) -> MarketContext: ...
+
+
+class FreshExecutionContextPort(Protocol):
+    """Fetch a current market and order book for one order attempt."""
+
+    def get_fresh_execution_context(
+        self, market_key: MarketKey, *, deadline: float | None = None
     ) -> MarketContext: ...
 
 

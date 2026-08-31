@@ -9,11 +9,11 @@ scope and the resource it proves.
 | Ruff | Offline | `uv run --extra dev python -m ruff check src tests` | Active Python lint and import hygiene. |
 | mypy | Offline | `uv run --extra dev python -m mypy src/vtrade` | Strict type safety for the active package. |
 | Frozen artifacts | Offline | `uv run --extra dev python -m vtrade.frozen_artifacts` | Canonical UTF-8/LF bytes, SHA-256 values, schema shape, and fixture reference. |
-| Release sweep | Offline | `uv run --extra dev python -m vtrade.release_verification` | Exact eight migrations, archive boundary, absent legacy paths, and zero active legacy venue references. |
+| Release sweep | Offline | `uv run --extra dev python -m vtrade.release_verification` | Exact nine migrations, archive boundary, absent legacy paths, and zero active legacy venue references. |
 | Cutover evidence | Recorded evidence | `uv run --extra dev python scripts/verify_kalshi_cutover_evidence.py --require-ready` | Six named gates, both pre-cutover snapshots, active artifact/migration hashes, paper-only reachability, and infrastructure-only rollback. |
 | Compose shape | Offline-shape | `docker compose -f compose.coolify.yaml config --quiet` | Rendered migrate/API/worker dependency graph; not resource readiness. |
 | Image | Built-image | `docker build --pull -t vtrade:kalshi-cutover .` | Frozen artifact verification and imports in the built image. |
-| PostgreSQL bootstrap | Real disposable PostgreSQL | `$env:VTRADE_RUN_POSTGRES_INTEGRATION='1'; uv run --extra dev python -m pytest tests/test_postgres_*.py` | Fresh 0001-0008 apply/rerun, checksum rejection, latest migration, metric tables, and rollback-only isolation. |
+| PostgreSQL bootstrap | Real disposable PostgreSQL | `$env:VTRADE_RUN_POSTGRES_INTEGRATION='1'; uv run --extra dev python -m pytest tests/test_postgres_*.py` | Fresh clean-chain apply/rerun, checksum rejection, latest migration, metric and order-time execution tables, and rollback-only isolation. |
 | Migration/readiness | Real PostgreSQL and private storage | `uv run --extra dev python -m vtrade.migrate` plus authenticated readiness | Real schema, latest migration, private object store, and active configuration. |
 | French-host REST probe | Intended French production host | `uv run --extra dev python scripts/probe_kalshi_public_rest.py --output <redacted-output>` | Public catalogue traversal, historical cutoff, ordinary binary book, market candlesticks, bounded concurrency, raw bytes, and hashes. |
 

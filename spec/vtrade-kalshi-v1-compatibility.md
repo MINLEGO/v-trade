@@ -27,8 +27,9 @@ WebSocket, order-submission, or real-money fallback is reachable.
 
 There is no compatibility loader, alias, dual venue, dual write, legacy database
 upgrade, historical conversion, or application rollback path. The deployment starts
-from an empty database and uses the exact eight-migration chain. This v1 revision
-refreshes the active artifact hashes and adds the metric persistence migration;
+from an empty database and uses the exact nine-migration chain. This v1 revision
+refreshes the active artifact hashes and adds the metric and order-time execution
+persistence migrations;
 incompatible future changes still require a new experiment version. Missing external
 resources and unresolved reviewed fixture evidence fail closed.
 

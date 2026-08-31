@@ -70,6 +70,7 @@ from vtrade.runtime import (
 from vtrade.semantic_runtime import (
     ProductionSemanticBrokerPort,
     ProductionSemanticOrderExecutor,
+    ProductionSemanticReconciliationPort,
     ProductionSemanticSettlementPort,
 )
 
@@ -187,8 +188,8 @@ class ProductionPromptPort:
         cycle_context: JsonObject = {
             "scheduled_at": claim.scheduled_at.isoformat(),
             "data_cutoff": cutoff.isoformat(),
-            # The current PostgreSQL graph has no pending-order projection. Keep that
-            # absence explicit until a real reservation lifecycle is introduced.
+            # Pre-submission intents do not reserve cash or contracts; unresolved
+            # operations remain a hard execution-repository gate.
             "account": self._account_context(
                 claim.agent_id,
                 cutoff=cutoff,
@@ -1595,6 +1596,7 @@ def build_production_worker(
         maximum_market_fraction=Decimal(
             str(config.raw["limits"]["maximum_market_cost_basis_fraction"])
         ),
+        execution_context_provider=venue,
     )
     orchestrator = CycleOrchestrator(
         repository=repository,
@@ -1658,6 +1660,7 @@ def build_production_worker(
         orchestrator=orchestrator,
         lease_owner=lease_owner,
         clock=clock,
+        reconciliation=ProductionSemanticReconciliationPort(database_url, clock=clock),
         batch_size=1,
     )
     return ProductionWorker(

@@ -302,6 +302,20 @@ class PostgresSchedulingTests(unittest.TestCase):
             "alerts_open_dedupe_idx",
         ):
             self.assertIn(required, migration)
+        execution = Path("migrations/0009_order_time_execution_context.sql").read_text(
+            encoding="utf-8"
+        )
+        for required in (
+            "order_operation_intents",
+            "execution_contexts",
+            "execution_market_snapshots",
+            "execution_context_integrity",
+            "execution_market_snapshot_integrity",
+            "ALTER COLUMN freeze_id DROP NOT NULL",
+            "order_book_snapshot_owner",
+            "NOT_SUBMITTED",
+        ):
+            self.assertIn(required, execution)
 
     def test_foundation_migration_allows_only_temporary_null_cutoff(self) -> None:
         migration = Path("migrations/0001_foundation_agent_state_ledger.sql").read_text(

@@ -158,8 +158,10 @@ _VIEWS: dict[str, str] = {
           JOIN agents a ON a.id = oo.agent_id
           JOIN markets m ON m.id = oo.market_id
           LEFT JOIN order_operation_current oc ON oc.operation_id = oo.id
+          LEFT JOIN execution_contexts execution_context
+            ON execution_context.id = f.execution_context_id
           LEFT JOIN order_book_snapshots execution_book
-            ON execution_book.id = f.execution_context_id
+            ON execution_book.execution_context_id = execution_context.id
           LEFT JOIN raw_artifacts execution_artifact
             ON execution_artifact.id = execution_book.raw_artifact_id
          WHERE (%s::uuid IS NULL OR oo.agent_id = %s::uuid)

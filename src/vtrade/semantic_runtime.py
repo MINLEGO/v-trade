@@ -1,20 +1,27 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Protocol, cast
 
 from vtrade.broker import BinaryPaperBroker, BinarySettlementEngine, SettlementBlockedError
 from vtrade.broker_repository import PostgresBrokerRepository
+from vtrade.deadline import DeadlineExceeded, run_with_deadline
 from vtrade.domain.execution import (
     FeeParticipantRole,
     FeePolicySnapshot,
     OrderRequest,
+    SemanticExecutionError,
+    SubmissionState,
+    operation_uuid,
 )
+from vtrade.domain.ports import FreshExecutionContextError, FreshExecutionContextPort
 from vtrade.domain.types import (
     BinaryMarket,
     BinaryOutcome,
@@ -35,7 +42,9 @@ from vtrade.domain.types import (
     SeriesKey,
 )
 from vtrade.portfolio import ContractPortfolio, ContractPosition
+from vtrade.postgres_runtime import PostgresRuntimeRepository
 from vtrade.runtime import (
+    AlertEvent,
     BrokerExecutionResult,
     CycleClaim,
     PreSettlementResult,
@@ -294,11 +303,19 @@ class ProductionSemanticOrderExecutor:
         maximum_book_age: timedelta,
         maximum_market_fraction: Decimal,
         connect: _Connect | None = None,
+        execution_context_provider: FreshExecutionContextPort | None = None,
+        fresh_execution_deadline_seconds: float = 10.0,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._database_url = database_url
         self._clock = clock
         self._maximum_book_age = maximum_book_age
         self._connect = connect or _default_connect
+        if fresh_execution_deadline_seconds <= 0:
+            raise ValueError("fresh_execution_deadline_seconds must be positive")
+        self._execution_context_provider = execution_context_provider
+        self._fresh_execution_deadline_seconds = fresh_execution_deadline_seconds
+        self._monotonic = monotonic
         self._repository = PostgresBrokerRepository(
             database_url, connect=cast(Any, self._connect)
         )
@@ -319,75 +336,367 @@ class ProductionSemanticOrderExecutor:
         cutoff = _cutoff(claim)
         if request.agent_id != str(claim.agent_id):
             raise RuntimeError("semantic order agent does not own the cycle")
-        if request.frozen_cutoff != cutoff or request.created_at != cutoff:
-            raise RuntimeError("semantic order must use the immutable cycle cutoff")
-        context = frozen_context(frozen, request.market_key.market_ref)
+        if request.frozen_cutoff != cutoff or request.created_at < cutoff:
+            raise RuntimeError("semantic order must retain the immutable cycle cutoff")
         raw_contexts = frozen.get("contexts")
         if not isinstance(raw_contexts, list):
             raise RuntimeError("published freeze lacks typed market contexts")
+        domain_operation_id = operation_uuid(request.agent_id, request.idempotency_key)
         contexts: dict[MarketKey | str, MarketContext] = {
             MarketKey(str(_mapping(item).get("market_ref") or "")): frozen_context(
                 frozen, str(_mapping(item).get("market_ref") or "")
             )
             for item in raw_contexts
         }
+        reservation = self._repository.prepare_order_intent(
+            request,
+            agent_id=claim.agent_id,
+            agent_cycle_id=claim.cycle_id,
+        )
+        if reservation.existing_result is not None:
+            return reservation.existing_result
         portfolio = load_contract_portfolio(
             self._database_url, claim.agent_id, connect=self._connect
         )
+        if reservation.conflict:
+            return BinaryPaperBroker._rejected(
+                request,
+                portfolio,
+                SemanticExecutionError.IDEMPOTENCY_CONFLICT,
+                self._execution_now(request.created_at),
+                operation_id=domain_operation_id,
+                message="idempotency key was reused with different request evidence",
+            )
+        if reservation.blocked:
+            return BinaryPaperBroker._rejected(
+                request,
+                portfolio,
+                SemanticExecutionError.RECONCILIATION_REQUIRED,
+                self._execution_now(request.created_at),
+                operation_id=domain_operation_id,
+                message="agent has an unresolved reconciliation operation",
+            )
+        if reservation.in_flight:
+            return replace(
+                BinaryPaperBroker._pending(
+                    request,
+                    portfolio,
+                    self._execution_now(request.created_at),
+                    operation_id=domain_operation_id,
+                    frozen_context_id=request.frozen_context_id,
+                ),
+                submission_state=SubmissionState.UNKNOWN,
+                reconciliation_evidence={"submission_state": SubmissionState.UNKNOWN.value},
+            )
+        if reservation.market_id is None or reservation.outcome_id is None:
+            raise RuntimeError("order intent identity is incomplete")
+        fresh: MarketContext | None = None
+        execution_cutoff = self._execution_now(request.created_at)
+        try:
+            fresh = self._refresh_execution_context(request.market_key)
+            execution_cutoff = self._execution_now(request.created_at)
+            self._validate_fresh_context(request, fresh, execution_cutoff)
+        except FreshExecutionContextError as exc:
+            result = self._refresh_failure_result(
+                request, portfolio, exc, domain_operation_id
+            )
+            self._persist_order_result(
+                result,
+                claim=claim,
+                reservation=reservation,
+            )
+            return result
+        except (TimeoutError, OSError, ConnectionError) as exc:
+            result = self._pending_refresh_result(
+                request, portfolio, exc, domain_operation_id
+            )
+            self._persist_order_result(
+                result,
+                claim=claim,
+                reservation=reservation,
+            )
+            return result
+        except ValueError as exc:
+            result = BinaryPaperBroker._rejected(
+                request,
+                portfolio,
+                _context_error_code(str(exc)),
+                execution_cutoff,
+                operation_id=domain_operation_id,
+                message=str(exc),
+            )
+            persistable_fresh = self._persistable_fresh_context(
+                request, fresh, execution_cutoff
+            )
+            result = replace(
+                result,
+                frozen_context_id=request.frozen_context_id,
+                submission_state=SubmissionState.NOT_SUBMITTED,
+                reconciliation_evidence={
+                    "submission_state": SubmissionState.NOT_SUBMITTED.value,
+                    "venue_submission_occurred": False,
+                    "refresh_failure": True,
+                    "failure_type": type(exc).__name__,
+                },
+            )
+            if persistable_fresh is not None:
+                result = replace(result, execution_context_id=str(reservation.operation_id))
+            self._persist_order_result(
+                result,
+                claim=claim,
+                reservation=reservation,
+                execution_context=persistable_fresh,
+                execution_context_refreshed_at=(
+                    execution_cutoff if persistable_fresh is not None else None
+                ),
+            )
+            return result
+
         policy = self._fee_policy(request.market_key.market_ref, cutoff)
-        market_id, outcome_id, book_snapshot_id = self._execution_ids(
-            claim.cycle_id, request.market_key.market_ref, request.outcome
-        )
         result = self._broker.execute(
             request,
-            context=context,
+            context=fresh,
             portfolio=portfolio,
             fee_policy=policy,
             frozen_context_id=request.frozen_context_id or str(claim.cycle_id),
-            execution_context_id=str(context.order_book.snapshot_id),
-            now=cutoff,
+            execution_context_id=str(reservation.operation_id),
+            now=execution_cutoff,
             account_value_micros=(
                 int(portfolio.account_value_micros(contexts))
                 if portfolio.positions
                 and all(
-                    any(
-                        position.market_ref == context_key
-                        for context_key in contexts
-                    )
+                    any(position.market_ref == context_key for context_key in contexts)
                     for position in portfolio.positions
                 )
                 else None
             ),
             valuation_contexts=contexts,
         )
+        result = replace(
+            result,
+            frozen_context_id=request.frozen_context_id or str(claim.cycle_id),
+            execution_context_id=str(reservation.operation_id),
+        )
+        self._persist_order_result(
+            result,
+            claim=claim,
+            reservation=reservation,
+            execution_context=fresh,
+            fee_policy=policy,
+            execution_context_refreshed_at=execution_cutoff,
+        )
+        return result
+
+    def _refresh_execution_context(self, market_key: MarketKey) -> MarketContext:
+        provider = self._execution_context_provider
+        if provider is None:
+            raise FreshExecutionContextError(
+                "fresh execution context provider is unavailable", retryable=False
+            )
+        deadline = self._monotonic() + self._fresh_execution_deadline_seconds
+
+        def invoke() -> MarketContext:
+            try:
+                result = provider.get_fresh_execution_context(market_key, deadline=deadline)
+            except TypeError as first_error:
+                try:
+                    result = provider.get_fresh_execution_context(market_key)
+                except TypeError as second_error:
+                    raise FreshExecutionContextError(
+                        "fresh execution context provider has an invalid signature",
+                        retryable=False,
+                    ) from second_error
+                del first_error
+            if not isinstance(result, MarketContext):
+                raise FreshExecutionContextError(
+                    "fresh execution context provider returned an invalid context",
+                    retryable=False,
+                )
+            return result
+
+        try:
+            return run_with_deadline(
+                invoke,
+                deadline=deadline,
+                label="fresh execution context",
+                clock=self._monotonic,
+            )
+        except DeadlineExceeded as exc:
+            raise FreshExecutionContextError(
+                "fresh execution context refresh exceeded its ten-second deadline",
+                retryable=True,
+            ) from exc
+
+    def _validate_fresh_context(
+        self, request: OrderRequest, context: MarketContext, execution_cutoff: datetime
+    ) -> None:
+        if context.market.key != request.market_key:
+            raise ValueError("fresh execution market differs from market_ref")
+        if not context.market.tradeable:
+            raise ValueError("fresh execution market is not active and tradeable")
+        selected_outcome = (
+            context.market.yes
+            if OutcomeSide(request.outcome) is OutcomeSide.YES
+            else context.market.no
+        )
+        if not selected_outcome.eligible:
+            raise ValueError("fresh execution outcome is not eligible")
+        if request.frozen_cutoff is not None and context.order_book.cutoff < request.frozen_cutoff:
+            raise ValueError("fresh execution context predates the frozen decision cutoff")
+        if context.market.observed_at > execution_cutoff:
+            raise ValueError("fresh market metadata is from the future")
+        if (
+            context.market.source_updated_at is not None
+            and context.market.source_updated_at > execution_cutoff
+        ):
+            raise ValueError("fresh market metadata timestamp is from the future")
+        if (
+            context.market.source_updated_at is not None
+            and context.market.source_updated_at > context.market.observed_at
+        ):
+            raise ValueError("fresh market metadata timestamp postdates its observation")
+        if context.order_book.observed_at > execution_cutoff:
+            raise ValueError("fresh execution order book is from the future")
+        if context.order_book.cutoff > execution_cutoff:
+            raise ValueError("fresh execution order book cutoff is from the future")
+        if (
+            context.order_book.source_timestamp is not None
+            and context.order_book.source_timestamp > execution_cutoff
+        ):
+            raise ValueError("fresh order book timestamp is from the future")
+        if (
+            context.order_book.source_timestamp is not None
+            and context.order_book.source_timestamp > context.order_book.observed_at
+        ):
+            raise ValueError("fresh order book timestamp postdates its observation")
+        maximum_age = min(self._maximum_book_age, timedelta(seconds=300))
+        if execution_cutoff - context.order_book.observed_at > maximum_age:
+            raise ValueError("fresh execution order book is stale")
+
+    @staticmethod
+    def _persistable_fresh_context(
+        request: OrderRequest,
+        context: MarketContext | None,
+        execution_cutoff: datetime,
+    ) -> MarketContext | None:
+        if context is None or context.market.key != request.market_key:
+            return None
+        if (
+            request.frozen_cutoff is not None
+            and context.order_book.cutoff < request.frozen_cutoff
+        ):
+            return None
+        if context.market.observed_at > execution_cutoff:
+            return None
+        if (
+            context.market.source_updated_at is not None
+            and (
+                context.market.source_updated_at > execution_cutoff
+                or context.market.source_updated_at > context.market.observed_at
+            )
+        ):
+            return None
+        if context.order_book.observed_at > execution_cutoff:
+            return None
+        if context.order_book.cutoff > execution_cutoff:
+            return None
+        if (
+            context.order_book.source_timestamp is not None
+            and (
+                context.order_book.source_timestamp > execution_cutoff
+                or context.order_book.source_timestamp > context.order_book.observed_at
+            )
+        ):
+            return None
+        return context
+
+    def _execution_now(self, minimum: datetime) -> datetime:
+        return max(_aware(self._clock()), _aware(minimum))
+
+    def _pending_refresh_result(
+        self,
+        request: OrderRequest,
+        portfolio: ContractPortfolio,
+        message: BaseException | str,
+        operation_id: str,
+    ) -> Any:
+        result = BinaryPaperBroker._pending(
+            request,
+            portfolio,
+            self._execution_now(request.created_at),
+            operation_id=str(operation_id),
+            frozen_context_id=request.frozen_context_id,
+        )
+        return replace(
+            result,
+            reconciliation_evidence={
+                "submission_state": SubmissionState.NOT_SUBMITTED.value,
+                "venue_submission_occurred": False,
+                "refresh_failure": True,
+                "failure_type": (
+                    type(message).__name__
+                    if isinstance(message, BaseException)
+                    else "refresh_error"
+                ),
+            },
+        )
+
+    def _refresh_failure_result(
+        self,
+        request: OrderRequest,
+        portfolio: ContractPortfolio,
+        error: FreshExecutionContextError,
+        operation_id: str,
+    ) -> Any:
+        if error.retryable:
+            return self._pending_refresh_result(request, portfolio, error, operation_id)
+        code_value = error.error_code or _context_error_code(str(error))
+        try:
+            code = SemanticExecutionError(code_value)
+        except ValueError:
+            code = SemanticExecutionError.INVALID_CONTEXT
+        result = BinaryPaperBroker._rejected(
+            request,
+            portfolio,
+            code,
+            self._execution_now(request.created_at),
+            operation_id=str(operation_id),
+            message=str(error),
+        )
+        return replace(
+            result,
+            frozen_context_id=request.frozen_context_id,
+            submission_state=SubmissionState.NOT_SUBMITTED,
+            reconciliation_evidence={
+                "submission_state": SubmissionState.NOT_SUBMITTED.value,
+                "venue_submission_occurred": False,
+                "refresh_failure": True,
+                "failure_type": type(error).__name__,
+            },
+        )
+
+    def _persist_order_result(
+        self,
+        result: Any,
+        *,
+        claim: CycleClaim,
+        reservation: Any,
+        execution_context: MarketContext | None = None,
+        fee_policy: FeePolicySnapshot | None = None,
+        execution_context_refreshed_at: datetime | None = None,
+    ) -> None:
+        if reservation.market_id is None or reservation.outcome_id is None:
+            raise RuntimeError("order intent identity is incomplete")
         self._repository.persist_order_result(
             result,
             agent_id=claim.agent_id,
             agent_cycle_id=claim.cycle_id,
-            market_id=market_id,
-            outcome_id=outcome_id,
-            book_snapshot_id=book_snapshot_id,
-        )
-        return result
-
-    def _execution_ids(
-        self, cycle_id: uuid.UUID, market_ref: str, outcome: OutcomeSide | str
-    ) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID | None]:
-        with self._connect(self._database_url) as connection, connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT m.id, o.id, books.id FROM markets m "
-                "JOIN outcomes o ON o.market_id = m.id AND o.outcome_side = %s "
-                "LEFT JOIN market_freezes mf ON mf.agent_cycle_id = %s "
-                "LEFT JOIN order_book_snapshots books ON books.freeze_id = mf.id "
-                "AND books.market_id = m.id WHERE m.market_ref = %s "
-                "ORDER BY books.cutoff DESC NULLS LAST, books.id DESC LIMIT 1",
-                (OutcomeSide(outcome).value, cycle_id, market_ref),
-            )
-            row = cursor.fetchone()
-        if row is None:
-            raise RuntimeError("semantic order market identity is not frozen")
-        return uuid.UUID(str(row[0])), uuid.UUID(str(row[1])), (
-            uuid.UUID(str(row[2])) if row[2] is not None else None
+            market_id=reservation.market_id,
+            outcome_id=reservation.outcome_id,
+            operation_id=reservation.operation_id,
+            execution_context=execution_context,
+            fee_policy=fee_policy,
+            execution_context_refreshed_at=execution_context_refreshed_at,
         )
 
     def _fee_policy(self, market_ref: str, cutoff: datetime) -> FeePolicySnapshot | None:
@@ -445,6 +754,62 @@ class ProductionSemanticOrderExecutor:
         if snapshot.fingerprint != str(row[15]):
             raise RuntimeError("fee policy fingerprint is inconsistent")
         return snapshot
+
+
+class ProductionSemanticReconciliationPort:
+    """Resolve only pre-submission ambiguous order attempts before a new cycle."""
+
+    def __init__(
+        self,
+        database_url: str,
+        *,
+        clock: Callable[[], datetime],
+        connect: _Connect | None = None,
+    ) -> None:
+        self._database_url = database_url
+        self._clock = clock
+        connector = connect or _default_connect
+        self._broker_repository = PostgresBrokerRepository(
+            database_url, connect=cast(Any, connector)
+        )
+        self._runtime_repository = PostgresRuntimeRepository(
+            database_url, connect=cast(Any, connector)
+        )
+
+    def reconcile_before_cycle(self, *, now: datetime | None = None) -> None:
+        observed_at = _aware(now or self._clock())
+        try:
+            unresolved = self._broker_repository.reconcile_not_submitted_operations(
+                now=observed_at
+            )
+        except Exception as exc:
+            self._runtime_repository.open_alert(
+                AlertEvent(
+                    None,
+                    None,
+                    "critical",
+                    "order_reconciliation_failed",
+                    {"failure_type": type(exc).__name__},
+                    observed_at,
+                    "order-reconciliation-failed",
+                )
+            )
+            raise RuntimeError("automatic order reconciliation failed") from exc
+        if not unresolved:
+            return
+        for agent_id in unresolved:
+            self._runtime_repository.open_alert(
+                AlertEvent(
+                    None,
+                    agent_id,
+                    "critical",
+                    "order_reconciliation_required",
+                    {"operation_state": "RECONCILIATION_REQUIRED"},
+                    observed_at,
+                    f"order-reconciliation-required:{agent_id}",
+                )
+            )
+        raise RuntimeError("unresolved order reconciliation blocks the cycle")
 
 
 class ProductionSemanticBrokerPort:
@@ -783,9 +1148,19 @@ class ProductionSemanticSettlementPort:
         return max(current, int(str(row[0])) if row else current)
 
 
+def _context_error_code(message: str) -> SemanticExecutionError:
+    lowered = message.casefold()
+    if "stale" in lowered:
+        return SemanticExecutionError.STALE_BOOK
+    if "tradeable" in lowered or "active" in lowered:
+        return SemanticExecutionError.MARKET_NOT_TRADEABLE
+    return SemanticExecutionError.INVALID_CONTEXT
+
+
 __all__ = [
     "ProductionSemanticBrokerPort",
     "ProductionSemanticOrderExecutor",
+    "ProductionSemanticReconciliationPort",
     "ProductionSemanticSettlementPort",
     "frozen_context",
     "load_contract_portfolio",

@@ -200,6 +200,8 @@ def test_pending_blocks_new_orders_and_finalized_settlement_is_idempotent() -> N
         now=NOW,
     )
     assert pending.state is OrderState.PENDING
+    assert pending.submission_state.value == "NOT_SUBMITTED"
+    assert pending.reconciliation_evidence["venue_submission_occurred"] is False
     blocked = broker.execute(
         request(amount=100, key="blocked-14"),
         context=context(),

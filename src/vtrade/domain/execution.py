@@ -62,6 +62,14 @@ class ReconciliationState(StrEnum):
     CONFLICT = "CONFLICT"
 
 
+class SubmissionState(StrEnum):
+    """Internal evidence about whether an order reached a venue boundary."""
+
+    NOT_SUBMITTED = "NOT_SUBMITTED"
+    UNKNOWN = "UNKNOWN"
+    SUBMITTED = "SUBMITTED"
+
+
 class FeeParticipantRole(StrEnum):
     MAKER = "MAKER"
     TAKER = "TAKER"
@@ -511,6 +519,8 @@ class OrderResult:
     updated_at: datetime = field(default_factory=utc_now)
     error_code: SemanticExecutionError | str | None = None
     message: str | None = None
+    submission_state: SubmissionState | str | None = None
+    reconciliation_evidence: Mapping[str, object] = field(default_factory=dict)
     portfolio_before: Any = field(default=None, compare=False, repr=False)
     portfolio_after: Any = field(default=None, compare=False, repr=False)
     ledger_entries: tuple[Any, ...] = field(default=(), compare=False, repr=False)
@@ -524,6 +534,15 @@ class OrderResult:
             self,
             "reconciliation_state",
             ReconciliationState(self.reconciliation_state),
+        )
+        if self.submission_state is not None:
+            object.__setattr__(self, "submission_state", SubmissionState(self.submission_state))
+        if not isinstance(self.reconciliation_evidence, Mapping):
+            raise ValueError("reconciliation evidence must be an object")
+        object.__setattr__(
+            self,
+            "reconciliation_evidence",
+            MappingProxyType(dict(self.reconciliation_evidence)),
         )
         _nonempty(self.operation_id, "operation_id")
         for name in ("requested_units", "filled_units", "remaining_units", "cancelled_units"):
@@ -743,6 +762,7 @@ __all__ = [
     "SemanticExecutionError",
     "SemanticOrderRequest",
     "SettlementRecord",
+    "SubmissionState",
     "TimeInForce",
     "gross_cash_micros",
     "operation_uuid",

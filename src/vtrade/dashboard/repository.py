@@ -747,8 +747,10 @@ SELECT oo.id AS operation_id, oo.created_at, oo.outcome_side, oo.order_side,
        LIMIT 1
   ) lifecycle ON true
   LEFT JOIN fills f ON f.operation_id = oo.id
+  LEFT JOIN execution_contexts execution_context
+    ON execution_context.id = f.execution_context_id
   LEFT JOIN order_book_snapshots execution_book
-    ON execution_book.id = f.execution_context_id
+    ON execution_book.execution_context_id = execution_context.id
   LEFT JOIN raw_artifacts execution_artifact
     ON execution_artifact.id = execution_book.raw_artifact_id
  WHERE oo.agent_cycle_id = %s::uuid

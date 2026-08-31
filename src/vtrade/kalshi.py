@@ -14,7 +14,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from functools import partial
 from typing import Any, cast
@@ -23,7 +23,7 @@ import httpx
 
 from vtrade.artifacts import ArtifactRef
 from vtrade.deadline import DeadlineExceeded, deadline_remaining, run_with_deadline
-from vtrade.domain.ports import ArtifactReference, ArtifactStore
+from vtrade.domain.ports import ArtifactReference, ArtifactStore, FreshExecutionContextError
 from vtrade.domain.types import (
     BinaryEvent,
     BinaryMarket,
@@ -56,6 +56,7 @@ KALSHI_PUBLIC_REST_ROOT = "https://external-api.kalshi.com/trade-api/v2"
 KALSHI_SCHEMA_VERSION = "vtrade-binary-market-v1"
 _LOGGER = logging.getLogger(__name__)
 RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
+FRESH_EXECUTION_MAX_BOOK_AGE = timedelta(seconds=300)
 ORDINARY_BINARY_FORBIDDEN_FIELDS = frozenset(
     {"token_id", "venue_token_id", "condition_id", "negative_risk", "shares"}
 )
@@ -473,6 +474,7 @@ class KalshiPublicRestAdapter:
         connect_timeout_seconds: float = 5.0,
         catalogue_sync_deadline_seconds: float = 300.0,
         freeze_deadline_seconds: float = 600.0,
+        fresh_execution_deadline_seconds: float = 10.0,
     ) -> None:
         if maximum_parallel_requests < 1:
             raise ValueError("maximum_parallel_requests must be positive")
@@ -482,6 +484,8 @@ class KalshiPublicRestAdapter:
             raise ValueError("catalogue sync deadline must be positive")
         if freeze_deadline_seconds <= 0:
             raise ValueError("freeze_deadline_seconds must be positive")
+        if fresh_execution_deadline_seconds <= 0:
+            raise ValueError("fresh_execution_deadline_seconds must be positive")
         if not root_url.startswith("https://"):
             raise ValueError("Kalshi public REST root must use HTTPS")
         self._artifact_store = artifact_store
@@ -507,6 +511,7 @@ class KalshiPublicRestAdapter:
         self._maximum_parallel_requests = maximum_parallel_requests
         self._catalogue_sync_deadline_seconds = catalogue_sync_deadline_seconds
         self._freeze_deadline_seconds = freeze_deadline_seconds
+        self._fresh_execution_deadline_seconds = fresh_execution_deadline_seconds
         self._market_cache: dict[MarketKey, BinaryMarket] = {}
         self._event_metadata_cache: dict[str, tuple[Mapping[str, Any], _ArchivedResponse]] = {}
         self._series_metadata_cache: dict[str, tuple[Mapping[str, Any], _ArchivedResponse]] = {}
@@ -1461,15 +1466,18 @@ class KalshiPublicRestAdapter:
         self,
         market_key: MarketKey,
         *,
-        cutoff: datetime,
+        cutoff: datetime | None,
         historical_cutoff: HistoricalCutoff,
         deadline: _Deadline | None = None,
+        use_cache: bool = True,
+        remember: bool = True,
     ) -> BinaryMarket:
-        cached = self._market_cache.get(market_key)
+        cached = self._market_cache.get(market_key) if use_cache else None
         if cached is not None:
-            _check_cutoff(
-                cached.source_updated_at or cached.observed_at, cutoff, "market observation"
-            )
+            if cutoff is not None:
+                _check_cutoff(
+                    cached.source_updated_at or cached.observed_at, cutoff, "market observation"
+                )
             return cached
         # A market not yet in the catalogue has no lifecycle timestamp with which
         # to route it. Try live first, then the historical single-market endpoint
@@ -1508,7 +1516,8 @@ class KalshiPublicRestAdapter:
         )
         if market.key != market_key:
             raise KalshiPayloadError("market response ticker does not match the requested key")
-        self._remember_market(market)
+        if remember:
+            self._remember_market(market)
         return market
 
     def get_context(
@@ -1565,6 +1574,103 @@ class KalshiPublicRestAdapter:
         except ValueError as exc:
             raise KalshiPayloadError(str(exc)) from exc
         return MarketContext(market, book)
+
+    def get_fresh_execution_context(
+        self, market_key: MarketKey, *, deadline: float | None = None
+    ) -> MarketContext:
+        """Fetch an order-time market and book without consulting the market cache."""
+
+        bounded_deadline = time.monotonic() + self._fresh_execution_deadline_seconds
+        if deadline is not None:
+            bounded_deadline = min(bounded_deadline, deadline)
+        operation_deadline = _Deadline(bounded_deadline)
+        try:
+            historical_cutoff = self._last_historical_cutoff or self.get_historical_cutoff(
+                deadline=operation_deadline
+            )
+            market = self._fetch_market(
+                market_key,
+                cutoff=None,
+                historical_cutoff=historical_cutoff,
+                deadline=operation_deadline,
+                use_cache=False,
+                remember=False,
+            )
+            operation_deadline.check()
+            archived = self._request(
+                f"/markets/{market_key.market_ref}/orderbook",
+                {"depth": "0"},
+                deadline=operation_deadline,
+            )
+            root = _root(archived.payload)
+            book_payload = root.get("orderbook_fp")
+            if book_payload is None:
+                book_payload = root.get("orderbook")
+            if book_payload is None:
+                raise KalshiPayloadError("orderbook response lacks orderbook_fp")
+            book_payload = _root(book_payload, "orderbook_fp")
+            source_timestamp = _optional_timestamp(
+                book_payload, ("timestamp", "updated_ts", "updated_time"), "orderbook timestamp"
+            )
+            observed = archived.observed_at
+            execution_cutoff = max(
+                _aware(self._clock(), "execution cutoff"), observed, market.observed_at
+            )
+            _check_cutoff(source_timestamp, execution_cutoff, "orderbook timestamp")
+            if source_timestamp is not None and source_timestamp > observed:
+                raise KalshiLookAheadError("orderbook timestamp is newer than local observation")
+            artifact = replace(
+                archived.artifact,
+                source_timestamp=source_timestamp,
+                historical_cutoff=historical_cutoff.market_settled_ts,
+            )
+            try:
+                book = build_canonical_order_book(
+                    market.key,
+                    market.price_grid,
+                    book_payload.get("yes_dollars"),
+                    book_payload.get("no_dollars"),
+                    observed_at=observed,
+                    cutoff=execution_cutoff,
+                    artifact=artifact,
+                    source_timestamp=source_timestamp,
+                )
+            except ValueError as exc:
+                raise KalshiPayloadError(str(exc)) from exc
+            if execution_cutoff - observed > FRESH_EXECUTION_MAX_BOOK_AGE:
+                raise FreshExecutionContextError(
+                    "fresh execution order book is stale",
+                    retryable=False,
+                    error_code="STALE_BOOK",
+                )
+            if not market.tradeable:
+                raise FreshExecutionContextError(
+                    "fresh execution market is not active and tradeable",
+                    retryable=False,
+                    error_code="MARKET_NOT_TRADEABLE",
+                )
+            operation_deadline.check()
+            return MarketContext(market, book)
+        except FreshExecutionContextError:
+            raise
+        except KalshiHTTPError as exc:
+            retryable = exc.status_code in RETRYABLE_STATUS_CODES
+            raise FreshExecutionContextError(
+                str(exc), retryable=retryable, error_code=None if retryable else "INVALID_CONTEXT"
+            ) from exc
+        except KalshiTransportError as exc:
+            raise FreshExecutionContextError(str(exc), retryable=True) from exc
+        except KalshiPayloadError as exc:
+            raise FreshExecutionContextError(
+                str(exc), retryable=False, error_code="INVALID_CONTEXT"
+            ) from exc
+
+    def get_fresh_context(
+        self, market_key: MarketKey, *, deadline: float | None = None
+    ) -> MarketContext:
+        """Compatibility alias for callers using the shorter context name."""
+
+        return self.get_fresh_execution_context(market_key, deadline=deadline)
 
     def get_market_context(self, market_key: MarketKey, *, cutoff: datetime) -> MarketContext:
         return self.get_context(market_key, cutoff=cutoff)
@@ -1744,6 +1850,7 @@ KalshiPublicRest = KalshiPublicRestAdapter
 
 
 __all__ = [
+    "FRESH_EXECUTION_MAX_BOOK_AGE",
     "KALSHI_PUBLIC_REST_ROOT",
     "KALSHI_SCHEMA_VERSION",
     "RETRYABLE_STATUS_CODES",

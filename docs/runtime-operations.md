@@ -3,7 +3,7 @@
 ## Deployment sequence
 
 The target is a fresh empty PostgreSQL database. The image contains only the active
-configuration, eight migrations, Kalshi fixture manifest, and frozen tool/prompt
+configuration, nine migrations, Kalshi fixture manifest, and frozen tool/prompt
 contracts. Coolify starts one migration job, then the API, then the worker after the
 API's authenticated readiness check is healthy:
 
@@ -102,7 +102,7 @@ Record redacted command output and immutable references in
 `docs/evidence/kalshi-cutover-YYYY-MM-DD.json`. The record is blocked until it
 contains the six gates (`offline`, `postgresql`, `built_image`, `private_resources`,
 `provider_egress`, and `french_host`), database/object-storage snapshots, the image
-digest, the active artifact and eight-migration hashes, the paper-only reachability
+digest, the active artifact and nine-migration hashes, the paper-only reachability
 check, and the infrastructure-only rollback record. Never place credentials,
 connection strings, private URLs, or raw authorization headers in the record.
 

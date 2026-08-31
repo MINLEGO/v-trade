@@ -2171,7 +2171,7 @@
     },
     {
       "name": "place_market_order",
-      "description": "Submit one exact paper order against the refreshed normalized binary execution context; no real execution is reachable.",
+      "description": "Submit and evaluate one order for the specified binary market using an execution context refreshed at order time. The current cycle’s frozen order book is decision evidence, not a fill guarantee.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,

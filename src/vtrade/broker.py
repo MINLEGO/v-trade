@@ -721,6 +721,11 @@ class BinaryPaperBroker:
             submitted_at=request.created_at,
             updated_at=now,
             error_code=SemanticExecutionError.RECONCILIATION_REQUIRED,
+            submission_state="NOT_SUBMITTED",
+            reconciliation_evidence={
+                "submission_state": "NOT_SUBMITTED",
+                "venue_submission_occurred": False,
+            },
             portfolio_before=portfolio,
             portfolio_after=portfolio,
         )
@@ -884,4 +889,3 @@ SemanticOrderRequest = OrderRequest
 BinaryOrderResult = OrderResult
 FeeSnapshot = FeePolicySnapshot
 ContractSettlement = SettlementRecord
-

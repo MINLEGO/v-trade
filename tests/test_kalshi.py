@@ -259,6 +259,29 @@ class KalshiDomainTests(unittest.TestCase):
             self.assertEqual(len(batches[0].candlesticks), 48)
             self.assertEqual(batches[0].candlesticks[-1].end_period, NOW)
 
+    def test_fresh_execution_context_bypasses_the_market_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            replay = Replay()
+            adapter = KalshiPublicRestAdapter(
+                ContentAddressedArtifactStore(Path(directory)),
+                client=httpx.Client(transport=httpx.MockTransport(replay)),
+                clock=lambda: NOW,
+                sleep=lambda _delay: None,
+            )
+            adapter.sync_catalogue(cutoff=NOW)
+            adapter.get_context(MarketKey("KXTEST-1"), cutoff=NOW)
+            before = len(replay.calls)
+
+            fresh = adapter.get_fresh_execution_context(MarketKey("KXTEST-1"))
+
+            fresh_market_calls = [
+                call
+                for call in replay.calls[before:]
+                if "/markets/KXTEST-1" in call and "orderbook" not in call
+            ]
+            self.assertEqual(len(fresh_market_calls), 1)
+            self.assertEqual(fresh.order_book.best_ask(OutcomeSide.YES).price, 440_000)
+
     def test_repeated_cursor_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             replay = Replay(repeated_cursor=True)

@@ -322,6 +322,68 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(result.processed_cycle_ids, (second.cycle_id,))
         self.assertEqual(result.failures[0][0], first.cycle_id)
 
+    def test_order_reconciliation_runs_before_any_cycle_claim(self) -> None:
+        repository = MemoryRuntimeRepository()
+        repository.due = (claim(),)
+        ports = Ports()
+        calls: list[str] = []
+
+        class Reconciliation:
+            def reconcile_before_cycle(self, *, now: datetime | None = None) -> None:
+                del now
+                calls.append("reconciliation")
+
+        orchestrator = CycleOrchestrator(
+            repository=repository,
+            market_freezer=ports,
+            pre_settlement=ports,
+            prompt=ports,
+            harness=ports,
+            broker=ports,
+            settlement_valuation=ports,
+            clock=lambda: NOW,
+        )
+        result = HourlyRuntime(
+            repository=repository,
+            orchestrator=orchestrator,
+            lease_owner="worker-1",
+            clock=lambda: NOW,
+            reconciliation=Reconciliation(),
+        ).tick()
+
+        self.assertEqual(result.processed_cycle_ids, (repository.due[0].cycle_id,))
+        self.assertEqual(calls, ["reconciliation"])
+
+    def test_failed_order_reconciliation_blocks_new_cycle_claims(self) -> None:
+        repository = MemoryRuntimeRepository()
+        repository.due = (claim(),)
+        ports = Ports()
+
+        class Reconciliation:
+            def reconcile_before_cycle(self, *, now: datetime | None = None) -> None:
+                del now
+                raise RuntimeError("reconciliation failed")
+
+        orchestrator = CycleOrchestrator(
+            repository=repository,
+            market_freezer=ports,
+            pre_settlement=ports,
+            prompt=ports,
+            harness=ports,
+            broker=ports,
+            settlement_valuation=ports,
+            clock=lambda: NOW,
+        )
+        with self.assertRaisesRegex(RuntimeError, "reconciliation failed"):
+            HourlyRuntime(
+                repository=repository,
+                orchestrator=orchestrator,
+                lease_owner="worker-1",
+                clock=lambda: NOW,
+                reconciliation=Reconciliation(),
+            ).tick()
+        self.assertEqual(ports.calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()

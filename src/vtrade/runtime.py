@@ -205,6 +205,10 @@ class BrokerPort(Protocol):
     ) -> BrokerExecutionResult: ...
 
 
+class ReconciliationPort(Protocol):
+    def reconcile_before_cycle(self, *, now: datetime | None = None) -> None: ...
+
+
 class SettlementValuationPort(Protocol):
     def settle_and_value(
         self, claim: CycleClaim, frozen: JsonObject, broker: JsonObject
@@ -666,6 +670,7 @@ class HourlyRuntime:
         orchestrator: CycleOrchestrator,
         lease_owner: str,
         clock: Callable[[], datetime],
+        reconciliation: ReconciliationPort | None = None,
         lease_duration: timedelta = DEFAULT_CYCLE_LEASE_DURATION,
         missed_grace: timedelta = timedelta(minutes=10),
         batch_size: int = 10,
@@ -680,6 +685,7 @@ class HourlyRuntime:
         self._orchestrator = orchestrator
         self._lease_owner = lease_owner
         self._clock = clock
+        self._reconciliation = reconciliation
         self._lease_duration = lease_duration
         self._missed_grace = missed_grace
         self._batch_size = batch_size
@@ -689,6 +695,8 @@ class HourlyRuntime:
 
     def tick(self) -> RuntimeTickResult:
         now = _aware(self._clock())
+        if self._reconciliation is not None:
+            self._reconciliation.reconcile_before_cycle(now=now)
         recovered = self._repository.recover_expired_cycles(
             now=now,
             lease_owner=self._lease_owner,
