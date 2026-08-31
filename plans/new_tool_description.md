@@ -29,11 +29,11 @@ For a taker estimate using `formula_version` `polymarket-v2-p-one-minus-p`, esti
 
 **Proposed description**
 
-List open, tradeable markets created within the last `hours_back` hours of the current cycle cutoff.
+List open, tradeable markets opened within the last `hours_back` hours of the current cycle cutoff.
 
 Use this tool to identify newly listed individual markets that may not yet have been widely researched or efficiently priced.
 
-Results will be ordered primarily by creation time from newest to oldest, with market ID as a secondary tie-breaker.
+Results will be ordered primarily by opening time from newest to oldest, with market ID as a secondary tie-breaker.
 
 ---
 
@@ -41,7 +41,7 @@ Results will be ordered primarily by creation time from newest to oldest, with m
 
 **Proposed description**
 
-Find open, tradeable markets whose `closes_at` time is between `hours_min` and `hours_max` hours after the current cycle cutoff. Use this tool to locate markets approaching closure or markets within a specific trading horizon.
+Find open, tradeable markets whose `closes_time` is between `hours_min` and `hours_max` hours after the current cycle cutoff. Use this tool to locate markets approaching closure or markets within a specific trading horizon.
 
 Results are ordered by remaining time ascending, with the soonest-closing markets first.
 
@@ -67,7 +67,7 @@ List groups of related markets ordered by their aggregated total historical volu
 
 **Proposed description**
 
-Retrieve the complete frozen record for one market as of the current cycle cutoff. Supply exactly one of `market_ref`, `market_id`, or `slug`. Prefer the `market_ref` returned by discovery tools when available.
+Retrieve the complete frozen record for one market as of the current cycle cutoff.
 
 The result includes the market question, official resolution rules, opening and closing times, status, tradeability, volume, liquidity, metadata, and all outcomes with their venue token identifiers. Treat the resolution rules and outcome mapping as authoritative for side selection.
 
@@ -103,15 +103,15 @@ Optionally set `result_type` to `full_text` for the full page text or `highlight
 
 **Proposed description**
 
-Retrieve the latest valid frozen order-book snapshot for one outcome as of the current cycle cutoff. Supply exactly one of `venue_token_id`, `token_id`, or `outcome_id`.
+Retrieve the latest valid frozen reciprocal YES/NO order-book snapshot for one market as of the current cycle cutoff.
 
-The result contains up to five bid and ask levels, the best bid, the best ask, observation timestamps, the snapshot identifier, and `fee_policy`. Use asks to evaluate a BUY and bids to evaluate a SELL. Inspect the displayed depth rather than assuming the full requested size can execute at the best price.
+The result contains up to five bid and ask levels per outcome, observation timestamps, audit references, and `fee_policy`. Use asks to evaluate a BUY and bids to evaluate a SELL. Inspect the displayed depth rather than assuming the full requested size can execute at the best price.
 
-`fee_policy` is either `null` or an object containing the applicable `condition_id`, `rate`, raw source `exponent`, `taker_only`, `formula_version`, `observed_at`, and `source_created_at`. A null policy means that fees cannot be estimated reliably; do not place an order for that outcome until a later result provides a usable policy.
+`fee_policy` is either `null` or an object containing the applicable `contract_version`, `schedule_version`, `formula_version`, `participant_role`, multiplier values, event-override fields, effective and observation timestamps, cutoff, source tier, policy fingerprint, and audit metadata. A null policy means that fees cannot be estimated reliably; do not place an order for that market until a later result provides a usable policy.
 
 Only the displayed levels are available for analysis; do not assume additional executable depth beyond what the result contains.
 
-The tool rejects missing, causally invalid or stale books. A missing or rejected result means that executable liquidity cannot currently be verified and the outcome should not be traded unless a later valid book is obtained.
+The tool rejects missing, causally invalid, or stale books. A missing or rejected result means that executable liquidity cannot currently be verified, and the market should not be traded unless a later valid book is obtained.
 
 ---
 
@@ -134,7 +134,7 @@ Use this tool to identify markets with recent repricing or potential catalysts.
 
 **Proposed description**
 
-Retrieve the open, tradeable markets associated with one event. Supply the required `event_id`, which may match the internal event identifier or the venue event identifier.
+Retrieve the open, tradeable markets associated with one event. Supply the required `event_ref`, which may match the internal event identifier or the venue event identifier.
 
 Markets are ordered primarily by total historical volume. Use this tool after `discover_events`, `list_top_events` or `get_newest_events` to compare related outcomes and identify mutually related or correlated positions.
 
@@ -144,7 +144,7 @@ Markets are ordered primarily by total historical volume. Use this tool after `d
 
 **Proposed description**
 
-List event groups ordered by the creation time of their newest associated market. Use this tool to identify newly added events that may not yet have been widely researched or efficiently priced.
+List event groups ordered by the opening time of their newest associated market. Use this tool to identify newly added events that may not yet have been widely researched or efficiently priced.
 
 ---
 
@@ -181,7 +181,7 @@ Find open, tradeable markets whose competitive score is at least
 The score is a bounded Kalshi-native discovery heuristic combining reciprocal-book
 spread, balanced near-midpoint depth, and `volume_24h_fp` activity. It should be
 treated as a discovery heuristic rather than a probability or expected-value estimate.
-Results are ordered by score descending, then by total market volume.
+Results are ordered by score descending.
 
 ---
 
@@ -189,7 +189,7 @@ Results are ordered by score descending, then by total market volume.
 
 **Proposed description**
 
-Find open, tradeable markets whose `closes_at` calendar date falls within the inclusive `start_date` and `end_date` range. Dates use the `YYYY-MM-DD` format. Either boundary may be omitted.
+Find open, tradeable markets whose `date_basis` calendar date falls within the inclusive `start_date` and `end_date` range. `date_basis` accepts `close_time` (the default) or `open_time`. Dates use the `YYYY-MM-DD` format. Either boundary may be omitted. Results are ordered by volume and liquidity descending.
 
 ---
 
@@ -198,7 +198,7 @@ Find open, tradeable markets whose `closes_at` calendar date falls within the in
 **Proposed description**
 
 Search open, tradeable markets using exact case-insensitive membership over their associated tags. Use this tool to locate markets associated with
-a topic, category, label or tag that may not be easy to find through event names alone.
+a topic, category, label or tag that may not be easy to find through event names alone. Tags use OR semantics.
 
 Results are ordered primarily by total market volume. Returned cards are summaries and must be followed by `get_market_details` and, when trading, `get_orderbook`.
 
@@ -210,11 +210,11 @@ Results are ordered primarily by total market volume. Returned cards are summari
 
 **Proposed description**
 
-Return the calling agent’s current cash ledger balance and portfolio version. `cash_micros` is expressed in millionths of a dollar.
+Return the calling agent’s current cash ledger balance and portfolio version. `cash_micros` is expressed in millionths of a dollar (microdollars).
 
-This result does not include the market value of open positions, total account value, unrealized profit or loss, or portfolio concentration. Use `get_portfolio` to inspect positions.
+This result covers cash only; it does not include open-position value, total account value, unrealized P&L, or concentration. Use `get_portfolio` to inspect positions.
 
-After calling `place_market_order`, prefer the `portfolio_after` state returned by that order result because it reflects the immediate post-execution state.
+ After an order, use its status, fills, and cash deltas, then call get_balance again when persisted account state is needed.
 
 ---
 
@@ -222,11 +222,11 @@ After calling `place_market_order`, prefer the `portfolio_after` state returned 
 
 **Proposed description**
 
-Retrieve the calling agent’s positive-share positions from an immutable portfolio snapshot associated with the current agent cycle and portfolio version. Each position includes market and outcome identifiers, the market question, share quantity, average cost, cost basis, realized P&L and last update time.
+Retrieve the calling agent’s current positive-contract positions from the portfolio projection. Each position includes market and position identifiers, the market_question, the number of units held, cost basis, realized P&L, and last update time.
 
-The result does not provide a current executable exit price or unrealized P&L. Use the position’s venue token identifier with `get_orderbook` to estimate liquidation value and exit liquidity.
+`contract_units` are exact hundredths-of-a-contract units. Monetary fields use integer microdollars. `gross_cost_basis_micros` is the gross acquisition cost; `entry_fees_micros` is reported separately and must not be subtracted twice.
 
-Each position’s `cost_basis_micros` is the gross acquisition cost and `entry_fees_micros` is reported separately; do not subtract entry fees twice.
+This tool does not provide an average entry-price field, current executable exit price, unrealized P&L, total account value, or portfolio concentration. Use `market_ref` with `get_orderbook` to inspect exit liquidity. Positions with zero contracts are omitted; use `get_closed_trades` or `get_settlements` for completed-position history.
 
 ---
 
@@ -244,7 +244,7 @@ Partially sold positions are not included until their remaining shares reach zer
 
 **Proposed description**
 
-Return the calling agent’s most recent settled position records, ordered from newest to oldest. Each record includes the settled share quantity, payout, realized P&L, settlement time, market question, winning outcome (nullable) and the outcome chosen by the agent.
+Return the calling agent’s most recent settled position records, ordered from newest to oldest. Each record includes the settled share quantity, payout, realized P&L, settlement time, market_question, winning outcome (nullable) and the outcome chosen by the agent.
 
 Use this tool to verify that an outcome has been settled and to distinguish realized settlement results from unrealized position value. Settlement P&L is authoritative for completed positions.
 
@@ -270,7 +270,7 @@ Use this tool periodically to identify stale, duplicated or conflicting beliefs.
 
 Search the calling agent’s beliefs using optionals case-insensitive `keyword` substrings and an optional exact `category`. Categories are `event_analysis`, `trading_strategy`, `market_sentiment`, `market_structure` and `risk_assessment`.
 
-Use this tool when only a subset of memory is relevant to the current market or decision. An empty keyword and category return the available beliefs up to the selected limit, restricted to active beliefs by default.
+Use this tool when only a subset of memory is relevant to the current market or decision. An ommitted keyword and category return the available beliefs up to the selected limit, restricted to active beliefs by default.
 
 When `include_inactive` is true, the search also covers inactive history. It does not search evidence contents or semantic similarity, and a missing result does not prove that the agent has never stored a related belief.
 
@@ -357,7 +357,7 @@ Before calling this tool:
 
 1. retrieve the complete market details and resolution rules;
 2. verify the exact YES/NO outcome;
-3. retrieve the current frozen order book;
+3. review the current frozen order book;
 4. verify a non-null fee policy and calculate net edge and expected P&L using executable depth and the fee estimate;
 5. confirm available cash or contracts;
 6. check existing exposure and risk limits.
