@@ -8,9 +8,11 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from vtrade.domain.execution import EconomicFill, OrderRequest, OrderResult
-from vtrade.production_tools import ProductionToolRegistry, _execution_output
+from vtrade.harness import ToolExecution
+from vtrade.production_tools import ProductionToolRegistry, _execution_output, _output_tokens
 
 
 def test_registry_has_exact_schema_parity_for_all_27_names() -> None:
@@ -26,6 +28,83 @@ def test_registry_has_exact_schema_parity_for_all_27_names() -> None:
     }
     assert names == expected
     assert len(names) == 27
+
+
+def test_web_search_registry_truncates_nested_result_content() -> None:
+    output = {
+        "query": "latest evidence",
+        "results": [
+            {
+                "title": "Source",
+                "url": "https://example.com/source",
+                "published_at": None,
+                "content": "é" * 1_500,
+            }
+            for _ in range(10)
+        ],
+    }
+    context = SimpleNamespace(
+        maximum_default_result_tokens=4_000,
+        exa=SimpleNamespace(
+            search=lambda _query, _options, now: SimpleNamespace(
+                output=output,
+                telemetry=(),
+            )
+        ),
+        now=lambda: datetime(2026, 8, 21, 10, 0, tzinfo=UTC),
+        portfolio=lambda _arguments: {},
+    )
+
+    tool = next(
+        spec for spec in ProductionToolRegistry(context).tool_specs() if spec.name == "web_search"
+    )
+    executed = tool.handler({"query": "latest evidence"})
+
+    assert isinstance(executed, ToolExecution)
+    assert _output_tokens(executed.output) <= 4_000
+    assert len(executed.output["results"]) == 10
+    assert all(len(item["content"]) <= 512 for item in executed.output["results"])
+    assert all(item["content"].endswith("...") for item in executed.output["results"])
+    Draft202012Validator(tool.output_schema).validate(executed.output)
+
+
+def test_fetch_webpage_registry_truncates_nested_full_text() -> None:
+    context = SimpleNamespace(
+        maximum_default_result_tokens=4_000,
+        exa=SimpleNamespace(
+            fetch=lambda _url, _options: SimpleNamespace(
+                output={
+                    "title": "Source",
+                    "url": "https://example.com/source",
+                    "published_at": None,
+                    "author": None,
+                    "full_text": "é" * 12_000,
+                },
+                telemetry=(),
+            )
+        ),
+        now=lambda: datetime(2026, 8, 21, 10, 0, tzinfo=UTC),
+        portfolio=lambda _arguments: {},
+    )
+
+    tool = next(
+        spec
+        for spec in ProductionToolRegistry(context).tool_specs()
+        if spec.name == "fetch_webpage"
+    )
+    executed = tool.handler(
+        {
+            "url": "https://example.com/source",
+            "result_type": "full_text",
+            "max_length": 12_000,
+        }
+    )
+
+    assert isinstance(executed, ToolExecution)
+    assert _output_tokens(executed.output) <= 4_000
+    assert len(executed.output["full_text"]) <= 512
+    assert executed.output["full_text"].endswith("...")
+    Draft202012Validator(tool.output_schema).validate(executed.output)
 
 
 def test_get_orderbook_preserves_the_configured_depth_on_all_four_sides() -> None:

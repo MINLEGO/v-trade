@@ -1432,17 +1432,69 @@ def _output_tokens(value: object) -> int:
 
 
 def _bounded_output(value: JsonObject, maximum_tokens: int) -> JsonObject:
+    """Compact a non-paginated result until it fits the conservative token ceiling."""
     copied = cast(JsonObject, json.loads(json.dumps(value, ensure_ascii=False, default=str)))
     if _output_tokens(copied) <= maximum_tokens:
         return copied
-    copied["payload_truncated"] = True
-    for key in ("message", "question", "content"):
-        child = copied.get(key)
-        if isinstance(child, str) and len(child) > 128:
-            copied[key] = child[:125] + "..."
-    if _output_tokens(copied) > maximum_tokens:
-        raise ToolContextUnavailable("tool result exceeds its configured result ceiling")
+
+    # Web outputs keep their useful data below nested result/full_text/highlights
+    # fields. Compact all nested strings before removing list entries so a large
+    # result does not become an avoidable tool failure. The non-paginated output
+    # schemas do not declare payload_truncated; pagination adds that marker in
+    # _page(), so this helper communicates compaction through the ellipsis itself.
+    _clip_strings(copied)
+    while _output_tokens(copied) > maximum_tokens:
+        lists: list[list[object]] = []
+        strings: list[tuple[dict[str, object], str, str]] = []
+
+        def collect(
+            item: object,
+            target_lists: list[list[object]],
+            target_strings: list[tuple[dict[str, object], str, str]],
+        ) -> None:
+            if isinstance(item, dict):
+                for key, child in item.items():
+                    if isinstance(child, str):
+                        target_strings.append((item, key, child))
+                    else:
+                        collect(child, target_lists, target_strings)
+            elif isinstance(item, list):
+                if item:
+                    target_lists.append(item)
+                for child in item:
+                    collect(child, target_lists, target_strings)
+
+        collect(copied, lists, strings)
+        if lists:
+            target = max(
+                lists,
+                key=lambda rows: max(
+                    (_output_tokens(item) for item in rows if isinstance(item, dict)),
+                    default=len(rows),
+                ),
+            )
+            target.pop()
+            continue
+        shrinkable = [item for item in strings if len(item[2]) > 32]
+        if shrinkable:
+            parent, key, raw = max(shrinkable, key=lambda item: len(item[2]))
+            length = max(32, len(raw) // 2)
+            parent[key] = raw[: length - 3] + "..."
+            continue
+        raise ToolContextUnavailable("tool result cannot fit its configured token ceiling")
     return copied
+
+
+def _clip_strings(item: object, maximum_length: int = 512) -> None:
+    if isinstance(item, dict):
+        for key, child in tuple(item.items()):
+            if isinstance(child, str) and len(child) > maximum_length:
+                item[key] = child[: maximum_length - 3] + "..."
+            else:
+                _clip_strings(child, maximum_length)
+    elif isinstance(item, list):
+        for child in item:
+            _clip_strings(child, maximum_length)
 
 
 def _default_connect(database_url: str) -> AbstractContextManager[_Connection]:
