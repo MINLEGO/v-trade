@@ -119,10 +119,7 @@ The tool rejects missing, causally invalid, or stale books. A missing or rejecte
 
 **Proposed description**
 
-Find open, tradeable markets whose recorder price volatility is at
-least `min_volatility_micros`. Volatility is the sample standard deviation of available
-consecutive hourly close changes in the recent 24-hour window; missing or insufficient
-price observations are not converted to zero.
+Find open, tradeable markets whose recorder price volatility is at least `min_volatility_micros`. Volatility is the sample standard deviation of available consecutive hourly close changes in the recent 24-hour window; missing or insufficient price observations are not converted to zero.
 
 Results are ordered by volatility magnitude descending, then by total market volume.
 
@@ -162,10 +159,8 @@ Results are ordered primarily by total historical volume and liquidity. Use this
 
 **Proposed description**
 
-Find open, tradeable markets whose volume trend is classified as `increasing`,
-`decreasing`, `flat`, or `insufficient_data`. The current classification compares two
-complete consecutive 24-hour windows from hourly market candlesticks and exposes
-`volume_trend_delta = (recent - baseline) / baseline` when the baseline is non-zero.
+Find open, tradeable markets whose volume trend is classified as `increasing`, `decreasing`, `flat`, or `insufficient_data`. The current classification compares two
+complete consecutive 24-hour windows from hourly market candlesticks and exposes `volume_trend_delta = (recent - baseline) / baseline` when the baseline is non-zero.
 
 A market is classified by comparing the two windows. If either required window is incomplete, the classification is `insufficient_data`; a zero baseline leaves the trend valid but the delta null.
 
@@ -175,11 +170,9 @@ A market is classified by comparing the two windows. If either required window i
 
 **Proposed description**
 
-Find open, tradeable markets whose competitive score is at least
-`min_score`.
+Find open, tradeable markets whose competitive score is at least `min_score`.
 
-The score is a bounded Kalshi-native discovery heuristic combining reciprocal-book
-spread, balanced near-midpoint depth, and `volume_24h_fp` activity. It should be
+The score is a bounded Kalshi-native discovery heuristic combining reciprocal-book spread, balanced near-midpoint depth, and `volume_24h_fp` activity. It should be
 treated as a discovery heuristic rather than a probability or expected-value estimate.
 Results are ordered by score descending.
 

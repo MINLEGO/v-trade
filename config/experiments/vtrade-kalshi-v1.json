@@ -22,7 +22,7 @@
     },
     "tool_schemas": {
       "path": "spec/tool-schemas-vtrade-kalshi-v1.json",
-      "sha256": "9b3f04236c6062ff95f55e6cea0e2fd7fdac86165396cbee2ac9a21d51d15588",
+      "sha256": "bd04b2203dd35527fefc05dd099b16766cf5c8a60b40f17a505a8a0e35d19762",
       "classification": "inferred"
     },
     "compatibility": {

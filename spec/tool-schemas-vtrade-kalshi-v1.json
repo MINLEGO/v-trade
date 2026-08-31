@@ -1104,7 +1104,7 @@
   "tools": [
     {
       "name": "get_newest_markets",
-      "description": "List eligible ordinary binary markets opened within the requested lookback window.",
+      "description": "List open, tradeable markets opened within the last `hours_back` hours of the current cycle cutoff.\n\nUse this tool to identify newly listed individual markets that may not yet have been widely researched or efficiently priced.\n\nResults will be ordered primarily by opening time from newest to oldest, with market Ref as a secondary tie-breaker.",
       "input_schema": {
         "$ref": "#/$defs/market_page_input"
       },
@@ -1114,7 +1114,7 @@
     },
     {
       "name": "discover_by_time_remaining",
-      "description": "Find eligible markets whose close time is within the requested exact hour interval.",
+      "description": "Find open, tradeable markets whose `close_time` is between `hours_min` and `hours_max` hours after the current cycle cutoff. Use this tool to locate markets approaching closure or markets within a specific trading horizon.\n\nResults are ordered by remaining time ascending, with the soonest-closing markets first.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -1156,7 +1156,7 @@
     },
     {
       "name": "discover_events",
-      "description": "Search eligible markets grouped by their opaque event reference.",
+      "description": "Search for groups of related markets by event. The optional(s) `keyword` are matched case-insensitively against market questions and market metadata. Markets are grouped by `event_ref`, and event groups are ordered by their aggregated 24-hour volume.",
       "input_schema": {
         "$ref": "#/$defs/event_page_input"
       },
@@ -1166,7 +1166,7 @@
     },
     {
       "name": "list_top_events",
-      "description": "List event groups ordered by aggregate volume in the frozen universe.",
+      "description": "List groups of related markets ordered by their aggregated total historical volume. Use this tool to identify the largest or most established events in the frozen market universe.",
       "input_schema": {
         "$ref": "#/$defs/market_page_input"
       },
@@ -1176,7 +1176,7 @@
     },
     {
       "name": "get_market_details",
-      "description": "Retrieve the complete frozen normalized market record for one opaque market_ref.",
+      "description": "Retrieve the complete frozen record for one market as of the current cycle cutoff.\n\nThe result includes the market question, official resolution rules, opening and closing times, status, tradeability, volume, liquidity, metadata, executable price ranges, and all outcomes. Treat the resolution rules and outcome mapping as authoritative for side selection.\n\nPrices contained in market metadata or outcomes are indicative snapshots, not executable quotes. Call `get_orderbook` before trading.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -1230,7 +1230,7 @@
     },
     {
       "name": "web_search",
-      "description": "Search external sources for evidence relevant to a market thesis, rule, forecast, or disconfirming scenario.",
+      "description": "Search the external web for current evidence relevant to an event, market thesis, probability estimate, resolution rule, forecast, or catalyst. The tool returns up to ten search results with available titles, snippets, URLs and publication timestamps.\n\nYou can balance the number of result and their quality using `num_results` and `max_highlight_length`. Note that to avoid truncated results, max_highlight_length × num_results must not exceed 15000 character and will return an error otherwise. The optional `start_published_date` and `end_published_date` arguments define the publication-date range. Each accepts a non-negative number of days back from now or a `YYYY-MM-DD` date; they default to 30 and 0 respectively.\n\nCheck the publication date and ensure that evidence was available before the cycle’s data cutoff. Prefer primary or authoritative sources, distinguish independent sources from repeated reporting, and actively search for evidence that could disconfirm the thesis.\n\nSearch-result snippets may be incomplete or misleading. When the information is critical, try using `fetch_webpage` to retrieve more details and never let external reporting override the market’s official resolution rules.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -1318,7 +1318,7 @@
     },
     {
       "name": "fetch_webpage",
-      "description": "Fetch a public source page for direct inspection of evidence.",
+      "description": "Retrieve the readable content of a specific public webpage URL. Use this tool when a search result, market rule, official announcement, report, dataset page or primary source must be inspected directly. Prefer the original or authoritative source when a search result points to one.\n\nOptionally set `result_type` to `full_text` for the full page text or `highlights` for focused excerpts; When using `highlights`, `highlight_query` can guide the snippet selection; it must be omitted or set to `null` for `full_text`. `max_length` defaults to 4000 characters and cannot exceed 12000.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -1432,7 +1432,7 @@
     },
     {
       "name": "get_orderbook",
-      "description": "Retrieve the canonical reciprocal YES/NO book for one opaque market_ref at the cycle cutoff.",
+      "description": "Retrieve the latest valid frozen reciprocal YES/NO order-book snapshot for one market as of the current cycle cutoff.\n\nThe result contains up to six bid and ask levels per outcome, observation timestamps, audit references, and `fee_policy`. Use asks to evaluate a BUY and bids to evaluate a SELL. Inspect the displayed depth rather than assuming the full requested size can execute at the best price.\n\n`fee_policy` is either `null` or an object containing the applicable `contract_version`, `schedule_version`, `formula_version`, `participant_role`, multiplier values, event-override fields, effective and observation timestamps, cutoff, source tier, policy fingerprint, and audit metadata. A null policy means that fees cannot be estimated reliably; do not place an order for that market until a later result provides a usable policy.\n\nOnly the displayed levels are available for analysis; do not assume additional executable depth beyond what the result contains.\n\nThe tool rejects missing, causally invalid, or stale books. A missing or rejected result means that executable liquidity cannot currently be verified, and the market should not be traded unless a later valid book is obtained.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -1486,7 +1486,7 @@
     },
     {
       "name": "discover_by_price_volatility",
-      "description": "Find frozen markets ordered by the sample standard deviation of available consecutive hourly close changes in the recent 24-hour candlestick window. Missing or insufficient price observations are omitted from threshold results.",
+      "description": "Find open, tradeable markets whose recorder price volatility is at least `min_volatility_micros`. Volatility is the sample standard deviation of available consecutive hourly close changes in the recent 24-hour window; missing or insufficient price observations are not converted to zero.\n\nResults are ordered by volatility magnitude descending, then by total market volume.\n\nUse this tool to identify markets with recent repricing or potential catalysts.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -1518,7 +1518,7 @@
     },
     {
       "name": "get_event_markets",
-      "description": "List the frozen markets belonging to one opaque event_ref.",
+      "description": "Retrieve the open, tradeable markets associated with one event.\n\nMarkets are ordered primarily by total historical volume. Use this tool after `discover_events`, `list_top_events` or `get_newest_events` to compare related outcomes and identify mutually related or correlated positions.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -1548,7 +1548,7 @@
     },
     {
       "name": "get_newest_events",
-      "description": "List event groups ordered by the newest opened market.",
+      "description": "List event groups ordered by the opening time of their newest associated market. Use this tool to identify newly added events that may not yet have been widely researched or efficiently priced.",
       "input_schema": {
         "$ref": "#/$defs/market_page_input"
       },
@@ -1558,7 +1558,7 @@
     },
     {
       "name": "get_all_active_markets",
-      "description": "List every eligible active market in the published freeze using opaque cursors.",
+      "description": "List all open and tradeable markets included in the current cycle’s frozen universe.\n\nResults are ordered primarily by total historical volume and liquidity. Use this tool for exhaustive or broad discovery when narrower discovery tools are not appropriate.",
       "input_schema": {
         "$ref": "#/$defs/market_page_input"
       },
@@ -1568,7 +1568,7 @@
     },
     {
       "name": "discover_by_volume_trend",
-      "description": "Find markets whose 24-hour volume trend matches the requested direction. The comparison uses two complete consecutive 24-hour windows from hourly Kalshi market candlesticks; insufficient history is exposed explicitly as insufficient_data.",
+      "description": "Find open, tradeable markets whose volume trend is classified as `increasing`, `decreasing`, `flat`, or `insufficient_data`. The current classification compares two complete consecutive 24-hour windows from hourly market candlesticks and exposes `volume_trend_delta = (recent - baseline) / baseline` when the baseline is non-zero.\n\nA market is classified by comparing the two windows. If either required window is incomplete, the classification is `insufficient_data`; a zero baseline leaves the trend valid but the delta null.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -1606,7 +1606,7 @@
     },
     {
       "name": "discover_by_competitive_score",
-      "description": "Find markets ordered by the Kalshi-native composite competitive score stored with the freeze. The score is a discovery heuristic, not a probability or expected-value estimate.",
+      "description": "Find open, tradeable markets whose competitive score is at least `min_score`.\n\nThe score is a bounded Kalshi-native discovery heuristic combining reciprocal-book spread, balanced near-midpoint depth, and `volume_24h_fp` activity. It should be treated as a discovery heuristic rather than a probability or expected-value estimate.\nResults are ordered by score descending.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -1638,7 +1638,7 @@
     },
     {
       "name": "discover_by_date_range",
-      "description": "Find markets opened within the requested UTC date range.",
+      "description": "Find open, tradeable markets whose `date_basis` calendar date falls within the inclusive `start_date` and `end_date` range. `date_basis` accepts `close_time` (the default) or `open_time`. Dates use the `YYYY-MM-DD` format. Either boundary may be omitted. Results are ordered by volume and liquidity descending.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -1682,7 +1682,7 @@
     },
     {
       "name": "search_tags",
-      "description": "Find frozen markets whose normalized tags match one or more exact search terms.",
+      "description": "Search open, tradeable markets using exact case-insensitive membership over their associated tags. Use this tool to locate markets associated with a topic, category, label or tag that may not be easy to find through event names alone. Tags use OR semantics.\n\nResults are ordered primarily by total market volume. Returned cards are summaries and must be followed by `get_market_details` and, when trading, `get_orderbook`.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -1719,7 +1719,7 @@
     },
     {
       "name": "get_balance",
-      "description": "Return exact available cash and the current portfolio version.",
+      "description": "Return the calling agent’s current cash ledger balance and portfolio version. `cash_micros` is expressed in millionths of a dollar (microdollars).\n\nThis result covers cash only; it does not include open-position value, total account value, unrealized P&L, or concentration. Use `get_portfolio` to inspect positions.\n\n After an order, use its status, fills, and cash deltas, then call get_balance again when persisted account state is needed.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -1746,7 +1746,7 @@
     },
     {
       "name": "get_portfolio",
-      "description": "Read the immutable cycle portfolio snapshot with an opaque cursor.",
+      "description": "Retrieve the calling agent’s current positive-contract positions from the portfolio projection. Each position includes market and position identifiers, the market_question, the number of units held, cost basis, realized P&L, and last update time.\n\n`contract_units` are exact hundredths-of-a-contract units. Monetary fields use integer microdollars. `gross_cost_basis_micros` is the gross acquisition cost; `entry_fees_micros` is reported separately and must not be subtracted twice.\n\nThis tool does not provide an average entry-price field, current executable exit price, unrealized P&L, total account value, or portfolio concentration. Use `market_ref` with `get_orderbook` to inspect exit liquidity. Positions with zero contracts are omitted; use `get_closed_trades` or `get_settlements` for completed-position history.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -1794,7 +1794,7 @@
     },
     {
       "name": "get_closed_trades",
-      "description": "Return completed position trades with exact entry fees and realized P&L.",
+      "description": "Return positions that were fully closed through SELL executions, ordered from newest to oldest. Each record aggregates the complete position lifecycle, including entry and exit quantities, average prices, fees, realized P&L, and opening and closing times.\n\nPartially sold positions are not included until their remaining contracts reach zero. Positions closed through market settlement are returned separately by get_settlements.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -1897,7 +1897,7 @@
     },
     {
       "name": "get_settlements",
-      "description": "Return FINALIZED-only settlement records and their resolution evidence, including the persisted market question when available.",
+      "description": "Return the calling agent’s most recent settled position records, ordered from newest to oldest. Each record includes the settled contract quantity, payout, realized P&L, settlement time, market_question, winning outcome (nullable) and the outcome chosen by the agent.\n\nUse this tool to verify that an outcome has been settled and to distinguish realized settlement results from unrealized position value. Settlement P&L is authoritative for completed positions.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -1929,7 +1929,7 @@
     },
     {
       "name": "get_general_beliefs",
-      "description": "Read the agent's beliefs newest-first with an opaque cursor.",
+      "description": "Retrieve stored beliefs belonging to the calling agent. By default, only active beliefs are returned. Set `include_inactive` to true when reviewing historical, superseded or deleted beliefs.\n\nBeliefs may concern a specific event, general trading strategy, market sentiment, market structure or risk management. Treat them as fallible historical conclusions rather than current facts. Verify time-sensitive beliefs against current evidence before using them.\n\nUse this tool periodically to identify stale, duplicated or conflicting beliefs. Delete beliefs that are no longer supported rather than allowing contradictory memory to accumulate.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -1957,7 +1957,7 @@
     },
     {
       "name": "search_general_beliefs",
-      "description": "Search the agent's beliefs by content or category.",
+      "description": "Search the calling agent’s beliefs using optionals case-insensitive `keyword` substrings and an optional exact `category`. Categories are `event_analysis`, `trading_strategy`, `market_sentiment`, `market_structure` and `risk_assessment`.\n\nUse this tool when only a subset of memory is relevant to the current market or decision. An ommitted keyword and category return the available beliefs up to the selected limit, restricted to active beliefs by default.\n\nWhen `include_inactive` is true, the search also covers inactive history. It does not search evidence contents or semantic similarity, and a missing result does not prove that the agent has never stored a related belief.\n\nResults are ordered newest first and may be paginated. If so, make sure to keep `keyword`, `category` and `include_inactive` unchanged when following pagination.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -2006,7 +2006,7 @@
     },
     {
       "name": "create_general_belief",
-      "description": "Create one auditable belief with bounded confidence and evidence.",
+      "description": "Store a durable belief or learned conclusion for use in later cycles. Supply concise `belief_content`, one valid category and a `confidence` value from 0 to 1 representing confidence in the claim. You may also provide an optional `evidence` list containing concise source references or supporting observations.\n\nUse this tool for information expected to remain useful beyond the current cycle, including event analysis, strategy lessons, market-structure observations and risk-management conclusions. Do not store temporary prices, balances, execution status or facts that will quickly become stale.\n\nThis tool creates a new belief rather than updating an existing one. Before creating a belief, check for duplicates or conflicts. Delete a superseded belief and create a corrected replacement when necessary.\n\nEvidence is stored with the belief for later review; it is not searched by `search_general_beliefs`. The tool does not accept sample size, expiration date, probability range or explicit invalidation conditions.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -2065,7 +2065,7 @@
     },
     {
       "name": "delete_general_belief",
-      "description": "Deactivate one belief belonging to the current agent.",
+      "description": "Deactivate one belief belonging to the calling agent by its `belief_id`. Use this tool when a belief is stale, duplicated, contradicted by stronger evidence or replaced by a more accurate formulation.\n\nDeletion is a soft deactivation for audit purposes; the historical record is retained and may still be retrieved with `get_general_beliefs` or `search_general_beliefs` using `include_inactive: true`.\n\nThis tool does not provide a way to reactivate a deactivated belief, and deactivated beliefs may be completely deleted in the future. Create a new corrected belief when the underlying conclusion changes.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -2103,7 +2103,7 @@
     },
     {
       "name": "create_long_term_plan",
-      "description": "Replace the active long-term plan with a complete bounded plan.",
+      "description": "Replace the calling agent’s active long-term trading plan. Use the plan to store durable portfolio objectives, research priorities, strategic constraints, risk-management intentions and the most important lessons that should guide multiple future cycles.\n\nCreating a new long-term plan supersedes the previous active long-term plan. Write a coherent replacement rather than an incremental fragment, because only the latest active plan should be treated as current.\n\nDo not include current balances, prices or position quantities unless they are clearly timestamped and necessary for context. Current account and tool results remain authoritative over plan text.\n\nCall this tool only when a replacement is intended; repeated identical content is not a meaningful update.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -2139,7 +2139,7 @@
     },
     {
       "name": "create_next_cycle_plan",
-      "description": "Replace the active next-cycle plan with a complete bounded plan.",
+      "description": "Replace the plan that will be supplied to the agent at the beginning of its next cycle.\n\nUse this tool near the end of the current cycle to preserve concrete follow-up actions, catalysts to monitor, positions to reassess, unresolved research, deadlines and explicit invalidation conditions. If the next cycle plan is not replaced, the agent will receive the same plan as this cycle.\n\nOnly one next-cycle plan exists. Calling this tool again during the same cycle replaces the previously created next-cycle plan; it does not append another plan.\n\nWrite the complete replacement plan rather than an incremental update. Do not repeat information already stored as durable general beliefs or long-term strategy unless it is directly relevant to the next cycle.\n\nThe optional cycle_date is descriptive scheduling metadata. It does not schedule the agent or guarantee execution on that date. Except for maintenance or other exceptional circumstances, the period between each cycle is 1 hour.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -2179,7 +2179,7 @@
     },
     {
       "name": "place_market_order",
-      "description": "Submit and evaluate one order for the specified binary market using an execution context refreshed at order time. The current cycle’s frozen order book is decision evidence, not a fill guarantee.",
+      "description": "Submit and evaluate one order for the specified binary market using an execution context refreshed at order time. The current cycle’s frozen order book is decision evidence, not a fill guarantee. `market_ref` plus `outcome` (`YES` or `NO`) identifies the requested contract.\n\n`CASH` amounts are integer microdollars. `CONTRACTS` amounts are integer hundredths-of-a-contract units. You may submit a BUY in either unit type, but a SELL must only be done in `CONTRACTS` units.\n\n* `IOC` executes available eligible liquidity immediately and can partially fill the order, leaving a remainder.\n* `FOK` executes only if the complete requested quantity can be filled under the order constraints; otherwise it is rejected.\n* `limit_price_micros` restricts execution prices to the interval between 0 and 1 000 000. For a BUY it is the maximum acceptable per-unit price; for a SELL it is the minimum acceptable per-unit price. It does not guarantee a fill and does not replace the fee, expected-value, or risk checks. Set the value to null to ignore price limits and accept any available liquidity.\n\nBefore calling this tool:\n\n1. retrieve the complete market details and resolution rules;\n2. verify the exact YES/NO outcome;\n3. review the current frozen order book;\n4. verify a non-null fee policy and calculate net edge and expected P&L using executable depth and the fee estimate;\n5. confirm available cash or contracts;\n6. check existing exposure and risk limits.\n\nA result may be `REJECTED`, `PENDING`, `PARTIALLY_FILLED`, `FILLED`, or `CANCELLED`. `PENDING` means that no fill is locally confirmed and reconciliation is required; do not treat it as filled or submit another order for the affected account until reconciliation is resolved.\n\nInspect `operation_id`, `status`, `reconciliation_state`, `error_code`, `message`, contract-unit quantities, `fills`, cash deltas, fees, context IDs, timestamps, and audit references. Reuse an idempotency key only for the same request, different requests muse use different keys. Returned fees are authoritative.\n\nNever assume that submitting an order means it executed. After a rejection or partial fill, recalculate cash, exposure, remaining edge and liquidity before deciding whether to submit another order. Do not retry unchanged orders repeatedly.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
