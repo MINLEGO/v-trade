@@ -33,7 +33,7 @@ List open, tradeable markets opened within the last `hours_back` hours of the cu
 
 Use this tool to identify newly listed individual markets that may not yet have been widely researched or efficiently priced.
 
-Results will be ordered primarily by opening time from newest to oldest, with market ID as a secondary tie-breaker.
+Results will be ordered primarily by opening time from newest to oldest, with market Ref as a secondary tie-breaker.
 
 ---
 
@@ -41,7 +41,7 @@ Results will be ordered primarily by opening time from newest to oldest, with ma
 
 **Proposed description**
 
-Find open, tradeable markets whose `closes_time` is between `hours_min` and `hours_max` hours after the current cycle cutoff. Use this tool to locate markets approaching closure or markets within a specific trading horizon.
+Find open, tradeable markets whose `close_time` is between `hours_min` and `hours_max` hours after the current cycle cutoff. Use this tool to locate markets approaching closure or markets within a specific trading horizon.
 
 Results are ordered by remaining time ascending, with the soonest-closing markets first.
 
@@ -51,7 +51,7 @@ Results are ordered by remaining time ascending, with the soonest-closing market
 
 **Proposed description**
 
-Search for groups of related markets by event. The optional(s) `keyword` are matched case-insensitively against market questions and market metadata. Markets are grouped by `event_id`, and event groups are ordered by their aggregated 24-hour volume.
+Search for groups of related markets by event. The optional(s) `keyword` are matched case-insensitively against market questions and market metadata. Markets are grouped by `event_ref`, and event groups are ordered by their aggregated 24-hour volume.
 
 ---
 
@@ -69,7 +69,7 @@ List groups of related markets ordered by their aggregated total historical volu
 
 Retrieve the complete frozen record for one market as of the current cycle cutoff.
 
-The result includes the market question, official resolution rules, opening and closing times, status, tradeability, volume, liquidity, metadata, and all outcomes with their venue token identifiers. Treat the resolution rules and outcome mapping as authoritative for side selection.
+The result includes the market question, official resolution rules, opening and closing times, status, tradeability, volume, liquidity, metadata, executable price ranges, and all outcomes. Treat the resolution rules and outcome mapping as authoritative for side selection.
 
 Prices contained in market metadata or outcomes are indicative snapshots, not executable quotes. Call `get_orderbook` before trading.
 
@@ -105,7 +105,7 @@ Optionally set `result_type` to `full_text` for the full page text or `highlight
 
 Retrieve the latest valid frozen reciprocal YES/NO order-book snapshot for one market as of the current cycle cutoff.
 
-The result contains up to five bid and ask levels per outcome, observation timestamps, audit references, and `fee_policy`. Use asks to evaluate a BUY and bids to evaluate a SELL. Inspect the displayed depth rather than assuming the full requested size can execute at the best price.
+The result contains up to six bid and ask levels per outcome, observation timestamps, audit references, and `fee_policy`. Use asks to evaluate a BUY and bids to evaluate a SELL. Inspect the displayed depth rather than assuming the full requested size can execute at the best price.
 
 `fee_policy` is either `null` or an object containing the applicable `contract_version`, `schedule_version`, `formula_version`, `participant_role`, multiplier values, event-override fields, effective and observation timestamps, cutoff, source tier, policy fingerprint, and audit metadata. A null policy means that fees cannot be estimated reliably; do not place an order for that market until a later result provides a usable policy.
 
@@ -134,7 +134,7 @@ Use this tool to identify markets with recent repricing or potential catalysts.
 
 **Proposed description**
 
-Retrieve the open, tradeable markets associated with one event. Supply the required `event_ref`, which may match the internal event identifier or the venue event identifier.
+Retrieve the open, tradeable markets associated with one event.
 
 Markets are ordered primarily by total historical volume. Use this tool after `discover_events`, `list_top_events` or `get_newest_events` to compare related outcomes and identify mutually related or correlated positions.
 
@@ -342,14 +342,11 @@ The optional cycle_date is descriptive scheduling metadata. It does not schedule
 
 **Proposed description**
 
-Submit and evaluate one order for the specified binary market using an
-execution context refreshed at order time. The current cycle’s frozen order
-book is decision evidence, not a fill guarantee. `market_ref` plus `outcome`
-(`YES` or `NO`) identifies the requested contract.
+Submit and evaluate one order for the specified binary market using an execution context refreshed at order time. The current cycle’s frozen order book is decision evidence, not a fill guarantee. `market_ref` plus `outcome` (`YES` or `NO`) identifies the requested contract.
 
 `CASH` amounts are integer microdollars. `CONTRACTS` amounts are integer hundredths-of-a-contract units. You may submit a BUY in either unit type, but a SELL must only be done in `CONTRACTS` units.
 
-* `IOC` executes available eligible liquidity immediately and rejects any unfilled remainder.
+* `IOC` executes available eligible liquidity immediately and can partially fill the order, leaving a remainder.
 * `FOK` executes only if the complete requested quantity can be filled under the order constraints; otherwise it is rejected.
 * `limit_price_micros` restricts execution prices to the interval between 0 and 1 000 000. For a BUY it is the maximum acceptable per-unit price; for a SELL it is the minimum acceptable per-unit price. It does not guarantee a fill and does not replace the fee, expected-value, or risk checks. Set the value to null to ignore price limits and accept any available liquidity.
 
@@ -362,15 +359,9 @@ Before calling this tool:
 5. confirm available cash or contracts;
 6. check existing exposure and risk limits.
 
-A result may be `REJECTED`, `PENDING`, `PARTIALLY_FILLED`, `FILLED`, or
-`CANCELLED`. `PENDING` means that no fill is confirmed and reconciliation is
-required; do not treat it as filled or submit another order for the affected
-account until reconciliation is resolved.
+A result may be `REJECTED`, `PENDING`, `PARTIALLY_FILLED`, `FILLED`, or `CANCELLED`. `PENDING` means that no fill is locally confirmed and reconciliation is required; do not treat it as filled or submit another order for the affected account until reconciliation is resolved.
 
-Inspect `operation_id`, `status`, `reconciliation_state`, `error_code`,
-`message`, contract-unit quantities, `fills`, cash deltas, fees, context IDs,
-timestamps, and audit references. Reuse an idempotency key only for the same
-request. Returned fees are authoritative.
+Inspect `operation_id`, `status`, `reconciliation_state`, `error_code`, `message`, contract-unit quantities, `fills`, cash deltas, fees, context IDs, timestamps, and audit references. Reuse an idempotency key only for the same request, different requests muse use different keys. Returned fees are authoritative.
 
 Never assume that submitting an order means it executed. After a rejection or partial fill, recalculate cash, exposure, remaining edge and liquidity before deciding whether to submit another order. Do not retry unchanged orders repeatedly.
 ---
