@@ -182,15 +182,12 @@ def _verify_fee_schedule_reference(config: Mapping[str, object]) -> None:
         raise FrozenArtifactError("active fee schedule artifact is missing")
     path_value = definition.get("path")
     expected_file = definition.get("sha256")
-    expected_pdf = definition.get("pdf_sha256")
     if (
         not isinstance(path_value, str)
         or not isinstance(expected_file, str)
-        or not isinstance(expected_pdf, str)
         or not _is_sha256(expected_file)
-        or not _is_sha256(expected_pdf)
     ):
-        raise FrozenArtifactError("active fee schedule hashes are malformed")
+        raise FrozenArtifactError("active fee schedule JSON hash is malformed")
     path = Path(path_value)
     actual_file = canonical_artifact_file_sha256(path, label="active fee schedule")
     if actual_file != expected_file:
@@ -201,8 +198,6 @@ def _verify_fee_schedule_reference(config: Mapping[str, object]) -> None:
         raise FrozenArtifactError("active fee schedule artifact is not valid JSON") from exc
     if not isinstance(document, Mapping):
         raise FrozenArtifactError("active fee schedule artifact must be an object")
-    if document.get("pdf_sha256") != expected_pdf:
-        raise FrozenArtifactError("active fee schedule PDF hash is not bound to its artifact")
 
 
 def _is_sha256(value: str) -> bool:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -88,6 +89,10 @@ def test_canonical_schedule_is_hash_pinned_and_exact() -> None:
     schedule = load_fee_schedule()
 
     assert schedule.verified
+    assert schedule.artifact is not None
+    assert schedule.artifact.sha256 == (
+        "1fd0e6826a9515f50841449a0a6f7c8f33bcb5cfb646495f323e64cd9bed8583"
+    )
     assert schedule.pdf_sha256 == (
         "c326a69f596a11e8f8be2620402d39a8d4823920c21cc97c93a114d862699601"
     )
@@ -102,16 +107,16 @@ def test_fee_policy_accepts_an_exact_zero_series_multiplier() -> None:
     assert policy.series_multiplier_denominator == 1
 
 
-def test_unverified_official_schedule_is_a_global_failure() -> None:
+def test_missing_archived_json_schedule_is_a_global_failure() -> None:
     schedule = FeeSchedule(
         schedule_version="unverified",
         official_url="https://example.test/fee-schedule.pdf",
         effective_at=NOW - timedelta(days=1),
         pdf_sha256=None,
-        artifact=ARTIFACT,
+        artifact=None,
     )
 
-    with pytest.raises(FeePolicyError, match="unverified"):
+    with pytest.raises(FeePolicyError, match="archived evidence"):
         FeePolicyResolver(schedule).resolve(
             market_ref="KXTEST-1",
             series_ref="SERIES-1",
@@ -121,6 +126,94 @@ def test_unverified_official_schedule_is_a_global_failure() -> None:
             as_of=NOW,
             cutoff=NOW,
         )
+
+
+def test_local_json_schedule_does_not_require_pdf_provenance(tmp_path: Path) -> None:
+    raw = json.loads(Path("spec/fee-schedules/kalshi-predictions-v1.json").read_text())
+    raw.pop("official_url")
+    raw.pop("pdf_sha256")
+    path = tmp_path / "fee-schedule.json"
+    content = json.dumps(raw, indent=2).encode("utf-8")
+    path.write_bytes(content)
+
+    schedule = load_fee_schedule(path, observed_at=NOW)
+
+    assert schedule.verified
+    assert schedule.official_url is None
+    assert schedule.pdf_sha256 is None
+    assert schedule.artifact is not None
+    assert schedule.artifact.sha256 == hashlib.sha256(content).hexdigest()
+
+
+def test_adapter_loads_the_local_json_schedule_without_a_pdf_request(tmp_path: Path) -> None:
+    source = Path("spec/fee-schedules/kalshi-predictions-v1.json")
+    schedule_path = tmp_path / source.name
+    content = source.read_bytes()
+    schedule_path.write_bytes(content)
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        if request.url.path.endswith("/series/fee_changes"):
+            payload = {"series_fee_change_arr": []}
+        elif request.url.path.endswith("/events/fee_changes"):
+            payload = {"event_fee_change_arr": []}
+        else:
+            raise AssertionError(f"unexpected network request: {request.url}")
+        return httpx.Response(200, request=request, content=json.dumps(payload).encode())
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), timeout=5)
+    adapter = KalshiPublicRestAdapter(
+        ContentAddressedArtifactStore(tmp_path / "artifacts"),
+        client=client,
+        clock=lambda: NOW,
+        fee_schedule_path=schedule_path,
+    )
+
+    resolution = adapter.resolve_fee_policy_for_market(
+        _market(),
+        series_metadata={
+            "ticker": "SERIES-1",
+            "fee_type": "quadratic",
+            "fee_multiplier": "1",
+        },
+        as_of=NOW,
+        cutoff=NOW,
+    )
+
+    assert resolution.tradeable
+    assert all("kalshi-fee-schedule.pdf" not in call for call in calls)
+    assert resolution.policy is not None
+    assert resolution.policy.schedule_sha256 == hashlib.sha256(content).hexdigest()
+    client.close()
+
+
+@pytest.mark.parametrize("schedule_content", [None, b"not-json"])
+def test_adapter_fails_closed_when_the_local_json_schedule_is_missing_or_invalid(
+    tmp_path: Path, schedule_content: bytes | None
+) -> None:
+    schedule_path = tmp_path / "fee-schedule.json"
+    if schedule_content is not None:
+        schedule_path.write_bytes(schedule_content)
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        raise AssertionError(f"unexpected network request: {request.url}")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), timeout=5)
+    adapter = KalshiPublicRestAdapter(
+        ContentAddressedArtifactStore(tmp_path / "artifacts"),
+        client=client,
+        clock=lambda: NOW,
+        fee_schedule_path=schedule_path,
+    )
+
+    with pytest.raises(FeePolicyError, match="canonical fee schedule"):
+        adapter._fee_schedule_for_operation(adapter._deadline())
+
+    assert calls == []
+    client.close()
 
 
 def test_resolver_applies_latest_series_and_event_precedence_with_exact_rationals() -> None:
@@ -163,6 +256,8 @@ def test_resolver_applies_latest_series_and_event_precedence_with_exact_rational
     assert result.policy.event_override_denominator == 4
     assert result.policy.waiver is True
     assert result.policy.exact_inputs["series"]["selected_change_id"] == "series-change"
+    assert result.policy.schedule_sha256 == ARTIFACT.sha256
+    assert result.policy.exact_inputs["schedule"]["artifact_sha256"] == ARTIFACT.sha256
 
 
 def test_resolver_supports_explicit_event_clear_and_strict_waiver_expiration() -> None:

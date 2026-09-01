@@ -61,7 +61,7 @@ class FeePolicyError(RuntimeError):
 
 
 class FeeScheduleDriftError(FeePolicyError):
-    """The downloaded official schedule differs from the pinned artifact."""
+    """Legacy error retained for callers that used PDF verification."""
 
 
 class FeePolicySourceConflictError(FeePolicyError):
@@ -141,10 +141,10 @@ class FeeEvidence:
 
 @dataclass(frozen=True, slots=True)
 class FeeSchedule:
-    """The verified local representation of the official fee PDF."""
+    """The verified local representation of the canonical JSON fee schedule."""
 
     schedule_version: str
-    official_url: str
+    official_url: str | None
     effective_at: datetime
     pdf_sha256: str | None
     formula_version: str = FEE_FORMULA_VERSION
@@ -165,7 +165,8 @@ class FeeSchedule:
 
     def __post_init__(self) -> None:
         _required_text(self.schedule_version, "schedule_version")
-        _required_text(self.official_url, "official_url")
+        if self.official_url is not None:
+            _required_text(self.official_url, "official_url")
         object.__setattr__(self, "effective_at", _aware(self.effective_at, "effective_at"))
         if self.captured_at is not None:
             object.__setattr__(self, "captured_at", _aware(self.captured_at, "captured_at"))
@@ -205,9 +206,11 @@ class FeeSchedule:
 
     @property
     def verified(self) -> bool:
-        return self.pdf_sha256 is not None
+        return self.artifact is not None
 
     def verify_pdf(self, content: bytes) -> None:
+        """Verify a legacy PDF provenance record; new runtime never calls this."""
+
         if self.pdf_sha256 is None:
             raise FeeScheduleDriftError("official fee schedule has no captured PDF hash")
         actual = hashlib.sha256(content).hexdigest()
@@ -295,6 +298,9 @@ class FeeSchedule:
             captured_at = _aware(
                 datetime.fromisoformat(captured_raw.replace("Z", "+00:00")), "captured_at"
             )
+        official_url = value.get("official_url")
+        if official_url is not None and not isinstance(official_url, str):
+            raise ValueError("fee schedule official_url is malformed")
         pdf_hash = value.get("pdf_sha256")
         if pdf_hash is not None and not isinstance(pdf_hash, str):
             raise ValueError("fee schedule pdf_sha256 is malformed")
@@ -303,7 +309,7 @@ class FeeSchedule:
             raise ValueError("fee schedule settlement_fee_micros must be an integer")
         return cls(
             schedule_version=_required_text(value.get("schedule_version"), "schedule_version"),
-            official_url=_required_text(value.get("official_url"), "official_url"),
+            official_url=official_url,
             effective_at=effective_at,
             pdf_sha256=pdf_hash,
             formula_version=str(value.get("formula_version", FEE_FORMULA_VERSION)),
@@ -330,8 +336,9 @@ def load_fee_schedule(
     path: str | Path = DEFAULT_FEE_SCHEDULE_PATH,
     *,
     allow_unverified: bool = False,
+    observed_at: datetime | None = None,
 ) -> FeeSchedule:
-    """Load the canonical derived schedule, rejecting unverified production data."""
+    """Load the canonical local JSON schedule and verify its archived evidence."""
 
     source = Path(path)
     try:
@@ -344,9 +351,7 @@ def load_fee_schedule(
     required_fields = {
         "schema_version",
         "schedule_version",
-        "official_url",
         "effective_at",
-        "pdf_sha256",
         "formula_version",
         "fee_type",
         "rates",
@@ -363,7 +368,11 @@ def load_fee_schedule(
         hashlib.sha256(content).hexdigest(),
         len(content),
         str(source).replace("\\", "/"),
-        observed_at=datetime.now(UTC),
+        observed_at=(
+            datetime.now(UTC)
+            if observed_at is None
+            else _aware(observed_at, "fee schedule observation")
+        ),
         schema_version=FEE_SCHEDULE_SCHEMA_VERSION,
     )
     try:
@@ -371,7 +380,7 @@ def load_fee_schedule(
     except (TypeError, ValueError) as exc:
         raise FeePolicyError("canonical fee schedule is invalid") from exc
     if not allow_unverified and not schedule.verified:
-        raise FeeScheduleDriftError("canonical fee schedule has no exact official PDF hash")
+        raise FeePolicyError("canonical fee schedule has no archived JSON artifact")
     return schedule
 
 
@@ -665,9 +674,10 @@ class FeePolicyResolver:
                     FeeEvidence(FeeEvidenceRole.OFFICIAL_SCHEDULE, self.schedule.artifact),
                 )
             self._validate_evidence_cutoff(normalized_evidence, cutoff)
-            if not self.schedule.verified or self.schedule.artifact is None:
+            schedule_artifact = self.schedule.artifact
+            if not self.schedule.verified or schedule_artifact is None:
                 raise FeePolicyError(
-                    "official fee schedule is unverified or lacks archived evidence"
+                    "local JSON fee schedule lacks archived evidence"
                 )
             if as_of < self.schedule.effective_at:
                 return FeePolicyResolution(
@@ -790,12 +800,13 @@ class FeePolicyResolver:
                     evidence=tuple(normalized_evidence),
                 )
             source_artifacts = tuple(item.artifact for item in normalized_evidence)
-            primary_artifact = source_artifacts[0] if source_artifacts else self.schedule.artifact
+            primary_artifact = source_artifacts[0] if source_artifacts else schedule_artifact
             exact_inputs = {
                 "schedule": {
                     "schedule_version": self.schedule.schedule_version,
                     "official_url": self.schedule.official_url,
                     "effective_at": self.schedule.effective_at.isoformat(),
+                    "artifact_sha256": schedule_artifact.sha256,
                     "pdf_sha256": self.schedule.pdf_sha256,
                     "formula_version": self.schedule.formula_version,
                 },
@@ -872,7 +883,7 @@ class FeePolicyResolver:
                     }
                     for item in normalized_evidence
                 ),
-                schedule_sha256=self.schedule.pdf_sha256,
+                schedule_sha256=schedule_artifact.sha256,
                 settlement_fee_micros=MoneyMicros(self.schedule.settlement_fee_micros),
                 exact_inputs=exact_inputs,
             )

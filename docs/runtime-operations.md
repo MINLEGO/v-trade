@@ -95,8 +95,10 @@ uv run --extra dev python scripts/verify_kalshi_cutover_evidence.py --require-re
 
 The probe is read-only and credential-free. It captures public catalogue pages with
 complete opaque-cursor traversal, event/series metadata, historical cutoff, an
-ordinary binary order book, market candlesticks, fee-schedule verification, bounded concurrency observations, raw bytes, redacted
-headers, and SHA-256 evidence. Geographic or payload failures block cutover and
+ordinary binary order book, market candlesticks, bounded concurrency observations,
+raw bytes, redacted headers, and SHA-256 evidence. The local JSON fee-schedule
+artifact is validated by the frozen release checks; the probe never downloads its
+PDF provenance. Geographic or payload failures block cutover and
 must not be replaced by a proxy, VPN, old capture, or local mock.
 
 ### Evidence record

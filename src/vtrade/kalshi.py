@@ -685,68 +685,6 @@ class KalshiPublicRestAdapter:
             )
         raise AssertionError("retry loop must return or raise")
 
-    def _request_document(
-        self,
-        url: str,
-        *,
-        deadline: _Deadline | None = None,
-    ) -> tuple[bytes, RawArtifact]:
-        """Fetch one public document and archive its exact bytes."""
-
-        request = self._client.build_request(
-            "GET",
-            url,
-            headers={
-                "Accept": "application/pdf",
-                "User-Agent": "vtrade-kalshi-fee-policy/1",
-            },
-        )
-        request_identity = self._request_identity(request)
-        for attempt in range(1, self._retry_policy.maximum_attempts + 1):
-            if deadline is not None:
-                deadline.check()
-            try:
-                if deadline is None or deadline.monotonic_deadline is None:
-                    response = self._client.send(request)
-                else:
-                    response = run_with_deadline(
-                        partial(self._client.send, request),
-                        deadline=deadline.monotonic_deadline,
-                        label=f"Kalshi document {request_identity}",
-                    )
-            except DeadlineExceeded as exc:
-                raise KalshiDeadlineExceeded(str(exc)) from exc
-            except httpx.HTTPError as exc:
-                if attempt == self._retry_policy.maximum_attempts:
-                    raise KalshiTransportError(f"request failed for {url}") from exc
-                self._backoff(attempt, deadline)
-                continue
-            if response.status_code in RETRYABLE_STATUS_CODES:
-                if attempt == self._retry_policy.maximum_attempts:
-                    raise KalshiHTTPError(response.status_code, request.url.path)
-                self._backoff(attempt, deadline)
-                continue
-            if response.status_code < 200 or response.status_code >= 300:
-                raise KalshiHTTPError(response.status_code, request.url.path)
-            observed_at = _aware(self._clock(), "fee schedule observation")
-            content = bytes(response.content)
-            break
-        else:  # pragma: no cover - the loop always returns or raises
-            raise KalshiTransportError(f"request failed for {url}")
-        try:
-            reference = self._artifact_store.put(content)
-        except Exception as exc:
-            raise KalshiTransportError("fee schedule artifact could not be archived") from exc
-        artifact = _artifact_from_reference(
-            reference,
-            endpoint=self._source_endpoint(request),
-            request_identity=request_identity,
-            observed_at=observed_at,
-        )
-        if deadline is not None:
-            deadline.check()
-        return content, artifact
-
     def _backoff(self, retry_number: int, deadline: _Deadline | None) -> None:
         delay = self._retry_policy.delay(retry_number)
         if deadline is not None and deadline.monotonic_deadline is not None:
@@ -1258,23 +1196,16 @@ class KalshiPublicRestAdapter:
             return self._loaded_fee_schedule
         if self._fee_schedule is not None:
             if not self._fee_schedule.verified:
-                raise FeePolicyError("official fee schedule has no exact PDF hash")
+                raise FeePolicyError("local JSON fee schedule lacks archived evidence")
             self._loaded_fee_schedule = self._fee_schedule
             return self._fee_schedule
-        try:
-            schedule = load_fee_schedule(self._fee_schedule_path)
-        except FeePolicyError:
-            raise
-        content, artifact = self._request_document(schedule.official_url, deadline=deadline)
-        try:
-            schedule.verify_pdf(content)
-        except FeeScheduleDriftError:
-            raise
-        self._loaded_fee_schedule = replace(
-            schedule,
-            artifact=artifact,
-            captured_at=artifact.observed_at,
+        schedule = load_fee_schedule(
+            self._fee_schedule_path,
+            observed_at=self._clock(),
         )
+        if deadline is not None:
+            deadline.check()
+        self._loaded_fee_schedule = schedule
         return self._loaded_fee_schedule
 
     def _fetch_series_fee_changes(

@@ -36,9 +36,12 @@ There is no compatibility loader, alias, dual venue, dual write, legacy database
 upgrade, historical conversion, or application rollback path. The deployment starts
 from an empty database and uses the exact ten-migration chain. This v1 revision
 refreshes the active artifact hashes and adds the metric, order-time execution, and
-auditable fee-policy persistence migrations. The canonical derived fee schedule pins
-the official PDF URL, effective date, formula, and exact PDF SHA-256; a schedule hash
-drift or an unverified schedule fails closed.
+auditable fee-policy persistence migrations. The canonical fee schedule is the
+repository JSON artifact; its JSON SHA-256 is the runtime schedule identity. The
+official PDF URL and digest, when present, are passive provenance only and are never
+fetched or required for new policy resolution. A missing, malformed, or unverifiable
+JSON artifact fails closed. Fee-policy readers may retain legacy PDF provenance fields
+when reading historical payloads.
 incompatible future changes still require a new experiment version. Missing external
 resources and unresolved reviewed fixture evidence fail closed.
 
