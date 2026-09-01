@@ -22,12 +22,12 @@
     },
     "tool_schemas": {
       "path": "spec/tool-schemas-vtrade-kalshi-v1.json",
-      "sha256": "42d9ee899a49ada72cc4b8c4edef261f2f42b4510dd1a3075177a38865e84dbe",
+      "sha256": "b76afff88d8cc02e7c1d112106a12098f03a2378f5a9f77b9ebc2d370a0aa1ea",
       "classification": "inferred"
     },
     "compatibility": {
       "path": "spec/vtrade-kalshi-v1-compatibility.md",
-      "sha256": "ee5553dd10be6263edbcf3acab1a2fde05ffaa9d4210a33304a35de6206c8237",
+      "sha256": "c8198c6e39840d3925a14ebb8959dbfbf91ac2f016f2eec2705b0cd75e4a17f8",
       "classification": "inferred"
     }
   },
@@ -136,8 +136,7 @@
     "formula_version": "kalshi-quadratic-v1",
     "schedule_artifact": {
       "path": "spec/fee-schedules/kalshi-predictions-v1.json",
-      "sha256": "1fd0e6826a9515f50841449a0a6f7c8f33bcb5cfb646495f323e64cd9bed8583",
-      "pdf_sha256": "c326a69f596a11e8f8be2620402d39a8d4823920c21cc97c93a114d862699601"
+      "sha256": "1fd0e6826a9515f50841449a0a6f7c8f33bcb5cfb646495f323e64cd9bed8583"
     },
     "default_role_for_paper_ioc_fok": "TAKER",
     "policy_required": true,
