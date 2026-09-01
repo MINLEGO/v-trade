@@ -58,9 +58,9 @@
     }
   ],
   "artifacts": {
-    "experiment_config_sha256": "69a341b7ee8b0ad6a71fa32034618133d8a4041e3ce33b4601363c7b304191d1",
+    "experiment_config_sha256": "d3c94c2fad5707293fd6ede1be78aa15df079720997d002294d720b735f6598c",
     "prompt_sha256": "d2d27fd06674f0e8522cd6e4d3ae31fac30817c106c7b7365d0ea4037b2c3543",
-    "tool_schemas_sha256": "5cc7118ea0bf3b67f277b0f27c35d0ae25008196892841b8b03c9b86d46240fb",
+    "tool_schemas_sha256": "42d9ee899a49ada72cc4b8c4edef261f2f42b4510dd1a3075177a38865e84dbe",
     "compatibility_sha256": "ee5553dd10be6263edbcf3acab1a2fde05ffaa9d4210a33304a35de6206c8237",
     "fee_schedule_sha256": "1fd0e6826a9515f50841449a0a6f7c8f33bcb5cfb646495f323e64cd9bed8583",
     "fixture_manifest_sha256": "6f87bfb388f4497d41c077f1c5d71e3f449985b1af26b461028c5cba73ef54c0"
