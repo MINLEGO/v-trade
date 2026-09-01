@@ -17,7 +17,7 @@ or runtime input.
 | `volume_24h_fp` and exact series tags | vtrade_deviation | Kalshi normalization and series metadata snapshots |
 | Six-level best-level haircut | vtrade_deviation | `best-level-haircut-v1` audit and floor tests |
 | IOC/FOK semantic paper order | vtrade_deviation | order request/result and execution tests |
-| Exact fee rounding and cent alignment | vtrade_deviation | fee policy and calculation tests |
+| Official quadratic fee policy, exact rational inputs, and cent alignment | vtrade_deviation | `fee_policy.py`, fee schedule artifact, policy and calculation tests |
 | Fill-only balanced accounting | vtrade_deviation | ledger and portfolio replay tests |
 | Exact 15% concentration limit | vtrade_deviation | risk predicate and broker tests |
 | FINALIZED-only idempotent settlement | vtrade_deviation | settlement engine and persistence tests |
@@ -26,5 +26,5 @@ or runtime input.
 | Content-addressed raw evidence | inferred | artifact and fixture manifest validation |
 | Paper-only real-data simulation | owner decision | active configuration and disabled real adapter |
 
-Every active row is subject to the nine-migration persistence boundary, frozen artifact
+Every active row is subject to the ten-migration persistence boundary, frozen artifact
 hashes, the active-venue sweep, and the external evidence gates in the release matrix.

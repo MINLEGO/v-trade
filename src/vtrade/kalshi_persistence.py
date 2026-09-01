@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import Protocol, cast
 
 from vtrade.deadline import check_deadline
+from vtrade.domain.execution import FeeParticipantRole, FeePolicySnapshot
 from vtrade.domain.types import (
     BinaryEvent,
     BinaryMarket,
@@ -21,6 +22,7 @@ from vtrade.domain.types import (
     Series,
     SeriesKey,
 )
+from vtrade.fee_policy import FeeEvidenceRole
 from vtrade.kalshi_freeze import KalshiMarketFreeze
 from vtrade.runtime import LeaseLost
 
@@ -98,6 +100,7 @@ class KalshiFreezePersistence:
     market_snapshot_ids: tuple[uuid.UUID, ...]
     order_book_snapshot_ids: tuple[uuid.UUID, ...]
     resolution_ids: tuple[uuid.UUID, ...]
+    fee_policy_snapshot_ids: tuple[uuid.UUID, ...] = ()
 
 
 class PostgresKalshiFreezeRepository:
@@ -163,12 +166,15 @@ class PostgresKalshiFreezeRepository:
                 if previous is not None and previous != market_item:
                     raise ValueError("one market identity has conflicting freeze observations")
                 markets[market_item.key] = market_item
+        for context in freeze.contexts:
+            markets[context.market.key] = context.market
 
         freeze_id = _stable_id("market-freeze", str(agent_cycle_id))
         catalogue_artifact_id = self._artifact_id(raw_artifact_ids, pages[0].audit)
         market_snapshot_ids: list[uuid.UUID] = []
         order_book_snapshot_ids: list[uuid.UUID] = []
         resolution_ids: list[uuid.UUID] = []
+        fee_policy_snapshot_ids: list[uuid.UUID] = []
         market_metrics = tuple(getattr(freeze, "market_metrics", ()))
         if tuple(metric.market_key for metric in market_metrics) != tuple(
             freeze.discovery_market_keys
@@ -187,8 +193,9 @@ class PostgresKalshiFreezeRepository:
                 cursor.execute(
                     "INSERT INTO series "
                     "(id, venue, kind, series_ref, title, rules, observed_at, "
-                    "source_updated_at, raw_artifact_id) VALUES "
-                    "(%s, 'kalshi', 'series', %s, %s, %s, %s, NULL, %s) "
+                    "source_updated_at, fee_type, fee_multiplier_numerator, "
+                    "fee_multiplier_denominator, raw_artifact_id) VALUES "
+                    "(%s, 'kalshi', 'series', %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                     "ON CONFLICT (id) DO NOTHING",
                     (
                         series_item.key.stable_id,
@@ -196,6 +203,10 @@ class PostgresKalshiFreezeRepository:
                         series_item.title,
                         series_item.rules,
                         _aware(series_item.observed_at),
+                        series_item.source_updated_at,
+                        series_item.fee_type,
+                        series_item.fee_multiplier_numerator,
+                        series_item.fee_multiplier_denominator,
                         self._artifact_id(raw_artifact_ids, artifact),
                     ),
                 )
@@ -338,6 +349,59 @@ class PostgresKalshiFreezeRepository:
                 raise ValueError("Kalshi freeze idempotency evidence conflicts")
             _check_deadline(deadline, "after freeze publication")
 
+            policy_by_market = {
+                MarketKey(item.market_ref): item for item in freeze.fee_policies
+            }
+            policy_status_by_market = {
+                market_key: resolution.status.value
+                for market_key, resolution in policy_by_market.items()
+            }
+            policy_reason_by_market = {
+                market_key: resolution.reason.value if resolution.reason is not None else None
+                for market_key, resolution in policy_by_market.items()
+            }
+            for market_key in freeze.discovery_market_keys:
+                resolution = policy_by_market.get(market_key)
+                if resolution is None:
+                    continue
+                _check_deadline(deadline, "fee policy persistence")
+                snapshot_id: uuid.UUID | None = None
+                if resolution.policy is not None:
+                    policy_artifact = resolution.policy.raw_artifact
+                    if policy_artifact is None:
+                        policy_artifact = markets[market_key].audit
+                    snapshot_id = self._persist_fee_policy_cursor(
+                        cursor,
+                        resolution.policy,
+                        market_id=market_ids[market_key],
+                        raw_artifact_id=self._artifact_id(raw_artifact_ids, policy_artifact),
+                    )
+                    fee_policy_snapshot_ids.append(snapshot_id)
+                    for evidence in resolution.evidence:
+                        cursor.execute(
+                            "INSERT INTO fee_policy_snapshot_artifacts "
+                            "(fee_policy_snapshot_id, raw_artifact_id, evidence_role) "
+                            "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+                            (
+                                snapshot_id,
+                                self._artifact_id(raw_artifact_ids, evidence.artifact),
+                                FeeEvidenceRole(evidence.role).value,
+                            ),
+                        )
+                cursor.execute(
+                    "INSERT INTO freeze_market_fee_policies "
+                    "(freeze_id, market_id, fee_policy_snapshot_id, status, closed_reason) "
+                    "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (freeze_id, market_id) "
+                    "DO NOTHING",
+                    (
+                        freeze_id,
+                        market_ids[market_key],
+                        snapshot_id,
+                        resolution.status.value,
+                        resolution.reason.value if resolution.reason is not None else None,
+                    ),
+                )
+
             for series_item in series.values():
                 _check_deadline(deadline, "series metadata snapshot persistence")
                 series_snapshot_id = _stable_id(
@@ -478,8 +542,8 @@ class PostgresKalshiFreezeRepository:
                 cursor.execute(
                     "INSERT INTO frozen_market_states "
                     "(id, freeze_id, market_id, lifecycle_status, eligible, tradeable, "
-                    "observed_at, cutoff, raw_artifact_id) VALUES "
-                    "(%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                    "fee_policy_status, fee_policy_reason, observed_at, cutoff, raw_artifact_id) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                     "ON CONFLICT (id) DO NOTHING",
                     (
                         state_id,
@@ -488,18 +552,27 @@ class PostgresKalshiFreezeRepository:
                         state_status,
                         state_eligible,
                         state_tradeable,
+                        (
+                            policy_status_by_market[market_key]
+                            if market_key in policy_by_market
+                            else None
+                        ),
+                        (
+                            policy_reason_by_market.get(market_key)
+                        ),
                         state_observed_at,
                         _aware(freeze.data_cutoff),
                         state_artifact_id,
                     ),
                 )
-                context = context_by_key.get(market_key)
-                if context is None:
+                persisted_context = context_by_key.get(market_key)
+                if persisted_context is None:
                     continue
                 _check_deadline(deadline, "order book persistence")
                 book_id = _stable_id(
                     "order-book-snapshot",
-                    f"{freeze_id}:{market_key.canonical}:{context.order_book.artifact.sha256}",
+                    f"{freeze_id}:{market_key.canonical}:"
+                    f"{persisted_context.order_book.artifact.sha256}",
                 )
                 order_book_snapshot_ids.append(book_id)
                 cursor.execute(
@@ -511,13 +584,17 @@ class PostgresKalshiFreezeRepository:
                         book_id,
                         freeze_id,
                         market_key.stable_id,
-                        _aware(context.order_book.observed_at),
-                        context.order_book.source_timestamp,
-                        _aware(context.order_book.cutoff),
-                        self._artifact_id(raw_artifact_ids, context.order_book.artifact),
+                        _aware(persisted_context.order_book.observed_at),
+                        persisted_context.order_book.source_timestamp,
+                        _aware(persisted_context.order_book.cutoff),
+                        self._artifact_id(
+                            raw_artifact_ids, persisted_context.order_book.artifact
+                        ),
                     ),
                 )
-                for outcome_side, book_side, levels in self._book_levels(context.order_book):
+                for outcome_side, book_side, levels in self._book_levels(
+                    persisted_context.order_book
+                ):
                     for level_index, level in enumerate(levels):
                         _check_deadline(deadline, "order book level persistence")
                         cursor.execute(
@@ -579,6 +656,7 @@ class PostgresKalshiFreezeRepository:
             tuple(market_snapshot_ids),
             tuple(order_book_snapshot_ids),
             tuple(resolution_ids),
+            tuple(fee_policy_snapshot_ids),
         )
 
     @staticmethod
@@ -587,6 +665,80 @@ class PostgresKalshiFreezeRepository:
             return raw_artifact_ids[artifact.sha256]
         except KeyError as exc:
             raise ValueError(f"raw artifact was not persisted: {artifact.sha256}") from exc
+
+    @staticmethod
+    def _persist_fee_policy_cursor(
+        cursor: _Cursor,
+        snapshot: FeePolicySnapshot,
+        *,
+        market_id: uuid.UUID,
+        raw_artifact_id: uuid.UUID,
+    ) -> uuid.UUID:
+        policy_id = _stable_id("fee-policy", snapshot.fingerprint)
+        cursor.execute(
+            "SELECT id, policy_fingerprint FROM fee_policy_snapshots "
+            "WHERE market_id = %s AND policy_fingerprint = %s FOR UPDATE",
+            (market_id, snapshot.fingerprint),
+        )
+        existing = cursor.fetchone()
+        if existing is not None:
+            if str(existing[1]) != snapshot.fingerprint:
+                raise ValueError("fee policy fingerprint conflict")
+            return uuid.UUID(str(existing[0]))
+        resolved_num, resolved_den = snapshot.resolved_multiplier
+        cursor.execute(
+            "INSERT INTO fee_policy_snapshots "
+            "(id, market_id, policy_version, formula_version, schedule_identity, fee_type, "
+            "participant_role, multiplier_numerator, multiplier_denominator, "
+            "series_multiplier_numerator, series_multiplier_denominator, "
+            "event_override_micros, event_override_numerator, event_override_denominator, "
+            "event_override_fee_type, event_override_cleared, rate_numerator, "
+            "rate_denominator, waiver, waiver_evidence, exact_inputs, effective_at, as_of_at, "
+            "scheduled_ts, observed_at, cutoff, source_tier, raw_artifact_id, schedule_sha256, "
+            "settlement_fee_micros, policy_fingerprint) VALUES "
+            "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+            "%s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (
+                policy_id,
+                market_id,
+                snapshot.contract_version,
+                snapshot.formula_version,
+                snapshot.schedule_version,
+                snapshot.fee_type,
+                FeeParticipantRole(snapshot.participant_role).value.lower(),
+                resolved_num,
+                resolved_den,
+                snapshot.series_multiplier_numerator,
+                snapshot.series_multiplier_denominator,
+                snapshot.event_override_numerator
+                if snapshot.event_override_denominator == 1_000_000
+                else None,
+                snapshot.event_override_numerator,
+                snapshot.event_override_denominator,
+                snapshot.event_override_fee_type,
+                snapshot.event_override_cleared,
+                snapshot.rate_numerator,
+                snapshot.rate_denominator,
+                snapshot.waiver,
+                (
+                    None
+                    if snapshot.waiver_evidence is None
+                    else json.dumps(dict(snapshot.waiver_evidence))
+                ),
+                json.dumps(dict(snapshot.exact_inputs), sort_keys=True),
+                snapshot.effective_from,
+                snapshot.as_of,
+                snapshot.scheduled_ts,
+                snapshot.source_observed_at,
+                snapshot.cutoff,
+                snapshot.source_tier,
+                raw_artifact_id,
+                snapshot.schedule_sha256,
+                snapshot.settlement_fee_micros,
+                snapshot.fingerprint,
+            ),
+        )
+        return policy_id
 
     @staticmethod
     def _persist_market(
@@ -598,10 +750,11 @@ class PostgresKalshiFreezeRepository:
             "INSERT INTO markets "
             "(id, venue, kind, market_ref, series_id, event_id, question, resolution_rules, "
             "resolution_source, open_time, close_time, expected_expiration_time, "
-            "latest_expiration_time, lifecycle_status, eligible, tradeable, volume_units, "
-            "liquidity_micros, observed_at, source_updated_at, raw_artifact_id) VALUES "
-            "(%s, 'kalshi', 'binary', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
-            "%s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
+        "latest_expiration_time, lifecycle_status, eligible, tradeable, volume_units, "
+        "liquidity_micros, observed_at, source_updated_at, fee_waiver_expiration_time, "
+        "raw_artifact_id) VALUES "
+        "(%s, 'kalshi', 'binary', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+        "%s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
             (
                 market.key.stable_id,
                 market.market_ref,
@@ -621,6 +774,7 @@ class PostgresKalshiFreezeRepository:
                 int(market.liquidity_micros),
                 _aware(market.observed_at),
                 market.source_updated_at,
+                market.fee_waiver_expiration_time,
                 PostgresKalshiFreezeRepository._artifact_id(raw_artifact_ids, market.audit),
             ),
         )

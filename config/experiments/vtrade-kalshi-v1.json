@@ -17,17 +17,17 @@
   "artifacts": {
     "prompt": {
       "path": "spec/prompt/vtrade-kalshi-v1.md",
-      "sha256": "b3b11dd16e66e2d64227b6d85b7c2ac9e676bf879bd204f6af2f2c247129d482",
+      "sha256": "d2d27fd06674f0e8522cd6e4d3ae31fac30817c106c7b7365d0ea4037b2c3543",
       "classification": "inferred"
     },
     "tool_schemas": {
       "path": "spec/tool-schemas-vtrade-kalshi-v1.json",
-      "sha256": "bd04b2203dd35527fefc05dd099b16766cf5c8a60b40f17a505a8a0e35d19762",
+      "sha256": "5cc7118ea0bf3b67f277b0f27c35d0ae25008196892841b8b03c9b86d46240fb",
       "classification": "inferred"
     },
     "compatibility": {
       "path": "spec/vtrade-kalshi-v1-compatibility.md",
-      "sha256": "18acb6557ace98fe2af9aa1c7c038a0217cf4189acbc80c723fa17a2b9b9d8c4",
+      "sha256": "ee5553dd10be6263edbcf3acab1a2fde05ffaa9d4210a33304a35de6206c8237",
       "classification": "inferred"
     }
   },
@@ -134,9 +134,14 @@
   "fees": {
     "contract_version": "vtrade-binary-fee-settlement-v1",
     "formula_version": "kalshi-quadratic-v1",
+    "schedule_artifact": {
+      "path": "spec/fee-schedules/kalshi-predictions-v1.json",
+      "sha256": "1fd0e6826a9515f50841449a0a6f7c8f33bcb5cfb646495f323e64cd9bed8583",
+      "pdf_sha256": "c326a69f596a11e8f8be2620402d39a8d4823920c21cc97c93a114d862699601"
+    },
     "default_role_for_paper_ioc_fok": "TAKER",
     "policy_required": true,
-    "rounding": "fee_round_up_to_100_micros_then_cent_alignment_floor",
+    "rounding": "fee_plus_position_cost_to_nearest_centicent_then_cent_alignment_floor",
     "venue_reported_fee_precedence": true,
     "settlement_fee_micros": 0
   },
@@ -239,7 +244,7 @@
     "no_bid_valuation": {"status": "resolved", "required": true, "policy": "last_known_bid_maximum_age_1800_seconds"}
   },
   "deployment_gates": {
-    "fresh_database": {"status": "required", "policy": "nine_migration_chain_only"},
+    "fresh_database": {"status": "required", "policy": "ten_migration_chain_only"},
     "kalshi_fixture_capture": {"status": "ready", "policy": "credential_free_reviewed_french_host_capture"},
     "real_execution": {"status": "disabled", "policy": "no_credentials_no_signing_no_submission"}
   }

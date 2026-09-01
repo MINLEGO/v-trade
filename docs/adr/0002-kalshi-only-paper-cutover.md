@@ -12,7 +12,7 @@ REST data without credentials, and exposes a semantic YES/NO order contract. The
 worker can simulate paper fills but cannot authenticate, sign, or submit a venue
 order.
 
-The active repository contains nine dependency-ordered migrations:
+The active repository contains ten dependency-ordered migrations:
 
 1. foundation, agent state, raw evidence, and balanced ledger;
 2. Kalshi catalogue, dynamic grids, freezes, and canonical books;
@@ -24,6 +24,8 @@ The active repository contains nine dependency-ordered migrations:
 8. freeze-scoped Kalshi market metrics and exact series tag snapshots.
 9. order-time execution contexts, independent order-book snapshots, and safe
    pre-submission reconciliation.
+10. auditable cutoff-bound fee policies, source-role evidence, and fee-component
+    accounting guards.
 
 Historical research is retained only below `docs/archive/predictionarena/` with an
 explicit read-only marker. It is not imported or loaded by runtime, tests, image
@@ -62,7 +64,7 @@ reconciliation contract.
 
 Every staging or cutover attempt writes a redacted record under `docs/evidence/`.
 `vtrade-cutover-evidence-verify` binds the record to the active experiment hashes and
-the exact nine-migration chain. It requires six gates—offline, PostgreSQL,
+the exact ten-migration chain, including the canonical fee-schedule artifact. It requires six gates—offline, PostgreSQL,
 built-image, private resources, provider egress, and the intended French host—plus
 both pre-cutover snapshots, an image digest, a paper-only reachability check, and the
 rollback record. A record with any missing or failed item remains `blocked`; it cannot

@@ -7,7 +7,9 @@ It admits exactly YES and NO outcomes, opaque market references, exact integer
 microdollar prices, exact hundredths-of-a-contract quantities, dynamic price grids,
 canonical reciprocal books, freeze-scoped hourly market metrics, exact series tags,
 IOC/FOK orders, immutable fee snapshots, and FINALIZED-only settlement with
-`settlement_ts`.
+`settlement_ts`. Fee resolution supports only the official quadratic prediction-market
+formula for active TAKER IOC/FOK execution; unsupported, invalid, incomplete, or
+causally unverifiable fee data makes a market non-tradeable.
 
 The metric contract is `kalshi-market-metrics-v1`: `volume_24h_units` is sourced from
 `volume_24h_fp`; volatility is the sample standard deviation of available consecutive
@@ -32,9 +34,11 @@ WebSocket, order-submission, or real-money fallback is reachable.
 
 There is no compatibility loader, alias, dual venue, dual write, legacy database
 upgrade, historical conversion, or application rollback path. The deployment starts
-from an empty database and uses the exact nine-migration chain. This v1 revision
-refreshes the active artifact hashes and adds the metric and order-time execution
-persistence migrations;
+from an empty database and uses the exact ten-migration chain. This v1 revision
+refreshes the active artifact hashes and adds the metric, order-time execution, and
+auditable fee-policy persistence migrations. The canonical derived fee schedule pins
+the official PDF URL, effective date, formula, and exact PDF SHA-256; a schedule hash
+drift or an unverified schedule fails closed.
 incompatible future changes still require a new experiment version. Missing external
 resources and unresolved reviewed fixture evidence fail closed.
 

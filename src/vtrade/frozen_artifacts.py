@@ -90,6 +90,7 @@ def verify_experiment_config(path: str | Path) -> None:
         if name != "compatibility":
             _reject_forbidden_fields(Path(path_value).read_bytes(), label=name)
     _verify_tool_schema(Path(cast(str, artifacts["tool_schemas"]["path"])))
+    _verify_fee_schedule_reference(loaded)
     _verify_fixture_reference(loaded)
 
 
@@ -170,6 +171,44 @@ def _verify_fixture_reference(config: Mapping[str, object]) -> None:
         raise FrozenArtifactError(f"Kalshi fixture manifest is invalid: {exc}") from exc
     if actual != expected:
         raise FrozenArtifactError("Kalshi fixture manifest hash mismatch")
+
+
+def _verify_fee_schedule_reference(config: Mapping[str, object]) -> None:
+    fees = config.get("fees")
+    if not isinstance(fees, Mapping):
+        raise FrozenArtifactError("active fee schedule reference is missing")
+    definition = fees.get("schedule_artifact")
+    if not isinstance(definition, Mapping):
+        raise FrozenArtifactError("active fee schedule artifact is missing")
+    path_value = definition.get("path")
+    expected_file = definition.get("sha256")
+    expected_pdf = definition.get("pdf_sha256")
+    if (
+        not isinstance(path_value, str)
+        or not isinstance(expected_file, str)
+        or not isinstance(expected_pdf, str)
+        or not _is_sha256(expected_file)
+        or not _is_sha256(expected_pdf)
+    ):
+        raise FrozenArtifactError("active fee schedule hashes are malformed")
+    path = Path(path_value)
+    actual_file = canonical_artifact_file_sha256(path, label="active fee schedule")
+    if actual_file != expected_file:
+        raise FrozenArtifactError("active fee schedule artifact hash mismatch")
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise FrozenArtifactError("active fee schedule artifact is not valid JSON") from exc
+    if not isinstance(document, Mapping):
+        raise FrozenArtifactError("active fee schedule artifact must be an object")
+    if document.get("pdf_sha256") != expected_pdf:
+        raise FrozenArtifactError("active fee schedule PDF hash is not bound to its artifact")
+
+
+def _is_sha256(value: str) -> bool:
+    return len(value) == 64 and value.lower() == value and all(
+        character in "0123456789abcdef" for character in value
+    )
 
 
 def _reject_forbidden_fields(content: bytes, *, label: str) -> None:

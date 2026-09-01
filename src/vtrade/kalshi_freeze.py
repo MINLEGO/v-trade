@@ -18,6 +18,11 @@ from vtrade.domain.types import (
     RawArtifact,
     ResolutionObservation,
 )
+from vtrade.fee_policy import (
+    FeePolicyError,
+    FeePolicyResolution,
+    FeePolicyStatus,
+)
 from vtrade.market_metrics import (
     MarketCandlestickBatch,
     MarketMetricSnapshot,
@@ -66,6 +71,7 @@ class KalshiMarketFreeze:
     data_cutoff: datetime
     artifacts: tuple[RawArtifact, ...]
     market_metrics: tuple[MarketMetricSnapshot, ...] = ()
+    fee_policies: tuple[FeePolicyResolution, ...] = ()
 
     def __post_init__(self) -> None:
         if self.data_cutoff.tzinfo is None or self.data_cutoff.utcoffset() is None:
@@ -76,6 +82,17 @@ class KalshiMarketFreeze:
         metric_keys = tuple(metric.market_key for metric in self.market_metrics)
         if metric_keys != self.discovery_market_keys:
             raise ValueError("freeze metric order/membership is incomplete")
+        policy_keys = tuple(
+            MarketKey(item.market_ref) for item in self.fee_policies
+        )
+        if self.fee_policies and policy_keys != self.discovery_market_keys:
+            raise ValueError("freeze fee policy order/membership is incomplete")
+        if any(
+            item.status is FeePolicyStatus.AVAILABLE
+            and (item.policy is None or item.policy.cutoff != self.data_cutoff)
+            for item in self.fee_policies
+        ):
+            raise ValueError("available freeze fee policy does not use the freeze cutoff")
         if any(
             observation.observed_at > self.data_cutoff
             or (
@@ -122,6 +139,15 @@ class _KalshiFreezeVenue(Protocol):
         deadline: float | None = None,
     ) -> tuple[MarketCandlestickBatch, ...]: ...
 
+    def resolve_fee_policies(
+        self,
+        contexts: Sequence[MarketContext],
+        *,
+        as_of: datetime,
+        cutoff: datetime,
+        deadline: float | None = None,
+    ) -> tuple[FeePolicyResolution, ...]: ...
+
 
 class KalshiMarketFreezeService:
     """Apply deterministic retention and bounded book reads around Kalshi REST."""
@@ -133,6 +159,7 @@ class KalshiMarketFreezeService:
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         maximum_parallel_book_requests: int = 8,
         freeze_deadline_seconds: float = 600.0,
+        require_fee_policy: bool = False,
     ) -> None:
         if maximum_parallel_book_requests < 1:
             raise ValueError("maximum_parallel_book_requests must be positive")
@@ -142,6 +169,7 @@ class KalshiMarketFreezeService:
         self._clock = clock
         self._maximum_parallel_book_requests = maximum_parallel_book_requests
         self._freeze_deadline_seconds = freeze_deadline_seconds
+        self._require_fee_policy = require_fee_policy
 
     def freeze(
         self,
@@ -216,16 +244,79 @@ class KalshiMarketFreezeService:
             deadline=freeze_deadline,
         )
         self._check_deadline(freeze_deadline, "after resolution reads")
-        completed = self._aware(self._clock(), "freeze completion")
-        self._check_deadline(freeze_deadline, "before publication")
-        data_cutoff = self._aware(freeze_request.cutoff or completed, "freeze data cutoff")
+        requested_cutoff = (
+            self._aware(freeze_request.cutoff, "freeze data cutoff")
+            if freeze_request.cutoff is not None
+            else None
+        )
+        provisional_cutoff = requested_cutoff or operation_cutoff
+        self._check_deadline(freeze_deadline, "before fee policy reads")
         finalized_contexts = tuple(
             MarketContext(
                 context.market,
-                replace(context.order_book, cutoff=data_cutoff),
+                replace(context.order_book, cutoff=provisional_cutoff),
             )
             for context in contexts
         )
+        fee_policies: tuple[FeePolicyResolution, ...] = ()
+        if self._require_fee_policy:
+            resolver = getattr(self._venue, "resolve_fee_policies", None)
+            if not callable(resolver):
+                raise FeePolicyError("fee policy resolver is unavailable")
+            try:
+                fee_policies = tuple(
+                    resolver(
+                        finalized_contexts,
+                        as_of=(
+                            requested_cutoff
+                            or self._aware(self._clock(), "fee policy as-of")
+                        ),
+                        cutoff=provisional_cutoff,
+                        deadline=freeze_deadline,
+                    )
+                )
+            except FeePolicyError:
+                raise
+            except Exception as exc:
+                raise FeePolicyError("global fee policy resolution failed") from exc
+            if tuple(item.market_ref for item in fee_policies) != tuple(
+                key.market_ref for key in context_keys
+            ):
+                raise FeePolicyError("fee policy resolution omitted a discovery market")
+        self._check_deadline(freeze_deadline, "before freeze completion")
+        completed = self._aware(self._clock(), "freeze completion")
+        self._check_deadline(freeze_deadline, "before publication")
+        data_cutoff = requested_cutoff or completed
+        if requested_cutoff is None and fee_policies:
+            fee_policies = tuple(
+                replace(
+                    item,
+                    policy=(
+                        item.policy.with_cutoff(data_cutoff)
+                        if item.policy is not None
+                        else None
+                    ),
+                )
+                for item in fee_policies
+            )
+        by_market = {item.market_ref: item for item in fee_policies}
+
+        def attach_fee_policy(context: MarketContext) -> MarketContext:
+            resolution = by_market.get(context.market.market_ref)
+            if resolution is None:
+                market = context.market
+            else:
+                market = replace(
+                    context.market,
+                    fee_policy=resolution.policy,
+                    fee_policy_status=resolution.status.value,
+                    fee_policy_reason=(
+                        resolution.reason.value if resolution.reason is not None else None
+                    ),
+                )
+            return MarketContext(market, replace(context.order_book, cutoff=data_cutoff))
+
+        finalized_contexts = tuple(attach_fee_policy(context) for context in finalized_contexts)
         market_metrics = tuple(
             calculate_market_metrics(
                 context.market,
@@ -248,6 +339,7 @@ class KalshiMarketFreezeService:
             finalized_contexts,
             resolutions,
             market_metrics,
+            fee_policies,
             extra=(cutoff_artifact,) if cutoff_artifact is not None else (),
         )
         result = KalshiMarketFreeze(
@@ -259,6 +351,7 @@ class KalshiMarketFreezeService:
             data_cutoff,
             artifacts,
             market_metrics,
+            fee_policies,
         )
         _LOGGER.info(
             "market_freeze stage_boundary event=venue_complete pages=%s "
@@ -326,6 +419,7 @@ class KalshiMarketFreezeService:
         contexts: Sequence[MarketContext],
         resolutions: Sequence[ResolutionObservation],
         market_metrics: Sequence[MarketMetricSnapshot],
+        fee_policies: Sequence[FeePolicyResolution] = (),
         *,
         extra: Sequence[RawArtifact] = (),
     ) -> tuple[RawArtifact, ...]:
@@ -337,6 +431,24 @@ class KalshiMarketFreezeService:
         values.extend(context.order_book.artifact for context in contexts)
         values.extend(
             artifact for metric in market_metrics for artifact in metric.source_artifacts
+        )
+        values.extend(
+            evidence.artifact
+            for policy in fee_policies
+            for evidence in policy.evidence
+        )
+        values.extend(
+            artifact
+            for policy in fee_policies
+            if policy.policy is not None
+            and policy.policy.raw_artifact is not None
+            for artifact in (policy.policy.raw_artifact,)
+        )
+        values.extend(
+            artifact
+            for policy in fee_policies
+            if policy.policy is not None
+            for artifact in policy.policy.source_artifacts
         )
         values.extend(observation.audit for observation in resolutions)
         unique: dict[str, RawArtifact] = {}

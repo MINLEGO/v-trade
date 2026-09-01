@@ -383,14 +383,43 @@ class PostgresBrokerRepository:
                 _assert_contract_portfolio_version(
                     cursor, agent_id, result.portfolio_before.version
                 )
-                for fill in result.fills:
+                persisted_fee_policy_id: uuid.UUID | None = None
+                if fee_policy is not None:
+                    cursor.execute(
+                        "SELECT id FROM fee_policy_snapshots WHERE market_id = %s "
+                        "AND policy_fingerprint = %s ORDER BY id DESC LIMIT 1",
+                        (market_id, fee_policy.fingerprint),
+                    )
+                    policy_row = cursor.fetchone()
+                    if policy_row is None:
+                        raise ValueError("fee policy snapshot is not persisted")
+                    persisted_fee_policy_id = uuid.UUID(str(policy_row[0]))
+                for fill_index, fill in enumerate(result.fills):
+                    calculation = (
+                        result.fee_calculations[fill_index]
+                        if fill_index < len(result.fee_calculations)
+                        else None
+                    )
+                    fill_policy_fingerprint = (
+                        fill.fee_policy_fingerprint or result.fee_policy_fingerprint
+                    )
+                    fill_evidence = {
+                        "authoritative": fill.authoritative,
+                        "fee_policy_fingerprint": fill_policy_fingerprint,
+                        "fee_policy_evidence_references": [
+                            dict(reference) for reference in result.fee_policy_evidence_references
+                        ],
+                    }
                     cursor.execute(
                         "INSERT INTO fills "
                         "(id, operation_id, fill_id, fill_fingerprint, contract_units, "
                         "price_micros, "
                         "gross_cash_micros, authoritative_fee_micros, net_cash_delta_micros, "
-                        "frozen_context_id, execution_context_id, adapter_evidence, filled_at) "
-                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)",
+                        "frozen_context_id, execution_context_id, adapter_evidence, filled_at, "
+                        "trade_fee_micros, rounding_fee_micros, rebate_micros, "
+                        "fee_policy_snapshot_id) VALUES "
+                        "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, "
+                        "%s, %s, %s, %s)",
                         (
                             _stable_database_uuid("fill", f"{result.operation_id}:{fill.fill_id}"),
                             operation_uuid_value,
@@ -403,8 +432,24 @@ class PostgresBrokerRepository:
                             fill.net_cash_delta_micros,
                             _uuid_or_none(fill.frozen_context_id),
                             _uuid_or_none(fill.execution_context_id),
-                            json.dumps({"authoritative": fill.authoritative}),
+                            json.dumps(fill_evidence, sort_keys=True),
                             fill.filled_at,
+                            (
+                                calculation.trade_fee_micros
+                                if calculation is not None
+                                else fill.trade_fee_micros
+                            ),
+                            (
+                                calculation.rounding_fee_micros
+                                if calculation is not None
+                                else fill.rounding_fee_micros
+                            ),
+                            (
+                                calculation.rebate_micros
+                                if calculation is not None
+                                else fill.rebate_micros
+                            ),
+                            persisted_fee_policy_id,
                         ),
                     )
                 audit = result.liquidity_audit
@@ -531,7 +576,6 @@ class PostgresBrokerRepository:
         raw_artifact_id: uuid.UUID,
     ) -> PersistenceResult:
         """Store one immutable policy selection before it can authorize a fill."""
-
         required_times = (
             snapshot.effective_from,
             snapshot.as_of,
@@ -540,8 +584,6 @@ class PostgresBrokerRepository:
         )
         if any(value is None for value in required_times):
             raise ValueError("fee policy persistence requires complete source timestamps")
-        policy_id = _stable_database_uuid("fee-policy", snapshot.fingerprint)
-        multiplier_num, multiplier_den = snapshot.resolved_multiplier
         with self._connect(self._database_url) as connection, connection.cursor() as cursor:
             cursor.execute(
                 "SELECT id, policy_fingerprint FROM fee_policy_snapshots "
@@ -553,43 +595,27 @@ class PostgresBrokerRepository:
                 if str(existing[1]) != snapshot.fingerprint:
                     raise ValueError("fee policy fingerprint conflict")
                 return PersistenceResult(uuid.UUID(str(existing[0])), False, snapshot.fingerprint)
-            cursor.execute(
-                "INSERT INTO fee_policy_snapshots "
-                "(id, market_id, policy_version, formula_version, schedule_identity, "
-                "participant_role, multiplier_numerator, multiplier_denominator, "
-                "event_override_micros, event_override_cleared, waiver_evidence, exact_inputs, "
-                "effective_at, as_of_at, observed_at, cutoff, source_tier, raw_artifact_id, "
-                "policy_fingerprint) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, "
-                "%s::jsonb, %s, %s, %s, %s, %s, %s, %s)",
-                (
-                    policy_id,
-                    market_id,
-                    snapshot.contract_version,
-                    snapshot.formula_version,
-                    snapshot.schedule_version,
-                    FeeParticipantRole(
-                        snapshot.role or snapshot.participant_role
-                    ).value.lower(),
-                    multiplier_num,
-                    multiplier_den,
-                    snapshot.event_override_numerator,
-                    snapshot.event_override_cleared,
-                    json.dumps(
-                        dict(snapshot.waiver_evidence)
-                        if snapshot.waiver_evidence is not None
-                        else {"waived": snapshot.waiver}
-                    ),
-                    json.dumps(dict(snapshot.exact_inputs), sort_keys=True),
-                    snapshot.effective_from,
-                    snapshot.as_of,
-                    snapshot.source_observed_at,
-                    snapshot.cutoff,
-                    snapshot.source_tier,
-                    raw_artifact_id,
-                    snapshot.fingerprint,
-                ),
+            for source_artifact in snapshot.source_artifacts:
+                _persist_raw_artifact_cursor(cursor, source_artifact)
+            inserted_id = _persist_fee_policy_cursor(
+                cursor,
+                snapshot,
+                market_id=market_id,
+                raw_artifact_id=raw_artifact_id,
             )
-        return PersistenceResult(policy_id, True, snapshot.fingerprint)
+            for reference in snapshot.evidence_references:
+                role = reference.get("role")
+                sha256 = reference.get("sha256")
+                if not isinstance(role, str) or not isinstance(sha256, str):
+                    raise ValueError("fee policy evidence reference is malformed")
+                cursor.execute(
+                    "INSERT INTO fee_policy_snapshot_artifacts "
+                    "(fee_policy_snapshot_id, raw_artifact_id, evidence_role) "
+                    "SELECT %s, id, %s FROM raw_artifacts WHERE sha256 = %s "
+                    "ON CONFLICT DO NOTHING",
+                    (inserted_id, role, sha256),
+                )
+        return PersistenceResult(inserted_id, True, snapshot.fingerprint)
 
     def persist_resolution_observation(
         self,
@@ -1065,6 +1091,16 @@ def _semantic_fingerprint(result: OrderResult) -> str:
         "fee_micros": int(result.fee_micros),
         "net_cash_delta_micros": result.net_cash_delta_micros,
         "updated_at": result.updated_at.isoformat(),
+        "fee_policy_fingerprint": result.fee_policy_fingerprint,
+        "fee_components": [
+            {
+                "trade_fee_micros": int(fill.trade_fee_micros),
+                "rounding_fee_micros": int(fill.rounding_fee_micros),
+                "rebate_micros": int(fill.rebate_micros),
+                "fee_policy_fingerprint": fill.fee_policy_fingerprint,
+            }
+            for fill in result.fills
+        ],
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
@@ -1114,7 +1150,10 @@ def _load_order_result_cursor(
     cursor.execute(
         "SELECT fill_id, fill_fingerprint, contract_units, price_micros, gross_cash_micros, "
         "authoritative_fee_micros, net_cash_delta_micros, frozen_context_id, "
-        "execution_context_id, filled_at FROM fills WHERE operation_id = %s "
+        "execution_context_id, filled_at, trade_fee_micros, rounding_fee_micros, "
+        "rebate_micros, fee_policy_snapshot_id, fps.policy_fingerprint "
+        "FROM fills f LEFT JOIN fee_policy_snapshots fps "
+        "ON fps.id = f.fee_policy_snapshot_id WHERE f.operation_id = %s "
         "ORDER BY fill_id",
         (operation_id,),
     )
@@ -1130,6 +1169,10 @@ def _load_order_result_cursor(
             frozen_context_id=None if row[7] is None else str(row[7]),
             execution_context_id=None if row[8] is None else str(row[8]),
             fingerprint=str(row[1]),
+            trade_fee_micros=MoneyMicros(int(str(row[10] or 0))),
+            rounding_fee_micros=MoneyMicros(int(str(row[11] or 0))),
+            rebate_micros=MoneyMicros(int(str(row[12] or 0))),
+            fee_policy_fingerprint=None if row[14] is None else str(row[14]),
         )
         for row in cursor.fetchall()
     )
@@ -1184,6 +1227,22 @@ def _load_order_result_cursor(
         if raw_submission_state in {item.value for item in SubmissionState}
         else None
     )
+    fee_policy_fingerprint = evidence.get("fee_policy_fingerprint")
+    if not isinstance(fee_policy_fingerprint, str):
+        fee_policy_fingerprint = next(
+            (
+                fill.fee_policy_fingerprint
+                for fill in fills
+                if fill.fee_policy_fingerprint is not None
+            ),
+            None,
+        )
+    fee_evidence_value = evidence.get("fee_policy_evidence_references", ())
+    fee_evidence_references = (
+        tuple(item for item in fee_evidence_value if isinstance(item, Mapping))
+        if isinstance(fee_evidence_value, (list, tuple))
+        else ()
+    )
     return OrderResult(
         request=replay_request,
         operation_id=operation_uuid(request.agent_id, request.idempotency_key),
@@ -1213,6 +1272,8 @@ def _load_order_result_cursor(
         ),
         submission_state=submission_state,
         reconciliation_evidence=evidence,
+        fee_policy_fingerprint=fee_policy_fingerprint,
+        fee_policy_evidence_references=fee_evidence_references,
     )
 
 
@@ -1276,8 +1337,30 @@ def _persist_execution_context_cursor(
         )
         policy_row = cursor.fetchone()
         if policy_row is None:
-            raise ValueError("fee policy snapshot is not persisted")
-        fee_policy_id = uuid.UUID(str(policy_row[0]))
+            primary_artifact = fee_policy.raw_artifact or context.market.audit
+            primary_artifact_id = _persist_raw_artifact_cursor(cursor, primary_artifact)
+            for source_artifact in fee_policy.source_artifacts:
+                _persist_raw_artifact_cursor(cursor, source_artifact)
+            fee_policy_id = _persist_fee_policy_cursor(
+                cursor,
+                fee_policy,
+                market_id=market_id,
+                raw_artifact_id=primary_artifact_id,
+            )
+            for reference in fee_policy.evidence_references:
+                role = reference.get("role")
+                sha256 = reference.get("sha256")
+                if not isinstance(role, str) or not isinstance(sha256, str):
+                    raise ValueError("fee policy evidence reference is malformed")
+                cursor.execute(
+                    "INSERT INTO fee_policy_snapshot_artifacts "
+                    "(fee_policy_snapshot_id, raw_artifact_id, evidence_role) "
+                    "SELECT %s, id, %s FROM raw_artifacts WHERE sha256 = %s "
+                    "ON CONFLICT DO NOTHING",
+                    (fee_policy_id, role, sha256),
+                )
+        else:
+            fee_policy_id = uuid.UUID(str(policy_row[0]))
     cursor.execute(
         "INSERT INTO execution_contexts "
         "(id, operation_id, agent_id, market_id, frozen_context_id, frozen_cutoff, "
@@ -1303,9 +1386,10 @@ def _persist_execution_context_cursor(
         "INSERT INTO execution_market_snapshots "
         "(id, execution_context_id, market_id, market_ref, lifecycle_status, eligible, "
         "tradeable, question, resolution_rules, resolution_source, open_time, close_time, "
-        "expected_expiration_time, latest_expiration_time, volume_units, liquidity_micros, "
+        "expected_expiration_time, latest_expiration_time, fee_waiver_expiration_time, "
+        "volume_units, liquidity_micros, "
         "observed_at, source_updated_at, cutoff, raw_artifact_id) VALUES "
-        "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+        "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
         "ON CONFLICT (id) DO NOTHING",
         (
             market_snapshot_id,
@@ -1322,6 +1406,7 @@ def _persist_execution_context_cursor(
             context.market.close_time,
             context.market.expected_expiration_time,
             context.market.latest_expiration_time,
+            context.market.fee_waiver_expiration_time,
             int(context.market.volume),
             int(context.market.liquidity_micros),
             context.market.observed_at,
@@ -1415,6 +1500,82 @@ def _persist_raw_artifact_cursor(cursor: _Cursor, artifact: RawArtifact) -> uuid
     return uuid.UUID(str(existing[0]))
 
 
+def _persist_fee_policy_cursor(
+    cursor: _Cursor,
+    snapshot: FeePolicySnapshot,
+    *,
+    market_id: uuid.UUID,
+    raw_artifact_id: uuid.UUID,
+) -> uuid.UUID:
+    """Insert an exact execution fee snapshot in the caller's transaction."""
+
+    policy_id = uuid.uuid5(uuid.NAMESPACE_URL, f"vtrade:fee-policy:{snapshot.fingerprint}")
+    cursor.execute(
+        "SELECT id, policy_fingerprint FROM fee_policy_snapshots "
+        "WHERE market_id = %s AND policy_fingerprint = %s FOR UPDATE",
+        (market_id, snapshot.fingerprint),
+    )
+    existing = cursor.fetchone()
+    if existing is not None:
+        if str(existing[1]) != snapshot.fingerprint:
+            raise ValueError("fee policy fingerprint conflict")
+        return uuid.UUID(str(existing[0]))
+    resolved_num, resolved_den = snapshot.resolved_multiplier
+    cursor.execute(
+        "INSERT INTO fee_policy_snapshots "
+        "(id, market_id, policy_version, formula_version, schedule_identity, fee_type, "
+        "participant_role, multiplier_numerator, multiplier_denominator, "
+        "series_multiplier_numerator, series_multiplier_denominator, "
+        "event_override_micros, event_override_numerator, event_override_denominator, "
+        "event_override_fee_type, event_override_cleared, rate_numerator, rate_denominator, "
+        "waiver, waiver_evidence, exact_inputs, effective_at, as_of_at, scheduled_ts, "
+        "observed_at, cutoff, source_tier, raw_artifact_id, schedule_sha256, "
+        "settlement_fee_micros, policy_fingerprint) VALUES "
+        "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+        "%s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (
+            policy_id,
+            market_id,
+            snapshot.contract_version,
+            snapshot.formula_version,
+            snapshot.schedule_version,
+            snapshot.fee_type,
+            FeeParticipantRole(snapshot.participant_role).value.lower(),
+            resolved_num,
+            resolved_den,
+            snapshot.series_multiplier_numerator,
+            snapshot.series_multiplier_denominator,
+            snapshot.event_override_numerator
+            if snapshot.event_override_denominator == 1_000_000
+            else None,
+            snapshot.event_override_numerator,
+            snapshot.event_override_denominator,
+            snapshot.event_override_fee_type,
+            snapshot.event_override_cleared,
+            snapshot.rate_numerator,
+            snapshot.rate_denominator,
+            snapshot.waiver,
+                (
+                    None
+                    if snapshot.waiver_evidence is None
+                    else json.dumps(dict(snapshot.waiver_evidence))
+                ),
+            json.dumps(dict(snapshot.exact_inputs), sort_keys=True),
+            snapshot.effective_from,
+            snapshot.as_of,
+            snapshot.scheduled_ts,
+            snapshot.source_observed_at,
+            snapshot.cutoff,
+            snapshot.source_tier,
+            raw_artifact_id,
+            snapshot.schedule_sha256,
+            snapshot.settlement_fee_micros,
+            snapshot.fingerprint,
+        ),
+    )
+    return policy_id
+
+
 def _json_mapping(value: object) -> dict[str, object]:
     if isinstance(value, str):
         try:
@@ -1434,6 +1595,20 @@ def _reconciliation_evidence(result: OrderResult) -> dict[str, object]:
     }
     if result.submission_state is not None:
         evidence["submission_state"] = _enum_value(result.submission_state)
+    if result.fee_policy_fingerprint is not None:
+        evidence["fee_policy_fingerprint"] = result.fee_policy_fingerprint
+        evidence["fee_policy_evidence_references"] = [
+            dict(reference) for reference in result.fee_policy_evidence_references
+        ]
+    if result.fills:
+        evidence["fee_components"] = {
+            "trade_fee_micros": sum(int(fill.trade_fee_micros) for fill in result.fills),
+            "rounding_fee_micros": sum(
+                int(fill.rounding_fee_micros) for fill in result.fills
+            ),
+            "rebate_micros": sum(int(fill.rebate_micros) for fill in result.fills),
+            "net_fee_micros": int(result.fee_micros),
+        }
     evidence.update(dict(result.reconciliation_evidence))
     return evidence
 

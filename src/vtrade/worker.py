@@ -28,6 +28,7 @@ from vtrade.deadline import check_deadline, deadline_remaining, run_with_deadlin
 from vtrade.domain.execution import OrderRequest
 from vtrade.domain.ports import ArtifactStore, JsonObject
 from vtrade.domain.types import Side
+from vtrade.fee_policy import FeePolicyError
 from vtrade.frozen_artifacts import FrozenArtifactError, canonical_artifact_file_sha256
 from vtrade.harness import (
     BoundedToolHarness,
@@ -54,6 +55,7 @@ from vtrade.providers import (
 )
 from vtrade.risk import MarketCapacity, calculate_market_capacity
 from vtrade.runtime import (
+    AlertEvent,
     ArtifactRegistration,
     CycleClaim,
     CycleOrchestrator,
@@ -1214,23 +1216,44 @@ class ProductionKalshiFreezePort:
             )
         else:
             held_markets = self._persistence.market_refs_for_agent(claim.agent_id)
-        result = self._service.freeze(
-            KalshiFreezeRequest(
-                held_markets=held_markets,
-                historical_markets=held_markets,
-                cutoff=claim.data_cutoff,
-                maximum_historical_markets=self._maximum_historical_markets,
-                maximum_additional_markets=self._maximum_additional_markets,
+        try:
+            result = self._service.freeze(
+                KalshiFreezeRequest(
+                    held_markets=held_markets,
+                    historical_markets=held_markets,
+                    cutoff=claim.data_cutoff,
+                    maximum_historical_markets=self._maximum_historical_markets,
+                    maximum_additional_markets=self._maximum_additional_markets,
+                )
+                if claim.data_cutoff
+                else KalshiFreezeRequest(
+                    held_markets=held_markets,
+                    historical_markets=held_markets,
+                    maximum_historical_markets=self._maximum_historical_markets,
+                    maximum_additional_markets=self._maximum_additional_markets,
+                ),
+                deadline=deadline,
             )
-            if claim.data_cutoff
-            else KalshiFreezeRequest(
-                held_markets=held_markets,
-                historical_markets=held_markets,
-                maximum_historical_markets=self._maximum_historical_markets,
-                maximum_additional_markets=self._maximum_additional_markets,
-            ),
-            deadline=deadline,
-        )
+        except FeePolicyError as exc:
+            try:
+                self._repository.open_alert(
+                    AlertEvent(
+                        None,
+                        None,
+                        "critical",
+                        "fee_policy_global_failure",
+                        {
+                            "cycle_id": str(claim.cycle_id),
+                            "failure_type": type(exc).__name__,
+                            "stage": "market_freeze",
+                        },
+                        _aware(self._clock()),
+                        "fee-policy-global",
+                    )
+                )
+            except Exception:
+                _LOGGER.exception("could not persist the global fee-policy failure alert")
+            raise
         if deadline is not None:
             check_deadline(deadline, "after Kalshi venue freeze")
         retained = six_month_retain_until(_aware(self._clock()))
@@ -1307,6 +1330,7 @@ class ProductionKalshiFreezePort:
             market_snapshot_ids=persisted.market_snapshot_ids,
             order_book_snapshot_ids=persisted.order_book_snapshot_ids,
             resolution_ids=persisted.resolution_ids,
+            fee_policy_snapshot_ids=persisted.fee_policy_snapshot_ids,
         )
         observed = [artifact.observed_at for artifact in result.artifacts if artifact.observed_at]
         freshest = max(observed, default=result.data_cutoff)
@@ -1324,6 +1348,7 @@ def _kalshi_freeze_payload(
     market_snapshot_ids: Sequence[uuid.UUID] | None = None,
     order_book_snapshot_ids: Sequence[uuid.UUID] | None = None,
     resolution_ids: Sequence[uuid.UUID] | None = None,
+    fee_policy_snapshot_ids: Sequence[uuid.UUID] | None = None,
 ) -> JsonObject:
     def timestamp(value: datetime | None) -> str | None:
         return value.isoformat() if value is not None else None
@@ -1365,6 +1390,8 @@ def _kalshi_freeze_payload(
             "status": str(value.status),
             "eligible": value.eligible,
             "tradeable": value.tradeable,
+            "fee_policy_status": value.fee_policy_status,
+            "fee_policy_reason": value.fee_policy_reason,
             "volume_units": int(value.volume),
             "volume_24h_units": (
                 metric.volume_24h_units if metric is not None else None
@@ -1398,6 +1425,11 @@ def _kalshi_freeze_payload(
                 "sha256": value.audit.sha256,
                 "byte_length": value.audit.byte_length,
             },
+            "fee_policy": (
+                value.fee_policy.to_payload()
+                if hasattr(value.fee_policy, "to_payload")
+                else None
+            ),
         }
 
     contexts: list[JsonObject] = []
@@ -1422,6 +1454,11 @@ def _kalshi_freeze_payload(
                         "byte_length": book.artifact.byte_length,
                     },
                 },
+                "fee_policy": (
+                    context.market.fee_policy.to_payload()
+                    if hasattr(context.market.fee_policy, "to_payload")
+                    else None
+                ),
             }
         )
     resolutions = [
@@ -1441,6 +1478,26 @@ def _kalshi_freeze_payload(
             },
         }
         for item in result.resolutions
+    ]
+    fee_policies = [
+        {
+            "market_ref": item.market_ref,
+            "status": item.status.value,
+            "reason": item.reason.value if item.reason is not None else None,
+            "policy": item.policy.to_payload() if item.policy is not None else None,
+            "evidence": [
+                {
+                    "role": evidence.role.value,
+                    "artifact": {
+                        "uri": evidence.artifact.uri,
+                        "sha256": evidence.artifact.sha256,
+                        "byte_length": evidence.artifact.byte_length,
+                    },
+                }
+                for evidence in item.evidence
+            ],
+        }
+        for item in getattr(result, "fee_policies", ())
     ]
     return {
         "venue": "kalshi",
@@ -1476,9 +1533,22 @@ def _kalshi_freeze_payload(
                 )
             )
         ],
+        "fee_policy_snapshot_ids": [
+            str(value)
+            for value in (
+                fee_policy_snapshot_ids
+                if fee_policy_snapshot_ids is not None
+                else tuple(
+                    uuid.uuid5(uuid.NAMESPACE_URL, f"vtrade:fee-policy:{item.policy.fingerprint}")
+                    for item in getattr(result, "fee_policies", ())
+                    if item.policy is not None
+                )
+            )
+        ],
         "markets": [market(item) for item in result.markets],
         "contexts": contexts,
         "resolutions": resolutions,
+        "fee_policies": fee_policies,
         "audit_references": [
             {"uri": item.uri, "sha256": item.sha256, "byte_length": item.byte_length}
             for item in result.artifacts
@@ -1553,6 +1623,12 @@ def build_production_worker(
     discovery = config.raw.get("discovery")
     if not isinstance(discovery, Mapping):
         raise ProductionCompositionUnavailable("experiment discovery configuration is missing")
+    fees = config.raw.get("fees")
+    if not isinstance(fees, Mapping):
+        raise ProductionCompositionUnavailable("experiment fee configuration is missing")
+    schedule_artifact = fees.get("schedule_artifact")
+    if not isinstance(schedule_artifact, Mapping):
+        raise ProductionCompositionUnavailable("experiment fee schedule artifact is missing")
     venue = KalshiPublicRestAdapter(
         store,
         clock=clock,
@@ -1565,6 +1641,8 @@ def build_production_worker(
             discovery.get("catalogue_sync_deadline_seconds", 300)
         ),
         freeze_deadline_seconds=float(discovery.get("freeze_deadline_seconds", 600)),
+        fee_schedule_path=str(schedule_artifact["path"]),
+        require_fee_policy=True,
     )
     repository = PostgresRuntimeRepository(database_url)
     freeze_persistence = PostgresKalshiFreezeRepository(database_url)
@@ -1608,6 +1686,7 @@ def build_production_worker(
                     discovery, "maximum_concurrent_orderbooks"
                 ),
                 freeze_deadline_seconds=float(discovery.get("freeze_deadline_seconds", 600)),
+                require_fee_policy=True,
             ),
             repository,
             freeze_persistence,

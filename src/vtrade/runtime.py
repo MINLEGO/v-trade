@@ -349,7 +349,9 @@ class AlertPauseScope(StrEnum):
 CRITICAL_AGENT_ALERT_CODES = frozenset(
     {"stale_market_data", "ledger_mismatch", "consecutive_cycle_failures"}
 )
-CRITICAL_GLOBAL_ALERT_CODES = frozenset({"projected_budget_exceeded"})
+CRITICAL_GLOBAL_ALERT_CODES = frozenset(
+    {"projected_budget_exceeded", "fee_policy_global_failure"}
+)
 
 
 @dataclass(frozen=True, slots=True)

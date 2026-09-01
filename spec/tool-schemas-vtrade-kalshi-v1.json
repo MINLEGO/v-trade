@@ -60,6 +60,45 @@
         "step_micros"
       ]
     },
+    "fee_waiver_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "expiration_time": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "waived": {
+          "type": "boolean"
+        },
+        "as_of": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "expiration_time",
+        "waived",
+        "as_of"
+      ]
+    },
+    "fee_evidence_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "role",
+        "sha256"
+      ]
+    },
     "outcome_summary": {
       "type": "object",
       "additionalProperties": false,
@@ -150,6 +189,36 @@
         "tradeable": {
           "type": "boolean"
         },
+        "fee_policy_status": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "AVAILABLE",
+            "UNSUPPORTED",
+            "INVALID",
+            "UNAVAILABLE",
+            null
+          ]
+        },
+        "fee_policy_reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "UNSUPPORTED_FEE_TYPE",
+            "UNSUPPORTED_PARTICIPANT_ROLE",
+            "FEE_POLICY_INVALID",
+            "FEE_POLICY_UNAVAILABLE",
+            "FEE_SCHEDULE_INVALID",
+            "FEE_SCHEDULE_HASH_DRIFT",
+            "FEE_SOURCE_INCOMPLETE",
+            "FEE_SOURCE_CONFLICT",
+            null
+          ]
+        },
         "volatility_micros": {
           "type": [
             "integer",
@@ -215,6 +284,8 @@
         "status",
         "eligible",
         "tradeable",
+        "fee_policy_status",
+        "fee_policy_reason",
         "volatility_micros",
         "volume_trend",
         "volume_trend_delta",
@@ -449,6 +520,10 @@
         "formula_version": {
           "const": "kalshi-quadratic-v1"
         },
+        "fee_type": {
+          "type": "string",
+          "const": "quadratic"
+        },
         "participant_role": {
           "type": "string",
           "enum": [
@@ -458,11 +533,39 @@
         },
         "multiplier_numerator": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 0
         },
         "multiplier_denominator": {
           "type": "integer",
           "minimum": 1
+        },
+        "series_multiplier_numerator": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "series_multiplier_denominator": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "event_override_numerator": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "event_override_denominator": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "event_override_fee_type": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "event_override_micros": {
           "type": [
@@ -474,12 +577,61 @@
         "event_override_cleared": {
           "type": "boolean"
         },
+        "rate_numerator": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "rate_denominator": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "waiver": {
+          "type": "boolean"
+        },
+        "waiver_evidence": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "expiration_time": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "waived": {
+              "type": "boolean"
+            },
+            "as_of": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "expiration_time",
+            "waived",
+            "as_of"
+          ]
+        },
         "effective_at": {
           "type": "string",
           "format": "date-time"
         },
         "as_of_at": {
           "type": "string",
+          "format": "date-time"
+        },
+        "scheduled_ts": {
+          "type": [
+            "string",
+            "null"
+          ],
           "format": "date-time"
         },
         "observed_at": {
@@ -493,6 +645,202 @@
         "source_tier": {
           "type": "string"
         },
+        "schedule_sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "settlement_fee_micros": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "exact_inputs": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schedule": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "schedule_version": {
+                  "type": "string"
+                },
+                "official_url": {
+                  "type": "string",
+                  "format": "uri"
+                },
+                "effective_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "pdf_sha256": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "formula_version": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schedule_version",
+                "official_url",
+                "effective_at",
+                "pdf_sha256",
+                "formula_version"
+              ]
+            },
+            "series": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "series_ref": {
+                  "type": "string"
+                },
+                "fee_type": {
+                  "type": "string"
+                },
+                "metadata_multiplier_numerator": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "metadata_multiplier_denominator": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "selected_change_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "selected_scheduled_ts": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "selected_fee_type": {
+                  "type": "string"
+                },
+                "selected_multiplier_numerator": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "selected_multiplier_denominator": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "series_ref",
+                "fee_type",
+                "metadata_multiplier_numerator",
+                "metadata_multiplier_denominator",
+                "selected_change_id",
+                "selected_scheduled_ts",
+                "selected_fee_type",
+                "selected_multiplier_numerator",
+                "selected_multiplier_denominator"
+              ]
+            },
+            "event": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "event_ref": {
+                  "type": "string"
+                },
+                "selected_change_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "selected_scheduled_ts": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "fee_type_override": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "fee_multiplier_override_numerator": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "fee_multiplier_override_denominator": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 1
+                },
+                "cleared": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "event_ref",
+                "selected_change_id",
+                "selected_scheduled_ts",
+                "fee_type_override",
+                "fee_multiplier_override_numerator",
+                "fee_multiplier_override_denominator",
+                "cleared"
+              ]
+            },
+            "waiver": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/fee_waiver_evidence"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "schedule",
+            "series",
+            "event",
+            "waiver"
+          ]
+        },
+        "evidence_references": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "role": {
+                "type": "string"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "required": [
+              "role",
+              "sha256"
+            ]
+          }
+        },
         "policy_fingerprint": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
@@ -505,16 +853,31 @@
         "contract_version",
         "schedule_version",
         "formula_version",
+        "fee_type",
         "participant_role",
         "multiplier_numerator",
         "multiplier_denominator",
+        "series_multiplier_numerator",
+        "series_multiplier_denominator",
         "event_override_micros",
+        "event_override_numerator",
+        "event_override_denominator",
+        "event_override_fee_type",
         "event_override_cleared",
+        "rate_numerator",
+        "rate_denominator",
+        "waiver",
+        "waiver_evidence",
         "effective_at",
         "as_of_at",
+        "scheduled_ts",
         "observed_at",
         "cutoff",
         "source_tier",
+        "schedule_sha256",
+        "settlement_fee_micros",
+        "exact_inputs",
+        "evidence_references",
         "policy_fingerprint",
         "audit"
       ]
@@ -693,6 +1056,25 @@
           "type": "integer",
           "minimum": 0
         },
+        "trade_fee_micros": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rounding_fee_micros": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rebate_micros": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fee_policy_fingerprint": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{64}$"
+        },
         "net_cash_delta_micros": {
           "type": "integer"
         },
@@ -710,6 +1092,10 @@
         "price_micros",
         "gross_cash_micros",
         "fee_micros",
+        "trade_fee_micros",
+        "rounding_fee_micros",
+        "rebate_micros",
+        "fee_policy_fingerprint",
         "net_cash_delta_micros",
         "filled_at",
         "audit"
@@ -845,6 +1231,47 @@
         "net_cash_delta_micros": {
           "type": "integer"
         },
+        "fee_components": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "trade_fee_micros": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "rounding_fee_micros": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "rebate_micros": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "net_fee_micros": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "trade_fee_micros",
+            "rounding_fee_micros",
+            "rebate_micros",
+            "net_fee_micros"
+          ]
+        },
+        "fee_policy_fingerprint": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "fee_policy_evidence_references": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/fee_evidence_reference"
+          }
+        },
         "frozen_context_id": {
           "type": [
             "string",
@@ -897,6 +1324,9 @@
         "fills",
         "gross_cash_delta_micros",
         "fee_micros",
+        "fee_components",
+        "fee_policy_fingerprint",
+        "fee_policy_evidence_references",
         "net_cash_delta_micros",
         "frozen_context_id",
         "execution_context_id",
@@ -1471,6 +1901,36 @@
               }
             ]
           },
+          "fee_policy_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "AVAILABLE",
+              "UNSUPPORTED",
+              "INVALID",
+              "UNAVAILABLE",
+              null
+            ]
+          },
+          "fee_policy_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "UNSUPPORTED_FEE_TYPE",
+              "UNSUPPORTED_PARTICIPANT_ROLE",
+              "FEE_POLICY_INVALID",
+              "FEE_POLICY_UNAVAILABLE",
+              "FEE_SCHEDULE_INVALID",
+              "FEE_SCHEDULE_HASH_DRIFT",
+              "FEE_SOURCE_INCOMPLETE",
+              "FEE_SOURCE_CONFLICT",
+              null
+            ]
+          },
           "audit": {
             "$ref": "#/$defs/audit_ref"
           }
@@ -1480,6 +1940,8 @@
           "data_cutoff",
           "book",
           "fee_policy",
+          "fee_policy_status",
+          "fee_policy_reason",
           "audit"
         ]
       }

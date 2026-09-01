@@ -129,6 +129,152 @@ def _level(value: object) -> CanonicalLevel:
     return CanonicalLevel(PriceMicros(price), ContractQuantity(units))
 
 
+def _fee_policy_from_payload(
+    value: object, evidence_value: object = ()
+) -> FeePolicySnapshot:
+    payload = _mapping(value)
+    if not payload:
+        raise RuntimeError("freeze payload contains an empty fee policy")
+
+    observed_at = _timestamp(payload.get("observed_at"), "fee policy observed_at")
+    assert observed_at is not None
+    artifact_by_sha: dict[str, RawArtifact] = {}
+    if isinstance(evidence_value, list):
+        for item in evidence_value:
+            evidence = _mapping(item)
+            evidence_artifact = _artifact(
+                evidence.get("artifact"), observed_at=observed_at
+            )
+            artifact_by_sha[evidence_artifact.sha256] = evidence_artifact
+
+    references_value = payload.get("evidence_references")
+    if not isinstance(references_value, list):
+        raise RuntimeError("freeze payload fee policy evidence references are missing")
+    references: list[Mapping[str, object]] = []
+    source_artifacts: list[RawArtifact] = []
+    for item in references_value:
+        reference = _mapping(item)
+        role = reference.get("role")
+        sha256 = reference.get("sha256")
+        if (
+            not isinstance(role, str)
+            or not role
+            or not isinstance(sha256, str)
+            or len(sha256) != 64
+        ):
+            raise RuntimeError("freeze payload fee policy evidence reference is malformed")
+        artifact = artifact_by_sha.get(sha256)
+        if artifact is None:
+            artifact = RawArtifact(
+                sha256,
+                0,
+                f"freeze://fee-policy/{sha256}",
+                observed_at=observed_at,
+            )
+        source_artifacts.append(artifact)
+        references.append({"role": role, "sha256": sha256})
+
+    audit = _mapping(payload.get("audit"))
+    raw_sha256 = audit.get("sha256")
+    raw_artifact = None
+    if raw_sha256 is not None:
+        if not isinstance(raw_sha256, str):
+            raise RuntimeError("freeze payload fee policy audit is malformed")
+        raw_artifact = artifact_by_sha.get(raw_sha256)
+        if raw_artifact is None:
+            raw_artifact = RawArtifact(
+                raw_sha256,
+                0,
+                f"freeze://fee-policy/{raw_sha256}",
+                observed_at=observed_at,
+            )
+
+    def optional_integer(name: str) -> int | None:
+        raw = payload.get(name)
+        if raw is None:
+            return None
+        if isinstance(raw, bool) or not isinstance(raw, int):
+            raise RuntimeError(f"freeze payload fee policy {name} is malformed")
+        return int(raw)
+
+    def required_integer(name: str) -> int:
+        value = optional_integer(name)
+        if value is None:
+            raise RuntimeError(f"freeze payload fee policy {name} is missing")
+        return value
+
+    def required_boolean(name: str) -> bool:
+        value = payload.get(name)
+        if not isinstance(value, bool):
+            raise RuntimeError(f"freeze payload fee policy {name} is malformed")
+        return value
+
+    raw_waiver_evidence = payload.get("waiver_evidence")
+    if raw_waiver_evidence is not None and not isinstance(raw_waiver_evidence, Mapping):
+        raise RuntimeError("freeze payload fee policy waiver evidence is malformed")
+    series_numerator = optional_integer("series_multiplier_numerator")
+    series_denominator = optional_integer("series_multiplier_denominator")
+    if series_numerator is None:
+        series_numerator = required_integer("multiplier_numerator")
+    if series_denominator is None:
+        series_denominator = required_integer("multiplier_denominator")
+
+    try:
+        snapshot = FeePolicySnapshot(
+            contract_version=str(payload.get("contract_version") or ""),
+            schedule_version=str(payload.get("schedule_version") or ""),
+            formula_version=str(payload.get("formula_version") or ""),
+            participant_role=FeeParticipantRole(
+                str(payload.get("participant_role") or "")
+            ),
+            fee_type=str(payload.get("fee_type") or ""),
+            series_multiplier_numerator=series_numerator,
+            series_multiplier_denominator=series_denominator,
+            event_override_numerator=optional_integer("event_override_numerator"),
+            event_override_denominator=optional_integer("event_override_denominator"),
+            event_override_fee_type=(
+                None
+                if payload.get("event_override_fee_type") is None
+                else str(payload.get("event_override_fee_type"))
+            ),
+            event_override_cleared=required_boolean("event_override_cleared"),
+            rate_numerator=optional_integer("rate_numerator"),
+            rate_denominator=optional_integer("rate_denominator"),
+            waiver=required_boolean("waiver"),
+            waiver_evidence=(
+                None
+                if raw_waiver_evidence is None
+                else cast(Mapping[str, object], raw_waiver_evidence)
+            ),
+            effective_at=_timestamp(payload.get("effective_at"), "fee policy effective_at"),
+            as_of_at=_timestamp(payload.get("as_of_at"), "fee policy as_of_at"),
+            scheduled_ts=_timestamp(
+                payload.get("scheduled_ts"), "fee policy scheduled_ts", required=False
+            ),
+            observed_at=observed_at,
+            cutoff=_timestamp(payload.get("cutoff"), "fee policy cutoff"),
+            source_tier=str(payload.get("source_tier") or ""),
+            schedule_sha256=(
+                None
+                if payload.get("schedule_sha256") is None
+                else str(payload.get("schedule_sha256"))
+            ),
+            settlement_fee_micros=MoneyMicros(
+                required_integer("settlement_fee_micros")
+            ),
+            raw_artifact=raw_artifact,
+            source_artifacts=tuple(source_artifacts),
+            evidence_references=tuple(references),
+            exact_inputs=_mapping(payload.get("exact_inputs")),
+        )
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("freeze payload fee policy is malformed") from exc
+    expected_fingerprint = payload.get("policy_fingerprint")
+    if snapshot.fingerprint != expected_fingerprint:
+        raise RuntimeError("freeze payload fee policy fingerprint is inconsistent")
+    return snapshot
+
+
 def frozen_context(frozen: Mapping[str, object], market_ref: str) -> MarketContext:
     contexts = frozen.get("contexts")
     if not isinstance(contexts, list):
@@ -188,6 +334,40 @@ def frozen_context(frozen: Mapping[str, object], market_ref: str) -> MarketConte
         or volume_24h_units < 0
     ):
         raise RuntimeError("freeze payload lacks valid volume_24h_units metric")
+    policy_payload = selected.get("fee_policy") or market_payload.get("fee_policy")
+    policy_record_evidence: object = ()
+    fee_policies = frozen.get("fee_policies")
+    if isinstance(fee_policies, list):
+        for item in fee_policies:
+            record = _mapping(item)
+            if record.get("market_ref") == market_ref:
+                if policy_payload is None:
+                    policy_payload = record.get("policy")
+                policy_record_evidence = record.get("evidence", ())
+                break
+    fee_policy_status_value = market_payload.get("fee_policy_status")
+    fee_policy_reason_value = market_payload.get("fee_policy_reason")
+    if fee_policy_status_value is None and policy_payload is not None:
+        fee_policy_status_value = "AVAILABLE"
+    fee_policy_status = (
+        None if fee_policy_status_value is None else str(fee_policy_status_value)
+    )
+    fee_policy_reason = (
+        None if fee_policy_reason_value is None else str(fee_policy_reason_value)
+    )
+    fee_policy = None
+    if fee_policy_status is not None:
+        if fee_policy_status == "AVAILABLE":
+            if policy_payload is None:
+                raise RuntimeError("available freeze market lacks its fee policy")
+            fee_policy = _fee_policy_from_payload(policy_payload, policy_record_evidence)
+        elif fee_policy_status not in {"UNSUPPORTED", "INVALID", "UNAVAILABLE"}:
+            raise RuntimeError("freeze payload has an unsupported fee policy status")
+        else:
+            if not fee_policy_reason:
+                raise RuntimeError("closed freeze market lacks its fee policy reason")
+            if policy_payload is not None:
+                raise RuntimeError("closed freeze market carries a fee policy")
     market = BinaryMarket(
         key=market_key,
         series_key=series_key,
@@ -222,6 +402,9 @@ def frozen_context(frozen: Mapping[str, object], market_ref: str) -> MarketConte
         volume=ContractQuantity(int(str(market_payload.get("volume_units") or 0))),
         liquidity_micros=MoneyMicros(int(str(market_payload.get("liquidity_micros") or 0))),
         volume_24h=ContractQuantity(volume_24h_units),
+        fee_policy=fee_policy,
+        fee_policy_status=fee_policy_status,
+        fee_policy_reason=fee_policy_reason,
     )
 
     book_payload = _mapping(selected.get("order_book"))
@@ -452,26 +635,62 @@ class ProductionSemanticOrderExecutor:
             )
             return result
 
-        policy = self._fee_policy(request.market_key.market_ref, cutoff)
-        result = self._broker.execute(
-            request,
-            context=fresh,
-            portfolio=portfolio,
-            fee_policy=policy,
-            frozen_context_id=request.frozen_context_id or str(claim.cycle_id),
-            execution_context_id=str(reservation.operation_id),
-            now=execution_cutoff,
-            account_value_micros=(
-                int(portfolio.account_value_micros(contexts))
-                if portfolio.positions
-                and all(
-                    any(position.market_ref == context_key for context_key in contexts)
-                    for position in portfolio.positions
-                )
-                else None
-            ),
-            valuation_contexts=contexts,
+        policy = (
+            fresh.market.fee_policy
+            if isinstance(fresh.market.fee_policy, FeePolicySnapshot)
+            else None
         )
+        # A fresh, explicitly closed policy result is authoritative.  Falling
+        # back to an older persisted snapshot here would turn a current
+        # unsupported/invalid/unavailable fee decision into an order-time
+        # authorization.
+        if (
+            not isinstance(policy, FeePolicySnapshot)
+            and fresh.market.fee_policy_status is None
+        ):
+            policy = self._fee_policy(request.market_key.market_ref, execution_cutoff)
+        if policy is None:
+            policy_error = {
+                "UNSUPPORTED": SemanticExecutionError.UNSUPPORTED_FEE_POLICY,
+                "INVALID": SemanticExecutionError.INVALID_FEE_POLICY,
+            }.get(
+                fresh.market.fee_policy_status or "",
+                SemanticExecutionError.MISSING_FEE_POLICY,
+            )
+            result = BinaryPaperBroker._fee_policy_rejected(
+                request,
+                portfolio,
+                policy_error,
+                execution_cutoff,
+                operation_id=domain_operation_id,
+                message="fresh execution fee policy is unavailable",
+            )
+            persist_context = None
+            persist_policy = None
+            persist_refreshed_at = None
+        else:
+            result = self._broker.execute(
+                request,
+                context=fresh,
+                portfolio=portfolio,
+                fee_policy=policy,
+                frozen_context_id=request.frozen_context_id or str(claim.cycle_id),
+                execution_context_id=str(reservation.operation_id),
+                now=execution_cutoff,
+                account_value_micros=(
+                    int(portfolio.account_value_micros(contexts))
+                    if portfolio.positions
+                    and all(
+                        any(position.market_ref == context_key for context_key in contexts)
+                        for position in portfolio.positions
+                    )
+                    else None
+                ),
+                valuation_contexts=contexts,
+            )
+            persist_context = fresh
+            persist_policy = policy
+            persist_refreshed_at = execution_cutoff
         result = replace(
             result,
             frozen_context_id=request.frozen_context_id or str(claim.cycle_id),
@@ -481,9 +700,9 @@ class ProductionSemanticOrderExecutor:
             result,
             claim=claim,
             reservation=reservation,
-            execution_context=fresh,
-            fee_policy=policy,
-            execution_context_refreshed_at=execution_cutoff,
+            execution_context=persist_context,
+            fee_policy=persist_policy,
+            execution_context_refreshed_at=persist_refreshed_at,
         )
         return result
 
@@ -709,6 +928,11 @@ class ProductionSemanticOrderExecutor:
                 "fps.exact_inputs, fps.waiver_evidence, fps.policy_fingerprint, "
                 "ra.sha256, ra.byte_length, ra.uri, ra.source_endpoint, ra.request_identity, "
                 "ra.source_timestamp, ra.observed_at, ra.captured_cutoff, ra.schema_version "
+                ", fps.fee_type, fps.series_multiplier_numerator, "
+                "fps.series_multiplier_denominator, fps.event_override_numerator, "
+                "fps.event_override_denominator, fps.event_override_fee_type, "
+                "fps.rate_numerator, fps.rate_denominator, fps.scheduled_ts, fps.waiver, "
+                "fps.schedule_sha256, fps.settlement_fee_micros "
                 "FROM fee_policy_snapshots fps JOIN markets m ON m.id = fps.market_id "
                 "JOIN raw_artifacts ra ON ra.id = fps.raw_artifact_id "
                 "WHERE m.market_ref = %s AND fps.observed_at <= %s AND fps.as_of_at <= %s "
@@ -716,6 +940,21 @@ class ProductionSemanticOrderExecutor:
                 (market_ref, cutoff, cutoff, cutoff),
             )
             row = cursor.fetchone()
+            evidence_rows: Sequence[Sequence[object]] = ()
+            if row is not None:
+                cursor.execute(
+                    "SELECT fpa.evidence_role, ra.sha256, ra.byte_length, ra.uri, "
+                    "ra.source_endpoint, ra.request_identity, ra.source_timestamp, "
+                    "ra.observed_at, ra.captured_cutoff, ra.schema_version "
+                    "FROM fee_policy_snapshot_artifacts fpa "
+                    "JOIN raw_artifacts ra ON ra.id = fpa.raw_artifact_id "
+                    "JOIN fee_policy_snapshots fps ON fps.id = fpa.fee_policy_snapshot_id "
+                    "JOIN markets m ON m.id = fps.market_id "
+                    "WHERE m.market_ref = %s AND fps.policy_fingerprint = %s "
+                    "ORDER BY fpa.evidence_role, ra.sha256",
+                    (market_ref, str(row[15])),
+                )
+                evidence_rows = cursor.fetchall()
         if row is None:
             return None
         exact_inputs = row[13] if isinstance(row[13], Mapping) else {}
@@ -732,22 +971,76 @@ class ProductionSemanticOrderExecutor:
             schema_version=str(row[24]),
         )
         override = row[6]
+        series_multiplier_numerator = (
+            int(str(row[26])) if row[26] is not None else int(str(row[4]))
+        )
+        series_multiplier_denominator = (
+            int(str(row[27])) if row[27] is not None else int(str(row[5]))
+        )
+        event_override_numerator = (
+            int(str(row[28])) if row[28] is not None else None
+        )
+        event_override_denominator = (
+            int(str(row[29]))
+            if row[29] is not None
+            else (1_000_000 if override is not None else None)
+        )
+        source_artifacts: list[RawArtifact] = []
+        evidence_references: list[Mapping[str, object]] = []
+        for evidence_row in evidence_rows:
+            artifact = RawArtifact(
+                str(evidence_row[1]),
+                int(str(evidence_row[2])),
+                str(evidence_row[3]),
+                source_endpoint=(
+                    None if evidence_row[4] is None else str(evidence_row[4])
+                ),
+                request_identity=(
+                    None if evidence_row[5] is None else str(evidence_row[5])
+                ),
+                source_timestamp=(
+                    None
+                    if evidence_row[6] is None
+                    else _aware(cast(datetime, evidence_row[6]))
+                ),
+                observed_at=_aware(cast(datetime, evidence_row[7])),
+                historical_cutoff=(
+                    None
+                    if evidence_row[8] is None
+                    else _aware(cast(datetime, evidence_row[8]))
+                ),
+                schema_version=str(evidence_row[9]),
+            )
+            source_artifacts.append(artifact)
+            evidence_references.append(
+                {"role": str(evidence_row[0]), "sha256": artifact.sha256}
+            )
         snapshot = FeePolicySnapshot(
             contract_version=str(row[0]),
             formula_version=str(row[1]),
             schedule_version=str(row[2]),
             participant_role=FeeParticipantRole(str(row[3]).upper()),
-            series_multiplier_numerator=int(str(row[4])),
-            series_multiplier_denominator=int(str(row[5])),
-            event_override_numerator=(None if override is None else int(str(override))),
-            event_override_denominator=(None if override is None else 1_000_000),
+            fee_type=str(row[25]) if row[25] is not None else "quadratic",
+            series_multiplier_numerator=series_multiplier_numerator,
+            series_multiplier_denominator=series_multiplier_denominator,
+            event_override_numerator=event_override_numerator,
+            event_override_denominator=event_override_denominator,
+            event_override_fee_type=(None if row[30] is None else str(row[30])),
             event_override_cleared=bool(row[7]),
+            rate_numerator=(None if row[31] is None else int(str(row[31]))),
+            rate_denominator=(None if row[32] is None else int(str(row[32]))),
+            scheduled_ts=(None if row[33] is None else _aware(cast(datetime, row[33]))),
+            waiver=bool(row[34]),
             effective_at=_aware(cast(datetime, row[8])),
             as_of_at=_aware(cast(datetime, row[9])),
             observed_at=_aware(cast(datetime, row[10])),
             cutoff=_aware(cast(datetime, row[11])),
             source_tier=str(row[12]),
+            schedule_sha256=(None if row[35] is None else str(row[35])),
+            settlement_fee_micros=MoneyMicros(int(str(row[36]))),
             raw_artifact=raw_artifact,
+            source_artifacts=tuple(source_artifacts),
+            evidence_references=tuple(evidence_references),
             waiver_evidence=cast(Mapping[str, object] | None, waiver_evidence),
             exact_inputs=cast(Mapping[str, object], exact_inputs),
         )

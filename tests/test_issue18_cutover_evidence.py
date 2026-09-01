@@ -10,6 +10,7 @@ from vtrade.cutover_evidence import (
     CutoverEvidenceError,
     validate_cutover_evidence,
 )
+from vtrade.migrate import EXPECTED_MIGRATIONS
 
 EVIDENCE_PATH = Path("docs/evidence/kalshi-cutover-2026-08-27.json")
 
@@ -18,7 +19,7 @@ def test_recorded_issue18_evidence_is_structurally_valid_and_bound_to_release() 
     evidence = validate_cutover_evidence(EVIDENCE_PATH, root=".")
 
     assert evidence.release == "vtrade-kalshi-v1"
-    assert len(evidence.migration_chain) == 9
+    assert len(evidence.migration_chain) == len(EXPECTED_MIGRATIONS)
     assert tuple(evidence.gates) == REQUIRED_GATES
     assert evidence.status == "blocked"
     assert not evidence.ready

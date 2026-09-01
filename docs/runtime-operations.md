@@ -3,7 +3,7 @@
 ## Deployment sequence
 
 The target is a fresh empty PostgreSQL database. The image contains only the active
-configuration, nine migrations, Kalshi fixture manifest, and frozen tool/prompt
+configuration, ten migrations, Kalshi fee schedule, Kalshi fixture manifest, and frozen tool/prompt
 contracts. Coolify starts one migration job, then the API, then the worker after the
 API's authenticated readiness check is healthy:
 
@@ -77,6 +77,9 @@ Order results use semantic market references, YES/NO, exact prices and contract
 units, fee data, lifecycle state, reconciliation state, and audit references. A
 pending reconciliation blocks new orders for that agent without reserving cash or
 positions. Settlement pays only FINALIZED binary evidence with `settlement_ts`.
+An unavailable or contradictory global fee schedule aborts the freeze and opens
+the critical `fee_policy_global_failure` system alert; a market-local unsupported
+or invalid policy remains visible with its explicit closed reason.
 
 ## External gates
 
@@ -92,7 +95,7 @@ uv run --extra dev python scripts/verify_kalshi_cutover_evidence.py --require-re
 
 The probe is read-only and credential-free. It captures public catalogue pages with
 complete opaque-cursor traversal, event/series metadata, historical cutoff, an
-ordinary binary order book, market candlesticks, bounded concurrency observations, raw bytes, redacted
+ordinary binary order book, market candlesticks, fee-schedule verification, bounded concurrency observations, raw bytes, redacted
 headers, and SHA-256 evidence. Geographic or payload failures block cutover and
 must not be replaced by a proxy, VPN, old capture, or local mock.
 
@@ -102,7 +105,7 @@ Record redacted command output and immutable references in
 `docs/evidence/kalshi-cutover-YYYY-MM-DD.json`. The record is blocked until it
 contains the six gates (`offline`, `postgresql`, `built_image`, `private_resources`,
 `provider_egress`, and `french_host`), database/object-storage snapshots, the image
-digest, the active artifact and nine-migration hashes, the paper-only reachability
+digest, the active artifact, fee-schedule, and ten-migration hashes, the paper-only reachability
 check, and the infrastructure-only rollback record. Never place credentials,
 connection strings, private URLs, or raw authorization headers in the record.
 

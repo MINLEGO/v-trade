@@ -1,12 +1,13 @@
 # Active owner decisions
 
 These decisions are frozen for the current `vtrade-kalshi-v1` revision. This revision
-adds the discovery-metric contract and refreshes the active artifact hashes; a later
+adds the discovery-metric and auditable fee-policy contracts and refreshes the active
+artifact hashes; a later
 incompatible contract change requires a new experiment version.
 
 - Venue: public unauthenticated Kalshi REST for read-only ingestion.
 - Instrument scope: ordinary binary markets with exactly YES and NO outcomes.
-- Deployment: a fresh empty PostgreSQL database using exactly nine migrations; no
+- Deployment: a fresh empty PostgreSQL database using exactly ten migrations; no
   legacy upgrade, conversion, dual write, or dual venue.
 - Execution: paper-only IOC/FOK using real market data, exact microdollars, exact
   hundredths-of-a-contract quantities, and `best-level-haircut-v1`.
@@ -22,6 +23,9 @@ incompatible contract change requires a new experiment version.
   agent-scoped idempotency, frozen decision context, refreshed order-time execution
   context, and a ten-second refresh deadline,
   lifecycle state, reconciliation state, and audit references.
+- Fees: the official quadratic schedule, exact series/event rational inputs, waiver
+  expiry, participant role, and source evidence are cutoff-bound; unsupported or
+  unverifiable fee data makes a market non-tradeable and blocks execution.
 - Accounting: fill-only, atomic, append-only balanced ledger postings with exact fee
   snapshots and entry-fee allocation. The concentration limit is exactly 15% of
   account value per market.

@@ -535,6 +535,11 @@ class Series:
     observed_at: datetime
     audit: RawArtifact
     tags: tuple[str, ...] = ()
+    fee_type: str | None = None
+    fee_multiplier: Decimal | str | int | None = None
+    fee_multiplier_numerator: int | None = None
+    fee_multiplier_denominator: int | None = None
+    source_updated_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if not self.title:
@@ -542,6 +547,52 @@ class Series:
         _require_aware(self.observed_at, "series observed_at")
         if any(not isinstance(tag, str) or not tag.strip() for tag in self.tags):
             raise ValueError("series tags must contain non-empty strings")
+        if self.fee_type is not None and (
+            not isinstance(self.fee_type, str) or not self.fee_type.strip()
+        ):
+            raise ValueError("series fee_type must be a non-empty string")
+        if self.fee_multiplier is not None:
+            if isinstance(self.fee_multiplier, (bool, float)):
+                raise ValueError("series fee_multiplier must be exact")
+            try:
+                multiplier = Decimal(self.fee_multiplier)
+            except (InvalidOperation, TypeError, ValueError) as exc:
+                raise ValueError("series fee_multiplier must be decimal-compatible") from exc
+            if not multiplier.is_finite() or multiplier < 0:
+                raise ValueError("series fee_multiplier must be finite and non-negative")
+            numerator, denominator = multiplier.as_integer_ratio()
+            if (
+                self.fee_multiplier_numerator is not None
+                and self.fee_multiplier_numerator != numerator
+            ) or (
+                self.fee_multiplier_denominator is not None
+                and self.fee_multiplier_denominator != denominator
+            ):
+                raise ValueError("series fee multiplier representations conflict")
+            object.__setattr__(self, "fee_multiplier", multiplier)
+            object.__setattr__(self, "fee_multiplier_numerator", int(numerator))
+            object.__setattr__(self, "fee_multiplier_denominator", int(denominator))
+        if self.fee_multiplier_numerator is not None or self.fee_multiplier_denominator is not None:
+            if (
+                isinstance(self.fee_multiplier_numerator, bool)
+                or not isinstance(self.fee_multiplier_numerator, int)
+                or self.fee_multiplier_numerator < 0
+                or isinstance(self.fee_multiplier_denominator, bool)
+                or not isinstance(self.fee_multiplier_denominator, int)
+                or self.fee_multiplier_denominator <= 0
+            ):
+                raise ValueError("series fee multiplier rational is invalid")
+            if self.fee_multiplier is None:
+                object.__setattr__(
+                    self,
+                    "fee_multiplier",
+                    Decimal(self.fee_multiplier_numerator)
+                    / Decimal(self.fee_multiplier_denominator),
+                )
+        if self.source_updated_at is not None:
+            _require_aware(self.source_updated_at, "series source_updated_at")
+            if self.source_updated_at > self.observed_at:
+                raise ValueError("series source_updated_at cannot postdate observation")
 
     @property
     def series_ref(self) -> str:
@@ -746,6 +797,10 @@ class BinaryMarket:
     volume: ContractQuantity = ContractQuantity(0)
     liquidity_micros: MoneyMicros = MoneyMicros(0)
     volume_24h: ContractQuantity = ContractQuantity(0)
+    fee_waiver_expiration_time: datetime | None = None
+    fee_policy: object | None = None
+    fee_policy_status: str | None = None
+    fee_policy_reason: str | None = None
 
     def __post_init__(self) -> None:
         if not self.question or not self.resolution_rules:
@@ -776,8 +831,25 @@ class BinaryMarket:
             raise ValueError("market open_time must be timezone-aware")
         if self.source_updated_at is not None:
             _require_aware(self.source_updated_at, "market source_updated_at")
+            if self.source_updated_at > observed:
+                raise ValueError("market source_updated_at cannot postdate observation")
+        if self.fee_waiver_expiration_time is not None:
+            _require_aware(self.fee_waiver_expiration_time, "market fee waiver expiration")
         if self.volume < 0 or self.liquidity_micros < 0 or self.volume_24h < 0:
             raise ValueError("market volume and liquidity cannot be negative")
+        if self.fee_policy_status is not None and not self.fee_policy_status.strip():
+            raise ValueError("market fee policy status cannot be empty")
+        if self.fee_policy_reason is not None and not self.fee_policy_reason.strip():
+            raise ValueError("market fee policy reason cannot be empty")
+        if self.fee_policy_status is not None:
+            valid_fee_statuses = {"AVAILABLE", "UNSUPPORTED", "INVALID", "UNAVAILABLE"}
+            if self.fee_policy_status not in valid_fee_statuses:
+                raise ValueError("binary market has an unsupported fee policy status")
+            if self.fee_policy_status == "AVAILABLE":
+                if self.fee_policy is None or self.fee_policy_reason is not None:
+                    raise ValueError("available market fee policy state is incomplete")
+            elif self.fee_policy is not None or not self.fee_policy_reason:
+                raise ValueError("closed market fee policy state is incomplete")
 
     @property
     def market_ref(self) -> str:
@@ -793,7 +865,10 @@ class BinaryMarket:
 
     @property
     def tradeable(self) -> bool:
-        return self.eligible and self.status is MarketStatus.ACTIVE
+        active = self.eligible and self.status is MarketStatus.ACTIVE
+        if self.fee_policy_status is None:
+            return active
+        return active and self.fee_policy_status == "AVAILABLE" and self.fee_policy is not None
 
     @property
     def yes(self) -> BinaryOutcome:

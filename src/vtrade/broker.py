@@ -21,6 +21,7 @@ from vtrade.domain.execution import (
     ReconciliationState,
     SemanticExecutionError,
     SettlementRecord,
+    SubmissionState,
     TimeInForce,
     operation_uuid,
 )
@@ -83,7 +84,23 @@ class ExactFeeCalculator:
         )
         denominator = multiplier_den * rate_den * 100 * 1_000_000
         raw_micros_ceil = (numerator + denominator - 1) // denominator if numerator else 0
-        trade_fee = 0 if policy.waiver else ((raw_micros_ceil + 99) // 100) * 100
+        # Kalshi's ``round up`` is applied to fee plus position cost.  The
+        # resulting total is rounded up to one cent, so rounding the fee in
+        # isolation would understate small-contract fees.
+        total_before_rounding_ceil = (
+            gross * denominator + numerator + denominator - 1
+        ) // denominator
+        trade_fee = (
+            0
+            if policy.waiver or numerator == 0
+            else (
+                (total_before_rounding_ceil + _CENT_MICROS - 1) // _CENT_MICROS
+            )
+            * _CENT_MICROS
+            - gross
+        )
+        if not policy.waiver and trade_fee < raw_micros_ceil:
+            raise ValueError("fee rounding understated the official fee")
         revenue = gross if ContractSide(action) is ContractSide.SELL else -gross
         balance_change = revenue - trade_fee
         posted_balance_change = (balance_change // _CENT_MICROS) * _CENT_MICROS
@@ -259,12 +276,41 @@ class BinaryPaperBroker:
             context.order_book.snapshot_id
         )
         if fee_policy is None:
-            result = self._rejected(
+            result = self._fee_policy_rejected(
                 request,
                 portfolio,
                 SemanticExecutionError.MISSING_FEE_POLICY,
                 current_time,
                 operation_id=operation_id,
+            )
+            self._results[key] = result
+            return result
+        if fee_policy.fee_type != "quadratic" or FeeParticipantRole(
+            fee_policy.participant_role
+        ) is not FeeParticipantRole.TAKER:
+            result = self._fee_policy_rejected(
+                request,
+                portfolio,
+                SemanticExecutionError.UNSUPPORTED_FEE_POLICY,
+                current_time,
+                operation_id=operation_id,
+                message="active IOC/FOK execution requires a quadratic TAKER fee policy",
+            )
+            self._results[key] = result
+            return result
+        if (
+            fee_policy.as_of is None
+            or fee_policy.cutoff is None
+            or fee_policy.as_of > current_time
+            or fee_policy.cutoff > current_time
+        ):
+            result = self._fee_policy_rejected(
+                request,
+                portfolio,
+                SemanticExecutionError.INVALID_FEE_POLICY,
+                current_time,
+                operation_id=operation_id,
+                message="fee policy is missing a valid order-time cutoff",
             )
             self._results[key] = result
             return result
@@ -423,6 +469,10 @@ class BinaryPaperBroker:
                 frozen_context_id=resolved_frozen_context_id,
                 execution_context_id=resolved_execution_context_id,
                 estimated_fee_micros=calculation.net_fee_micros,
+                trade_fee_micros=calculation.trade_fee_micros,
+                rounding_fee_micros=calculation.rounding_fee_micros,
+                rebate_micros=calculation.rebate_micros,
+                fee_policy_fingerprint=calculation.policy_fingerprint,
             )
             for index, (item, calculation) in enumerate(zip(planned, calculations, strict=True))
         )
@@ -490,6 +540,8 @@ class BinaryPaperBroker:
             liquidity_audit=audit,
             fee_calculations=calculations,
             risk_check=concentration if request.action is ContractSide.BUY else None,
+            fee_policy_fingerprint=fee_policy.fingerprint,
+            fee_policy_evidence_references=fee_policy.evidence_references,
         )
         self._results[key] = result
         return result
@@ -659,6 +711,34 @@ class BinaryPaperBroker:
             items = list(best or tuple(items[:index] + items[index + 1 :]))
         final = tuple(item for item in items if item.contract_units)
         return final, calculate(final) if final else ()
+
+    @staticmethod
+    def _fee_policy_rejected(
+        request: OrderRequest,
+        portfolio: ContractPortfolio,
+        code: SemanticExecutionError,
+        now: datetime,
+        *,
+        operation_id: str,
+        message: str | None = None,
+    ) -> OrderResult:
+        result = BinaryPaperBroker._rejected(
+            request,
+            portfolio,
+            code,
+            now,
+            operation_id=operation_id,
+            message=message,
+        )
+        return replace(
+            result,
+            submission_state=SubmissionState.NOT_SUBMITTED,
+            reconciliation_evidence={
+                "submission_state": SubmissionState.NOT_SUBMITTED.value,
+                "venue_submission_occurred": False,
+                "fee_policy_failure": code.value,
+            },
+        )
 
     @staticmethod
     def _rejected(

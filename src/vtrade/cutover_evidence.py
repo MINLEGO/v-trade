@@ -173,6 +173,21 @@ def active_release_fingerprint(root: str | Path = ".") -> dict[str, object]:
         if actual != expected:
             raise CutoverEvidenceError(f"active artifact {name} does not match its configured hash")
         artifacts[f"{name}_sha256"] = actual
+    fees = config.get("fees")
+    if not isinstance(fees, Mapping):
+        raise CutoverEvidenceError("active fee schedule definition is missing")
+    schedule_definition = fees.get("schedule_artifact")
+    if not isinstance(schedule_definition, Mapping) or not isinstance(
+        schedule_definition.get("path"), str
+    ):
+        raise CutoverEvidenceError("active fee schedule definition is malformed")
+    schedule_expected = schedule_definition.get("sha256")
+    if not isinstance(schedule_expected, str) or not _SHA256.fullmatch(schedule_expected):
+        raise CutoverEvidenceError("active fee schedule has no valid configured hash")
+    schedule_actual = _sha256_file(base / str(schedule_definition["path"]))
+    if schedule_actual != schedule_expected:
+        raise CutoverEvidenceError("active fee schedule does not match its configured hash")
+    artifacts["fee_schedule_sha256"] = schedule_actual
     try:
         validate_fixture_manifest(base / ACTIVE_FIXTURE_MANIFEST, require_ready=True)
         sources = load_migration_sources(base / "migrations")
@@ -238,10 +253,11 @@ def _parse_evidence(path: Path, raw: Mapping[str, object]) -> CutoverEvidence:
         "prompt_sha256",
         "tool_schemas_sha256",
         "compatibility_sha256",
+        "fee_schedule_sha256",
         "fixture_manifest_sha256",
     )
     if set(artifact_values) != set(expected_artifacts):
-        raise CutoverEvidenceError("evidence must contain the five active artifact hashes")
+        raise CutoverEvidenceError("evidence must contain the six active artifact hashes")
     artifacts = {
         name: _digest(artifact_values.get(name), f"artifacts.{name}")
         for name in expected_artifacts

@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
@@ -88,6 +88,8 @@ class SemanticExecutionError(StrEnum):
     INSUFFICIENT_CONTRACTS = "INSUFFICIENT_CONTRACTS"
     CONCENTRATION_LIMIT = "CONCENTRATION_LIMIT"
     MISSING_FEE_POLICY = "MISSING_FEE_POLICY"
+    UNSUPPORTED_FEE_POLICY = "UNSUPPORTED_FEE_POLICY"
+    INVALID_FEE_POLICY = "INVALID_FEE_POLICY"
     RECONCILIATION_REQUIRED = "RECONCILIATION_REQUIRED"
     CONFLICTING_EVIDENCE = "CONFLICTING_EVIDENCE"
     FINALIZATION_REQUIRED = "FINALIZATION_REQUIRED"
@@ -287,6 +289,13 @@ class FeePolicySnapshot:
     source_tier: str = "official"
     raw_artifact: RawArtifact | None = None
     exact_inputs: Mapping[str, object] = field(default_factory=dict)
+    fee_type: str = "quadratic"
+    event_override_fee_type: str | None = None
+    fee_type_override: str | None = None
+    schedule_sha256: str | None = None
+    settlement_fee_micros: MoneyMicros = field(default_factory=lambda: MoneyMicros(0))
+    source_artifacts: tuple[RawArtifact, ...] = ()
+    evidence_references: tuple[Mapping[str, object], ...] = ()
 
     def __post_init__(self) -> None:
         if self.contract_version != FEE_SETTLEMENT_CONTRACT_VERSION:
@@ -298,25 +307,52 @@ class FeePolicySnapshot:
         _nonempty(self.schedule_version, "schedule_version")
         if self.formula_version != FEE_FORMULA_VERSION:
             raise ValueError("unsupported fee formula version")
+        if not isinstance(self.fee_type, str) or not self.fee_type.strip():
+            raise ValueError("fee_type must be a non-empty string")
+        selected_override_type = self.event_override_fee_type
+        if self.fee_type_override is not None:
+            if (
+                selected_override_type is not None
+                and selected_override_type != self.fee_type_override
+            ):
+                raise ValueError("event fee type override aliases conflict")
+            selected_override_type = self.fee_type_override
+        if selected_override_type is not None:
+            _nonempty(selected_override_type, "event_override_fee_type")
+        object.__setattr__(self, "event_override_fee_type", selected_override_type)
+        object.__setattr__(self, "fee_type_override", selected_override_type)
         for name, value in (
             ("series_multiplier_numerator", self.series_multiplier_numerator),
             ("series_multiplier_denominator", self.series_multiplier_denominator),
         ):
-            if _integer(value, name) <= 0:
-                raise ValueError(f"{name} must be positive")
+            if _integer(value, name) < 0:
+                raise ValueError(f"{name} must be non-negative")
+        if _integer(self.series_multiplier_denominator, "series_multiplier_denominator") <= 0:
+            raise ValueError("series_multiplier_denominator must be positive")
         if self.series_multiplier is not None:
-            series_num, series_den = _rational(self.series_multiplier, "series_multiplier")
+            series_num, series_den = _rational(
+                self.series_multiplier, "series_multiplier", allow_zero=True
+            )
             object.__setattr__(self, "series_multiplier_numerator", series_num)
             object.__setattr__(self, "series_multiplier_denominator", series_den)
         if self.event_override is not None:
             override_num, override_den = _rational(
                 self.event_override, "event_override", allow_zero=True
             )
+            if (
+                self.event_override_numerator is not None
+                and self.event_override_numerator != override_num
+            ) or (
+                self.event_override_denominator is not None
+                and self.event_override_denominator != override_den
+            ):
+                raise ValueError("event override representations conflict")
             object.__setattr__(self, "event_override_numerator", override_num)
             object.__setattr__(self, "event_override_denominator", override_den)
         if self.event_override_cleared and (
             self.event_override_numerator is not None
             or self.event_override_denominator is not None
+            or self.event_override_fee_type is not None
         ):
             raise ValueError("a cleared event override cannot carry multiplier values")
         if (self.event_override_numerator is None) != (
@@ -334,6 +370,18 @@ class FeePolicySnapshot:
             )
         ):
             raise ValueError("event override multiplier must be positive")
+        if (
+            not self.event_override_cleared
+            and self.event_override_fee_type is not None
+            and self.event_override_numerator is None
+        ):
+            raise ValueError("event fee override type requires a multiplier")
+        if (self.rate_numerator is None) != (self.rate_denominator is None):
+            raise ValueError("fee rate numerator and denominator are both required")
+        if self.rate_numerator is not None and (
+            self.rate_numerator <= 0 or self.rate_denominator is None or self.rate_denominator <= 0
+        ):
+            raise ValueError("fee rate must be positive")
         if self.as_of is None and self.as_of_at is not None:
             object.__setattr__(self, "as_of", self.as_of_at)
         if self.effective_from is None and self.effective_at is not None:
@@ -346,6 +394,24 @@ class FeePolicySnapshot:
                 object.__setattr__(self, name, _aware(value, name))
         if self.as_of is not None and self.cutoff is not None and self.as_of > self.cutoff:
             raise ValueError("fee policy as_of cannot be after cutoff")
+        if (
+            self.effective_from is not None
+            and self.as_of is not None
+            and self.effective_from > self.as_of
+        ):
+            raise ValueError("fee policy effective timestamp cannot be after as_of")
+        if (
+            self.scheduled_ts is not None
+            and self.cutoff is not None
+            and self.scheduled_ts > self.cutoff
+        ):
+            raise ValueError("fee policy scheduled timestamp cannot be after cutoff")
+        if (
+            self.scheduled_ts is not None
+            and self.as_of is not None
+            and self.scheduled_ts > self.as_of
+        ):
+            raise ValueError("fee policy scheduled timestamp cannot be after as_of")
         if (
             self.source_observed_at is not None
             and self.cutoff is not None
@@ -362,8 +428,51 @@ class FeePolicySnapshot:
                 "waiver_evidence",
                 MappingProxyType(dict(self.waiver_evidence)),
             )
-            if self.waiver_evidence.get("waived") is True:
+            reported_waiver = self.waiver_evidence.get("waived")
+            if reported_waiver is not None and not isinstance(reported_waiver, bool):
+                raise ValueError("waiver evidence waived flag must be boolean")
+            if reported_waiver is False and self.waiver:
+                raise ValueError("waiver flag conflicts with waiver evidence")
+            if reported_waiver is True:
                 object.__setattr__(self, "waiver", True)
+        if (
+            isinstance(self.settlement_fee_micros, bool)
+            or not isinstance(self.settlement_fee_micros, int)
+            or self.settlement_fee_micros < 0
+        ):
+            raise ValueError("settlement fee cannot be negative")
+        if not isinstance(self.source_artifacts, tuple):
+            object.__setattr__(self, "source_artifacts", tuple(self.source_artifacts))
+        if any(not isinstance(artifact, RawArtifact) for artifact in self.source_artifacts):
+            raise ValueError("fee source artifacts must be RawArtifact values")
+        object.__setattr__(
+            self,
+            "source_artifacts",
+            tuple(sorted(self.source_artifacts, key=lambda artifact: artifact.sha256)),
+        )
+        if not isinstance(self.evidence_references, tuple):
+            object.__setattr__(self, "evidence_references", tuple(self.evidence_references))
+        if any(not isinstance(reference, Mapping) for reference in self.evidence_references):
+            raise ValueError("fee evidence references must be objects")
+        object.__setattr__(
+            self,
+            "evidence_references",
+            tuple(
+                sorted(
+                    self.evidence_references,
+                    key=lambda reference: (
+                        str(reference.get("role", "")),
+                        str(reference.get("sha256", "")),
+                    ),
+                )
+            ),
+        )
+        if self.schedule_sha256 is not None and (
+            len(self.schedule_sha256) != 64
+            or self.schedule_sha256.lower() != self.schedule_sha256
+            or any(character not in "0123456789abcdef" for character in self.schedule_sha256)
+        ):
+            raise ValueError("schedule_sha256 must be a lowercase SHA-256")
         object.__setattr__(self, "exact_inputs", MappingProxyType(dict(self.exact_inputs)))
 
     @property
@@ -392,13 +501,16 @@ class FeePolicySnapshot:
                 "schedule_version": self.schedule_version,
                 "formula_version": self.formula_version,
                 "participant_role": FeeParticipantRole(self.participant_role).value,
+                "fee_type": self.fee_type,
                 "series_multiplier": [
                     self.series_multiplier_numerator,
                     self.series_multiplier_denominator,
                 ],
                 "event_override": [self.event_override_numerator, self.event_override_denominator],
+                "event_override_fee_type": self.event_override_fee_type,
                 "event_override_cleared": self.event_override_cleared,
                 "rate": [self.rate_numerator, self.rate_denominator],
+                "resolved_rate": list(self.rate),
                 "waiver": self.waiver,
                 "waiver_evidence": (
                     dict(self.waiver_evidence) if self.waiver_evidence is not None else None
@@ -412,9 +524,71 @@ class FeePolicySnapshot:
                 "cutoff": self.cutoff.isoformat() if self.cutoff else None,
                 "source_tier": self.source_tier,
                 "raw_sha256": self.raw_artifact.sha256 if self.raw_artifact else None,
+                "schedule_sha256": self.schedule_sha256,
+                "settlement_fee_micros": int(self.settlement_fee_micros),
+                "source_artifacts": [artifact.sha256 for artifact in self.source_artifacts],
+                "evidence_references": [dict(reference) for reference in self.evidence_references],
                 "exact_inputs": dict(self.exact_inputs),
             }
         )
+
+    def to_payload(self) -> dict[str, object]:
+        """Return the closed semantic representation used by tools and audit logs."""
+
+        resolved_num, resolved_den = self.resolved_multiplier
+        return {
+            "contract_version": self.contract_version,
+            "schedule_version": self.schedule_version,
+            "formula_version": self.formula_version,
+            "fee_type": self.fee_type,
+            "participant_role": FeeParticipantRole(self.participant_role).value,
+            "multiplier_numerator": resolved_num,
+            "multiplier_denominator": resolved_den,
+            "series_multiplier_numerator": self.series_multiplier_numerator,
+            "series_multiplier_denominator": self.series_multiplier_denominator,
+            "event_override_numerator": self.event_override_numerator,
+            "event_override_denominator": self.event_override_denominator,
+            "event_override_micros": (
+                self.event_override_numerator
+                if self.event_override_denominator == 1_000_000
+                else None
+            ),
+            "event_override_fee_type": self.event_override_fee_type,
+            "event_override_cleared": self.event_override_cleared,
+            "rate_numerator": self.rate_numerator,
+            "rate_denominator": self.rate_denominator,
+            "waiver": self.waiver,
+            "waiver_evidence": (
+                dict(self.waiver_evidence) if self.waiver_evidence is not None else None
+            ),
+            "effective_at": self.effective_from.isoformat() if self.effective_from else None,
+            "as_of_at": self.as_of.isoformat() if self.as_of else None,
+            "scheduled_ts": self.scheduled_ts.isoformat() if self.scheduled_ts else None,
+            "observed_at": (
+                self.source_observed_at.isoformat() if self.source_observed_at else None
+            ),
+            "cutoff": self.cutoff.isoformat() if self.cutoff else None,
+            "source_tier": self.source_tier,
+            "schedule_sha256": self.schedule_sha256,
+            "settlement_fee_micros": int(self.settlement_fee_micros),
+            "policy_fingerprint": self.fingerprint,
+            "exact_inputs": dict(self.exact_inputs),
+            "evidence_references": [dict(reference) for reference in self.evidence_references],
+            "audit": {
+                "artifact_id": None,
+                "sha256": self.raw_artifact.sha256 if self.raw_artifact is not None else None,
+                "observed_at": (
+                    self.raw_artifact.observed_at.isoformat()
+                    if self.raw_artifact is not None and self.raw_artifact.observed_at is not None
+                    else None
+                ),
+            },
+        }
+
+    def with_cutoff(self, cutoff: datetime) -> FeePolicySnapshot:
+        """Rebind a fetched policy to the completed freeze cutoff."""
+
+        return replace(self, cutoff=cutoff)
 
 
 @dataclass(frozen=True, slots=True)
@@ -452,6 +626,10 @@ class EconomicFill:
     authoritative: bool = True
     estimated_fee_micros: MoneyMicros | None = None
     fingerprint: str | None = None
+    trade_fee_micros: MoneyMicros = field(default_factory=lambda: MoneyMicros(0))
+    rounding_fee_micros: MoneyMicros = field(default_factory=lambda: MoneyMicros(0))
+    rebate_micros: MoneyMicros = field(default_factory=lambda: MoneyMicros(0))
+    fee_policy_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         _nonempty(self.fill_id, "fill_id")
@@ -463,6 +641,19 @@ class EconomicFill:
             raise ValueError("fill money values cannot be negative")
         if self.estimated_fee_micros is not None and self.estimated_fee_micros < 0:
             raise ValueError("estimated fill fee cannot be negative")
+        for name in ("trade_fee_micros", "rounding_fee_micros", "rebate_micros"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{name} cannot be negative")
+        if self.fee_policy_fingerprint is not None and (
+            len(self.fee_policy_fingerprint) != 64
+            or self.fee_policy_fingerprint.lower() != self.fee_policy_fingerprint
+            or any(
+                character not in "0123456789abcdef"
+                for character in self.fee_policy_fingerprint
+            )
+        ):
+            raise ValueError("fee_policy_fingerprint must be a lowercase SHA-256")
         object.__setattr__(self, "filled_at", _aware(self.filled_at, "filled_at"))
         if self.fingerprint is None:
             object.__setattr__(
@@ -480,6 +671,10 @@ class EconomicFill:
                             if self.estimated_fee_micros is not None
                             else None
                         ),
+                        "trade_fee_micros": int(self.trade_fee_micros),
+                        "rounding_fee_micros": int(self.rounding_fee_micros),
+                        "rebate_micros": int(self.rebate_micros),
+                        "fee_policy_fingerprint": self.fee_policy_fingerprint,
                         "net_cash_delta_micros": self.net_cash_delta_micros,
                         "filled_at": self.filled_at.isoformat(),
                     }
@@ -527,6 +722,10 @@ class OrderResult:
     liquidity_audit: Any = field(default=None, compare=False, repr=False)
     fee_calculations: tuple[FeeCalculation, ...] = field(default=(), compare=False, repr=False)
     risk_check: Any = field(default=None, compare=False, repr=False)
+    fee_policy_fingerprint: str | None = field(default=None, compare=False)
+    fee_policy_evidence_references: tuple[Mapping[str, object], ...] = field(
+        default=(), compare=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "state", OrderState(self.state))
@@ -544,6 +743,26 @@ class OrderResult:
             "reconciliation_evidence",
             MappingProxyType(dict(self.reconciliation_evidence)),
         )
+        if self.fee_policy_fingerprint is not None and (
+            len(self.fee_policy_fingerprint) != 64
+            or self.fee_policy_fingerprint.lower() != self.fee_policy_fingerprint
+            or any(
+                character not in "0123456789abcdef"
+                for character in self.fee_policy_fingerprint
+            )
+        ):
+            raise ValueError("fee_policy_fingerprint must be a lowercase SHA-256")
+        if not isinstance(self.fee_policy_evidence_references, tuple):
+            object.__setattr__(
+                self,
+                "fee_policy_evidence_references",
+                tuple(self.fee_policy_evidence_references),
+            )
+        if any(
+            not isinstance(reference, Mapping)
+            for reference in self.fee_policy_evidence_references
+        ):
+            raise ValueError("fee policy evidence references must be objects")
         _nonempty(self.operation_id, "operation_id")
         for name in ("requested_units", "filled_units", "remaining_units", "cancelled_units"):
             value = _integer(getattr(self, name), name)

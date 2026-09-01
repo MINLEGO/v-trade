@@ -16,7 +16,9 @@ from vtrade.domain.execution import (
     OrderAmountType,
     OrderRequest,
     OrderState,
+    ReconciliationState,
     SemanticExecutionError,
+    SubmissionState,
     TimeInForce,
 )
 from vtrade.domain.types import (
@@ -181,8 +183,45 @@ def test_fee_formula_and_role_are_exact() -> None:
         action="BUY",
     )
     assert taker.trade_fee_micros == 1_750_000
-    assert maker.trade_fee_micros == 437_500
+    assert maker.trade_fee_micros == 440_000
     assert taker.net_fee_micros >= 0
+    one_contract = calculator.calculate(
+        contract_units=100,
+        price_micros=10_000,
+        policy=fees(),
+        action="BUY",
+    )
+    assert one_contract.trade_fee_micros == 10_000
+    zero_multiplier = calculator.calculate(
+        contract_units=100,
+        price_micros=10_000,
+        policy=FeePolicySnapshot(
+            series_multiplier_numerator=0,
+            series_multiplier_denominator=1,
+            as_of=NOW,
+            cutoff=NOW,
+        ),
+        action="BUY",
+    )
+    assert zero_multiplier.trade_fee_micros == 0
+
+
+def test_missing_fee_policy_is_terminal_and_not_submitted() -> None:
+    portfolio = ContractPortfolio("agent-14", 100_000_000)
+    result = BinaryPaperBroker().execute(
+        request(amount=100, key="missing-fee-policy-14"),
+        context=context(),
+        portfolio=portfolio,
+        fee_policy=None,
+        now=NOW,
+    )
+
+    assert result.state is OrderState.REJECTED
+    assert result.reconciliation_state is ReconciliationState.NOT_REQUIRED
+    assert result.error_code is SemanticExecutionError.MISSING_FEE_POLICY
+    assert result.submission_state is SubmissionState.NOT_SUBMITTED
+    assert result.reconciliation_evidence["venue_submission_occurred"] is False
+    assert result.portfolio_after == portfolio
 
 
 def test_pending_blocks_new_orders_and_finalized_settlement_is_idempotent() -> None:

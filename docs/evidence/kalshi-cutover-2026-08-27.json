@@ -50,13 +50,19 @@
       "position": 9,
       "name": "0009_order_time_execution_context.sql",
       "sha256": "8e81b36fc874eb7dd51b7d8a9e7fb7774616d51ea6650646c76e977629b5f948"
+    },
+    {
+      "position": 10,
+      "name": "0010_auditable_fee_policy.sql",
+      "sha256": "b8b378c272434d88e079915d1e434248dd60dd4de51655388efded45b051f3f7"
     }
   ],
   "artifacts": {
-    "experiment_config_sha256": "d1439e9aeac403c7b6c56cb2f3059ebaa4303fb3711bd04521517e874da6f836",
-    "prompt_sha256": "b3b11dd16e66e2d64227b6d85b7c2ac9e676bf879bd204f6af2f2c247129d482",
-    "tool_schemas_sha256": "bd04b2203dd35527fefc05dd099b16766cf5c8a60b40f17a505a8a0e35d19762",
-    "compatibility_sha256": "18acb6557ace98fe2af9aa1c7c038a0217cf4189acbc80c723fa17a2b9b9d8c4",
+    "experiment_config_sha256": "69a341b7ee8b0ad6a71fa32034618133d8a4041e3ce33b4601363c7b304191d1",
+    "prompt_sha256": "d2d27fd06674f0e8522cd6e4d3ae31fac30817c106c7b7365d0ea4037b2c3543",
+    "tool_schemas_sha256": "5cc7118ea0bf3b67f277b0f27c35d0ae25008196892841b8b03c9b86d46240fb",
+    "compatibility_sha256": "ee5553dd10be6263edbcf3acab1a2fde05ffaa9d4210a33304a35de6206c8237",
+    "fee_schedule_sha256": "1fd0e6826a9515f50841449a0a6f7c8f33bcb5cfb646495f323e64cd9bed8583",
     "fixture_manifest_sha256": "6f87bfb388f4497d41c077f1c5d71e3f449985b1af26b461028c5cba73ef54c0"
   },
   "image": {
@@ -78,7 +84,7 @@
       "status": "passed",
       "observed_at": "2026-08-26T22:56:28Z",
       "command": "uv run --extra dev python -m vtrade.release_verification",
-      "evidence": "Active paths, nine migrations, frozen artifacts, ready fixture, and offline sweep passed locally; external readiness remains separately blocked."
+      "evidence": "Active paths, ten migrations, frozen artifacts including the fee schedule, ready fixture, and offline sweep passed locally; external readiness remains separately blocked."
     },
     "postgresql": {
       "status": "not_recorded",

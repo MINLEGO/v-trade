@@ -488,9 +488,12 @@ class ProductionToolRegistry:
         market_ref = _required_string(arguments, "market_ref")
         snapshot_rows = self._query(
             "SELECT obs.id, obs.observed_at, obs.source_timestamp, obs.cutoff, "
-            "obs.raw_artifact_id, ra.sha256, ra.observed_at "
+            "obs.raw_artifact_id, ra.sha256, ra.observed_at, state.fee_policy_status, "
+            "state.fee_policy_reason "
             "FROM order_book_snapshots obs JOIN markets m ON m.id = obs.market_id "
             "JOIN market_freezes mf ON mf.id = obs.freeze_id "
+            "JOIN frozen_market_states state ON state.freeze_id = mf.id "
+            "AND state.market_id = obs.market_id "
             "JOIN raw_artifacts ra ON ra.id = obs.raw_artifact_id "
             "WHERE m.market_ref = %s AND m.venue = 'kalshi' AND mf.agent_cycle_id = %s "
             "AND obs.cutoff <= %s ORDER BY obs.cutoff DESC, obs.id DESC LIMIT 1",
@@ -532,6 +535,18 @@ class ProductionToolRegistry:
                     {"price_micros": _as_int(row[3]), "contract_units": _as_int(row[4])}
                 )
         fee_policy = self._fee_policy(market_ref)
+        fee_policy_status = (
+            str(snapshot[7]) if len(snapshot) > 7 and snapshot[7] is not None else None
+        )
+        fee_policy_reason = (
+            str(snapshot[8]) if len(snapshot) > 8 and snapshot[8] is not None else None
+        )
+        if fee_policy_status is None:
+            fee_policy_status = "AVAILABLE" if fee_policy is not None else "UNAVAILABLE"
+        if fee_policy_status == "AVAILABLE" and fee_policy is None:
+            raise ToolContextUnavailable("published freeze has an incomplete fee policy")
+        if fee_policy_status != "AVAILABLE" and fee_policy_reason is None:
+            fee_policy_reason = "FEE_POLICY_UNAVAILABLE"
         audit = {
             "artifact_id": str(snapshot[4]),
             "sha256": str(snapshot[5]),
@@ -551,6 +566,8 @@ class ProductionToolRegistry:
                 "audit": audit,
             },
             "fee_policy": fee_policy,
+            "fee_policy_status": fee_policy_status,
+            "fee_policy_reason": fee_policy_reason,
             "audit": audit,
         }
 
@@ -560,16 +577,41 @@ class ProductionToolRegistry:
             "fps.participant_role, fps.multiplier_numerator, fps.multiplier_denominator, "
             "fps.event_override_micros, fps.event_override_cleared, fps.effective_at, "
             "fps.as_of_at, fps.observed_at, fps.cutoff, fps.source_tier, "
-            "fps.policy_fingerprint, fps.raw_artifact_id, ra.sha256, ra.observed_at "
+            "fps.policy_fingerprint, fps.raw_artifact_id, ra.sha256, ra.observed_at, "
+            "fps.fee_type, fps.series_multiplier_numerator, fps.series_multiplier_denominator, "
+            "fps.event_override_numerator, fps.event_override_denominator, "
+            "fps.event_override_fee_type, fps.rate_numerator, fps.rate_denominator, "
+            "fps.scheduled_ts, fps.waiver, fps.schedule_sha256, fps.settlement_fee_micros, "
+            "fps.exact_inputs, fps.waiver_evidence "
             "FROM fee_policy_snapshots fps JOIN markets m ON m.id = fps.market_id "
+            "JOIN freeze_market_fee_policies fmp ON fmp.fee_policy_snapshot_id = fps.id "
+            "JOIN market_freezes mf ON mf.id = fmp.freeze_id "
             "JOIN raw_artifacts ra ON ra.id = fps.raw_artifact_id "
-            "WHERE m.market_ref = %s AND fps.observed_at <= %s AND fps.as_of_at <= %s "
+            "WHERE m.market_ref = %s AND mf.agent_cycle_id = %s "
+            "AND fmp.status = 'AVAILABLE' AND fps.observed_at <= %s "
+            "AND fps.as_of_at <= %s AND fps.cutoff <= %s "
             "ORDER BY fps.observed_at DESC, fps.id DESC LIMIT 1",
-            (market_ref, self._context.cutoff, self._context.cutoff),
+            (
+                market_ref,
+                self._context.claim.cycle_id,
+                self._context.cutoff,
+                self._context.cutoff,
+                self._context.cutoff,
+            ),
         )
         if not rows:
             return None
         row = rows[0]
+        evidence_rows = self._query(
+            "SELECT fpa.evidence_role, ra.sha256 "
+            "FROM fee_policy_snapshot_artifacts fpa "
+            "JOIN fee_policy_snapshots fps ON fps.id = fpa.fee_policy_snapshot_id "
+            "JOIN markets m ON m.id = fps.market_id "
+            "JOIN raw_artifacts ra ON ra.id = fpa.raw_artifact_id "
+            "WHERE m.market_ref = %s AND fps.policy_fingerprint = %s "
+            "ORDER BY fpa.evidence_role, ra.sha256",
+            (market_ref, str(row[13])),
+        )
         return {
             "contract_version": "vtrade-binary-fee-settlement-v1",
             "schedule_version": str(row[2]),
@@ -585,6 +627,38 @@ class ProductionToolRegistry:
             "cutoff": _datetime(row[11], "fee cutoff").isoformat(),
             "source_tier": str(row[12]),
             "policy_fingerprint": str(row[13]),
+            "fee_type": str(row[17]) if row[17] is not None else "quadratic",
+            "series_multiplier_numerator": _as_int(row[18])
+            if row[18] is not None
+            else _as_int(row[4]),
+            "series_multiplier_denominator": _as_int(row[19])
+            if row[19] is not None
+            else _as_int(row[5]),
+            "event_override_numerator": (
+                _as_int(row[20]) if row[20] is not None else None
+            ),
+            "event_override_denominator": (
+                _as_int(row[21]) if row[21] is not None else None
+            ),
+            "event_override_fee_type": (
+                str(row[22]) if row[22] is not None else None
+            ),
+            "rate_numerator": _as_int(row[23]) if row[23] is not None else None,
+            "rate_denominator": _as_int(row[24]) if row[24] is not None else None,
+            "scheduled_ts": _iso(row[25]),
+            "waiver": bool(row[26]),
+            "schedule_sha256": str(row[27]) if row[27] is not None else None,
+            "settlement_fee_micros": _as_int(row[28]),
+            "exact_inputs": (
+                dict(row[29]) if isinstance(row[29], Mapping) else {}
+            ),
+            "waiver_evidence": (
+                dict(row[30]) if isinstance(row[30], Mapping) else None
+            ),
+            "evidence_references": [
+                {"role": str(item[0]), "sha256": str(item[1])}
+                for item in evidence_rows
+            ],
             "audit": {
                 "artifact_id": str(row[14]),
                 "sha256": str(row[15]),
@@ -978,7 +1052,7 @@ def _contains_ref(value: object) -> bool:
 _MARKET_SELECT = (
     "SELECT m.market_ref, s.series_ref, e.event_ref, e.title, e.category, m.question, "
     "m.open_time, m.close_time, m.volume_units, m.liquidity_micros, m.lifecycle_status, "
-    "m.eligible, m.tradeable, m.observed_at, m.source_updated_at, m.raw_artifact_id, "
+    "state.eligible, state.tradeable, m.observed_at, m.source_updated_at, m.raw_artifact_id, "
     "ra.sha256, ra.observed_at, COALESCE((SELECT jsonb_agg(jsonb_build_object("
     "'outcome', o.outcome_side, 'label', o.label, 'eligible', o.eligible, "
     "'indicative_price_micros', CASE WHEN o.outcome_side = 'YES' "
@@ -987,7 +1061,7 @@ _MARKET_SELECT = (
     "m.resolution_rules, metric.volume_24h_units, metric.volatility_micros, "
     "metric.volume_trend, metric.volume_trend_delta, metric.competitive_score, "
     "metric.indicative_yes_price_micros, metric.indicative_no_price_micros, "
-    "series_metadata.tags "
+    "series_metadata.tags, state.fee_policy_status, state.fee_policy_reason "
     "FROM markets m JOIN series s ON s.id = m.series_id JOIN events e ON e.id = m.event_id "
     "JOIN market_freezes mf ON mf.agent_cycle_id = %s "
     "AND mf.publication_status = 'published' "
@@ -1008,6 +1082,8 @@ _MARKET_COMPETITIVE_SCORE_INDEX = 24
 _MARKET_INDICATIVE_YES_INDEX = 25
 _MARKET_INDICATIVE_NO_INDEX = 26
 _MARKET_TAGS_INDEX = 27
+_MARKET_FEE_POLICY_STATUS_INDEX = 28
+_MARKET_FEE_POLICY_REASON_INDEX = 29
 
 
 def _market_card(row: Sequence[object]) -> JsonObject:
@@ -1056,6 +1132,18 @@ def _market_card(row: Sequence[object]) -> JsonObject:
         "status": str(row[10]).upper(),
         "eligible": bool(row[11]),
         "tradeable": bool(row[12]),
+        "fee_policy_status": (
+            str(row[_MARKET_FEE_POLICY_STATUS_INDEX])
+            if len(row) > _MARKET_FEE_POLICY_STATUS_INDEX
+            and row[_MARKET_FEE_POLICY_STATUS_INDEX] is not None
+            else None
+        ),
+        "fee_policy_reason": (
+            str(row[_MARKET_FEE_POLICY_REASON_INDEX])
+            if len(row) > _MARKET_FEE_POLICY_REASON_INDEX
+            and row[_MARKET_FEE_POLICY_REASON_INDEX] is not None
+            else None
+        ),
         "volatility_micros": _row_volatility(row),
         "volume_trend": _row_trend(row),
         "volume_trend_delta": _row_trend_delta(row),
@@ -1157,6 +1245,20 @@ def _execution_output(
     result: OrderResult, *, audit: Mapping[str, object] | None = None
 ) -> JsonObject:
     request = result.request
+    trade_fee_micros = sum(int(fill.trade_fee_micros) for fill in result.fills)
+    rounding_fee_micros = sum(int(fill.rounding_fee_micros) for fill in result.fills)
+    rebate_micros = sum(int(fill.rebate_micros) for fill in result.fills)
+    fee_policy_fingerprint = result.fee_policy_fingerprint or next(
+        (
+            fill.fee_policy_fingerprint
+            for fill in result.fills
+            if fill.fee_policy_fingerprint is not None
+        ),
+        None,
+    )
+    fee_evidence_references = [
+        dict(reference) for reference in result.fee_policy_evidence_references
+    ]
     fills = [
         {
             "fill_id": fill.fill_id,
@@ -1164,6 +1266,10 @@ def _execution_output(
             "price_micros": int(fill.price_micros),
             "gross_cash_micros": int(fill.gross_cash_micros),
             "fee_micros": int(fill.fee_micros),
+            "trade_fee_micros": int(fill.trade_fee_micros),
+            "rounding_fee_micros": int(fill.rounding_fee_micros),
+            "rebate_micros": int(fill.rebate_micros),
+            "fee_policy_fingerprint": fill.fee_policy_fingerprint,
             "net_cash_delta_micros": int(fill.net_cash_delta_micros),
             "filled_at": fill.filled_at.isoformat(),
             "audit": dict(audit)
@@ -1201,6 +1307,14 @@ def _execution_output(
         "fills": fills,
         "gross_cash_delta_micros": int(result.gross_cash_delta_micros),
         "fee_micros": int(result.fee_micros),
+        "fee_components": {
+            "trade_fee_micros": trade_fee_micros,
+            "rounding_fee_micros": rounding_fee_micros,
+            "rebate_micros": rebate_micros,
+            "net_fee_micros": int(result.fee_micros),
+        },
+        "fee_policy_fingerprint": fee_policy_fingerprint,
+        "fee_policy_evidence_references": fee_evidence_references,
         "net_cash_delta_micros": int(result.net_cash_delta_micros),
         "frozen_context_id": result.frozen_context_id,
         "execution_context_id": result.execution_context_id,

@@ -17,12 +17,14 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from functools import partial
+from pathlib import Path
 from typing import Any, cast
 
 import httpx
 
 from vtrade.artifacts import ArtifactRef
 from vtrade.deadline import DeadlineExceeded, deadline_remaining, run_with_deadline
+from vtrade.domain.execution import FeePolicySnapshot
 from vtrade.domain.ports import ArtifactReference, ArtifactStore, FreshExecutionContextError
 from vtrade.domain.types import (
     BinaryEvent,
@@ -49,6 +51,19 @@ from vtrade.domain.types import (
     to_contract_quantity,
     to_money_micros,
     to_price_micros,
+)
+from vtrade.fee_policy import (
+    DEFAULT_FEE_SCHEDULE_PATH,
+    FeeChange,
+    FeeEvidence,
+    FeeEvidenceRole,
+    FeePolicyError,
+    FeePolicyResolution,
+    FeePolicyResolver,
+    FeePolicySourceConflictError,
+    FeeSchedule,
+    FeeScheduleDriftError,
+    load_fee_schedule,
 )
 from vtrade.market_metrics import MarketCandlestick, MarketCandlestickBatch
 
@@ -251,11 +266,18 @@ def _parse_timestamp(value: object, field: str) -> datetime | None:
         raise KalshiPayloadError(
             f"{field} must be an integer epoch or timezone-aware ISO timestamp"
         )
-    if isinstance(value, int) or (isinstance(value, str) and value.isdigit()):
+    if isinstance(value, Decimal):
+        if not value.is_finite() or value < 0:
+            raise KalshiPayloadError(f"{field} is not a valid epoch")
+        numeric = value
+    elif isinstance(value, int) or (isinstance(value, str) and value.isdigit()):
         try:
             numeric = Decimal(str(value))
         except InvalidOperation as exc:
             raise KalshiPayloadError(f"{field} is not a valid epoch") from exc
+    else:
+        numeric = None
+    if numeric is not None:
         if numeric > Decimal("100000000000"):
             numeric /= Decimal(1000)
         try:
@@ -475,6 +497,9 @@ class KalshiPublicRestAdapter:
         catalogue_sync_deadline_seconds: float = 300.0,
         freeze_deadline_seconds: float = 600.0,
         fresh_execution_deadline_seconds: float = 10.0,
+        fee_schedule: FeeSchedule | None = None,
+        fee_schedule_path: str | Path = DEFAULT_FEE_SCHEDULE_PATH,
+        require_fee_policy: bool = False,
     ) -> None:
         if maximum_parallel_requests < 1:
             raise ValueError("maximum_parallel_requests must be positive")
@@ -512,9 +537,19 @@ class KalshiPublicRestAdapter:
         self._catalogue_sync_deadline_seconds = catalogue_sync_deadline_seconds
         self._freeze_deadline_seconds = freeze_deadline_seconds
         self._fresh_execution_deadline_seconds = fresh_execution_deadline_seconds
+        self._fee_schedule = fee_schedule
+        self._fee_schedule_path = Path(fee_schedule_path)
+        self._require_fee_policy = require_fee_policy
         self._market_cache: dict[MarketKey, BinaryMarket] = {}
         self._event_metadata_cache: dict[str, tuple[Mapping[str, Any], _ArchivedResponse]] = {}
         self._series_metadata_cache: dict[str, tuple[Mapping[str, Any], _ArchivedResponse]] = {}
+        self._series_fee_changes_cache: dict[
+            str, tuple[tuple[FeeChange, ...], _ArchivedResponse]
+        ] = {}
+        self._event_fee_changes_cache: dict[
+            str, tuple[tuple[FeeChange, ...], tuple[_ArchivedResponse, ...]]
+        ] = {}
+        self._loaded_fee_schedule: FeeSchedule | None = None
         self._resolution_history: dict[MarketKey, ResolutionObservation] = {}
         self._last_historical_cutoff: HistoricalCutoff | None = None
 
@@ -598,7 +633,7 @@ class KalshiPublicRestAdapter:
                 deadline.check()
             content = bytes(response.content)
             try:
-                payload = json.loads(content.decode("utf-8"))
+                payload = json.loads(content.decode("utf-8"), parse_float=Decimal)
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                 raise KalshiPayloadError(f"{path} did not return valid UTF-8 JSON") from exc
             if deadline is not None:
@@ -649,6 +684,68 @@ class KalshiPublicRestAdapter:
                 request_identity,
             )
         raise AssertionError("retry loop must return or raise")
+
+    def _request_document(
+        self,
+        url: str,
+        *,
+        deadline: _Deadline | None = None,
+    ) -> tuple[bytes, RawArtifact]:
+        """Fetch one public document and archive its exact bytes."""
+
+        request = self._client.build_request(
+            "GET",
+            url,
+            headers={
+                "Accept": "application/pdf",
+                "User-Agent": "vtrade-kalshi-fee-policy/1",
+            },
+        )
+        request_identity = self._request_identity(request)
+        for attempt in range(1, self._retry_policy.maximum_attempts + 1):
+            if deadline is not None:
+                deadline.check()
+            try:
+                if deadline is None or deadline.monotonic_deadline is None:
+                    response = self._client.send(request)
+                else:
+                    response = run_with_deadline(
+                        partial(self._client.send, request),
+                        deadline=deadline.monotonic_deadline,
+                        label=f"Kalshi document {request_identity}",
+                    )
+            except DeadlineExceeded as exc:
+                raise KalshiDeadlineExceeded(str(exc)) from exc
+            except httpx.HTTPError as exc:
+                if attempt == self._retry_policy.maximum_attempts:
+                    raise KalshiTransportError(f"request failed for {url}") from exc
+                self._backoff(attempt, deadline)
+                continue
+            if response.status_code in RETRYABLE_STATUS_CODES:
+                if attempt == self._retry_policy.maximum_attempts:
+                    raise KalshiHTTPError(response.status_code, request.url.path)
+                self._backoff(attempt, deadline)
+                continue
+            if response.status_code < 200 or response.status_code >= 300:
+                raise KalshiHTTPError(response.status_code, request.url.path)
+            observed_at = _aware(self._clock(), "fee schedule observation")
+            content = bytes(response.content)
+            break
+        else:  # pragma: no cover - the loop always returns or raises
+            raise KalshiTransportError(f"request failed for {url}")
+        try:
+            reference = self._artifact_store.put(content)
+        except Exception as exc:
+            raise KalshiTransportError("fee schedule artifact could not be archived") from exc
+        artifact = _artifact_from_reference(
+            reference,
+            endpoint=self._source_endpoint(request),
+            request_identity=request_identity,
+            observed_at=observed_at,
+        )
+        if deadline is not None:
+            deadline.check()
+        return content, artifact
 
     def _backoff(self, retry_number: int, deadline: _Deadline | None) -> None:
         delay = self._retry_policy.delay(retry_number)
@@ -707,6 +804,9 @@ class KalshiPublicRestAdapter:
         self._market_cache.clear()
         self._event_metadata_cache.clear()
         self._series_metadata_cache.clear()
+        self._series_fee_changes_cache.clear()
+        self._event_fee_changes_cache.clear()
+        self._loaded_fee_schedule = None
         historical_cutoff = self.get_historical_cutoff(deadline=scan_deadline)
         requested_cutoff = (
             _aware(request.cutoff, "catalogue cutoff") if request.cutoff is not None else None
@@ -815,11 +915,6 @@ class KalshiPublicRestAdapter:
                 cursor = next_cursor
 
             scan_deadline.check()
-            data_cutoff = requested_cutoff or _aware(
-                self._clock(), "catalogue completion time"
-            )
-            for page in page_evidence:
-                _check_cutoff(page.observed_at, data_cutoff, "catalogue page observation")
             discovery_keys = self._discovery_keys(
                 request,
                 retained,
@@ -838,6 +933,35 @@ class KalshiPublicRestAdapter:
                 deadline=outer_deadline,
             )
             outer_deadline.check()
+            data_cutoff = requested_cutoff or _aware(
+                self._clock(), "catalogue completion time"
+            )
+            for page in pages:
+                _check_cutoff(page.observed_at, data_cutoff, "catalogue page observation")
+                for artifact in page.metadata_audits:
+                    _check_cutoff(
+                        artifact.observed_at,
+                        data_cutoff,
+                        "catalogue metadata observation",
+                    )
+                for series in page.series:
+                    _check_cutoff(
+                        series.observed_at,
+                        data_cutoff,
+                        "series metadata observation",
+                    )
+                for event in page.events:
+                    _check_cutoff(
+                        event.observed_at,
+                        data_cutoff,
+                        "event metadata observation",
+                    )
+                for market in page.markets:
+                    _check_cutoff(
+                        market.observed_at,
+                        data_cutoff,
+                        "market metadata observation",
+                    )
             return CatalogueScanResult(
                 tuple(pages),
                 discovery_keys,
@@ -1080,9 +1204,13 @@ class KalshiPublicRestAdapter:
         return market, event, series, metadata_audits
 
     def _fetch_event_metadata(
-        self, event_ref: str, *, deadline: _Deadline | None = None
+        self,
+        event_ref: str,
+        *,
+        deadline: _Deadline | None = None,
+        use_cache: bool = True,
     ) -> tuple[Mapping[str, Any], _ArchivedResponse]:
-        cached = self._event_metadata_cache.get(event_ref)
+        cached = self._event_metadata_cache.get(event_ref) if use_cache else None
         if cached is not None:
             return cached
         archived = self._request(
@@ -1094,13 +1222,18 @@ class KalshiPublicRestAdapter:
         if returned != event_ref:
             raise KalshiPayloadError("event response reference does not match request")
         cached = (payload, archived)
-        self._event_metadata_cache[event_ref] = cached
+        if use_cache:
+            self._event_metadata_cache[event_ref] = cached
         return cached
 
     def _fetch_series_metadata(
-        self, series_ref: str, *, deadline: _Deadline | None = None
+        self,
+        series_ref: str,
+        *,
+        deadline: _Deadline | None = None,
+        use_cache: bool = True,
     ) -> tuple[Mapping[str, Any], _ArchivedResponse]:
-        cached = self._series_metadata_cache.get(series_ref)
+        cached = self._series_metadata_cache.get(series_ref) if use_cache else None
         if cached is not None:
             return cached
         archived = self._request(
@@ -1114,8 +1247,334 @@ class KalshiPublicRestAdapter:
         if returned != series_ref:
             raise KalshiPayloadError("series response reference does not match request")
         cached = (payload, archived)
-        self._series_metadata_cache[series_ref] = cached
+        if use_cache:
+            self._series_metadata_cache[series_ref] = cached
         return cached
+
+    def _fee_schedule_for_operation(
+        self, deadline: _Deadline, *, force_refresh: bool = False
+    ) -> FeeSchedule:
+        if self._loaded_fee_schedule is not None and not force_refresh:
+            return self._loaded_fee_schedule
+        if self._fee_schedule is not None:
+            if not self._fee_schedule.verified:
+                raise FeePolicyError("official fee schedule has no exact PDF hash")
+            self._loaded_fee_schedule = self._fee_schedule
+            return self._fee_schedule
+        try:
+            schedule = load_fee_schedule(self._fee_schedule_path)
+        except FeePolicyError:
+            raise
+        content, artifact = self._request_document(schedule.official_url, deadline=deadline)
+        try:
+            schedule.verify_pdf(content)
+        except FeeScheduleDriftError:
+            raise
+        self._loaded_fee_schedule = replace(
+            schedule,
+            artifact=artifact,
+            captured_at=artifact.observed_at,
+        )
+        return self._loaded_fee_schedule
+
+    def _fetch_series_fee_changes(
+        self,
+        series_ref: str,
+        *,
+        cutoff: datetime,
+        deadline: _Deadline,
+        use_cache: bool = True,
+    ) -> tuple[tuple[FeeChange, ...], _ArchivedResponse]:
+        cached = self._series_fee_changes_cache.get(series_ref) if use_cache else None
+        if cached is not None:
+            if cached[1].observed_at > cutoff:
+                raise KalshiLookAheadError("series fee changes were observed after the cutoff")
+            return cached
+        archived = self._request(
+            "/series/fee_changes",
+            {
+                "series_ticker": series_ref,
+                "show_historical": "true",
+            },
+            deadline=deadline,
+        )
+        if archived.observed_at > cutoff:
+            raise KalshiLookAheadError("series fee changes were observed after the cutoff")
+        root = _root(archived.payload)
+        values = root.get("series_fee_change_arr", root.get("fee_changes"))
+        if not isinstance(values, list):
+            raise KalshiPayloadError("series fee changes response lacks a fee change array")
+        changes: list[FeeChange] = []
+        for index, value in enumerate(values):
+            item = _root(value, f"series_fee_change_arr[{index}]")
+            returned = _first_string(
+                item,
+                ("series_ticker", "series_ref"),
+                label="series fee change series ticker",
+            )
+            if returned != series_ref:
+                continue
+            try:
+                changes.append(
+                    FeeChange.from_mapping(
+                        item,
+                        scope_ref=series_ref,
+                        event_override=False,
+                        index=index,
+                        artifact=archived.artifact,
+                    )
+                )
+            except (TypeError, ValueError) as exc:
+                raise KalshiPayloadError("series fee change is malformed") from exc
+        result = (tuple(changes), archived)
+        if use_cache:
+            self._series_fee_changes_cache[series_ref] = result
+        return result
+
+    def _fetch_event_fee_changes(
+        self,
+        event_ref: str,
+        *,
+        cutoff: datetime,
+        deadline: _Deadline,
+        use_cache: bool = True,
+    ) -> tuple[tuple[FeeChange, ...], tuple[_ArchivedResponse, ...]]:
+        cached = self._event_fee_changes_cache.get(event_ref) if use_cache else None
+        if cached is not None:
+            if any(item.observed_at > cutoff for item in cached[1]):
+                raise KalshiLookAheadError("event fee changes were observed after the cutoff")
+            return cached
+        cursor: str | None = None
+        seen_cursors: set[str] = set()
+        seen_pages: set[str] = set()
+        changes: list[FeeChange] = []
+        pages: list[_ArchivedResponse] = []
+        try:
+            while True:
+                deadline.check()
+                params: dict[str, str] = {"event_ticker": event_ref, "limit": "200"}
+                if cursor is not None:
+                    params["cursor"] = cursor
+                archived = self._request("/events/fee_changes", params, deadline=deadline)
+                if archived.observed_at > cutoff:
+                    raise KalshiLookAheadError(
+                        "event fee changes were observed after the cutoff"
+                    )
+                if archived.artifact.sha256 in seen_pages:
+                    raise KalshiCursorError("event fee changes returned a duplicate page")
+                seen_pages.add(archived.artifact.sha256)
+                pages.append(archived)
+                root = _root(archived.payload)
+                values = root.get("event_fee_change_arr")
+                if values is None:
+                    values = root.get("event_fee_changes", root.get("fee_changes"))
+                if not isinstance(values, list):
+                    raise KalshiPayloadError(
+                        "event fee changes response lacks a fee change array"
+                    )
+                for index, value in enumerate(values):
+                    item = _root(value, f"event_fee_change_arr[{index}]")
+                    returned = _first_string(
+                        item,
+                        ("event_ticker", "event_ref"),
+                        label="event fee change event ticker",
+                    )
+                    if returned != event_ref:
+                        continue
+                    try:
+                        changes.append(
+                            FeeChange.from_mapping(
+                                item,
+                                scope_ref=event_ref,
+                                event_override=True,
+                                index=index,
+                                artifact=archived.artifact,
+                            )
+                        )
+                    except (TypeError, ValueError) as exc:
+                        raise KalshiPayloadError("event fee change is malformed") from exc
+                next_cursor = self._next_cursor(root)
+                if next_cursor is None:
+                    break
+                if next_cursor in seen_cursors or next_cursor == cursor:
+                    raise KalshiCursorError("event fee changes cursor repeated")
+                seen_cursors.add(next_cursor)
+                cursor = next_cursor
+        finally:
+            seen_cursors.clear()
+            seen_pages.clear()
+        result = (tuple(changes), tuple(pages))
+        if use_cache:
+            self._event_fee_changes_cache[event_ref] = result
+        return result
+
+    def resolve_fee_policy(
+        self,
+        market_key: MarketKey,
+        *,
+        as_of: datetime,
+        cutoff: datetime,
+        deadline: float | None = None,
+    ) -> FeePolicyResolution:
+        """Resolve one market policy from all official, cutoff-bound sources."""
+
+        requested_as_of = _aware(as_of, "fee policy as_of")
+        requested_cutoff = _aware(cutoff, "fee policy cutoff")
+        operation_deadline = self._deadline(deadline)
+        historical_cutoff = self._last_historical_cutoff or self.get_historical_cutoff(
+            deadline=operation_deadline
+        )
+        market = self._fetch_market(
+            market_key,
+            cutoff=requested_cutoff,
+            historical_cutoff=historical_cutoff,
+            deadline=operation_deadline,
+        )
+        return self.resolve_fee_policy_for_market(
+            market,
+            as_of=requested_as_of,
+            cutoff=requested_cutoff,
+            deadline=operation_deadline.monotonic_deadline,
+        )
+
+    def get_fee_policy(
+        self, market_key: MarketKey, *, as_of: datetime, cutoff: datetime
+    ) -> FeePolicySnapshot | None:
+        """Implement :class:`FeePolicyPort` without exposing unavailable as zero."""
+
+        resolution = self.resolve_fee_policy(market_key, as_of=as_of, cutoff=cutoff)
+        return resolution.policy
+
+    def resolve_fee_policy_for_market(
+        self,
+        market: BinaryMarket,
+        *,
+        as_of: datetime,
+        cutoff: datetime,
+        deadline: float | None = None,
+        series_metadata: Mapping[str, Any] | None = None,
+        series_metadata_artifact: RawArtifact | None = None,
+        bypass_cache: bool = False,
+    ) -> FeePolicyResolution:
+        requested_as_of = _aware(as_of, "fee policy as_of")
+        requested_cutoff = _aware(cutoff, "fee policy cutoff")
+        operation_deadline = self._deadline(deadline)
+        schedule = self._fee_schedule_for_operation(
+            operation_deadline, force_refresh=bypass_cache
+        )
+        metadata, metadata_archived = (
+            (series_metadata, None)
+            if series_metadata is not None
+            else self._fetch_series_metadata(
+                market.series_ref,
+                deadline=operation_deadline,
+                use_cache=not bypass_cache,
+            )
+        )
+        series_changes, series_changes_archived = self._fetch_series_fee_changes(
+            market.series_ref,
+            cutoff=requested_cutoff,
+            deadline=operation_deadline,
+            use_cache=not bypass_cache,
+        )
+        event_changes, event_pages = self._fetch_event_fee_changes(
+            market.event_ref,
+            cutoff=requested_cutoff,
+            deadline=operation_deadline,
+            use_cache=not bypass_cache,
+        )
+        evidence: list[FeeEvidence] = []
+        if schedule.artifact is not None:
+            evidence.append(FeeEvidence(FeeEvidenceRole.OFFICIAL_SCHEDULE, schedule.artifact))
+        if metadata_archived is not None:
+            evidence.append(
+                FeeEvidence(FeeEvidenceRole.SERIES_METADATA, metadata_archived.artifact)
+            )
+        elif series_metadata_artifact is not None:
+            evidence.append(
+                FeeEvidence(FeeEvidenceRole.SERIES_METADATA, series_metadata_artifact)
+            )
+        else:
+            evidence.append(FeeEvidence(FeeEvidenceRole.SERIES_METADATA, market.audit))
+        evidence.append(
+            FeeEvidence(FeeEvidenceRole.SERIES_FEE_CHANGE, series_changes_archived.artifact)
+        )
+        evidence.extend(
+            FeeEvidence(FeeEvidenceRole.EVENT_FEE_CHANGE, page.artifact)
+            for page in event_pages
+        )
+        evidence.append(FeeEvidence(FeeEvidenceRole.MARKET_WAIVER, market.audit))
+        resolver = FeePolicyResolver(schedule)
+        resolution = resolver.resolve(
+            market_ref=market.market_ref,
+            series_ref=market.series_ref,
+            event_ref=market.event_ref,
+            series_fee_type=(
+                metadata.get("fee_type") if isinstance(metadata, Mapping) else None
+            ),
+            series_multiplier=(
+                metadata.get("fee_multiplier") if isinstance(metadata, Mapping) else None
+            ),
+            series_multiplier_numerator=(
+                metadata.get("fee_multiplier_numerator")
+                if isinstance(metadata, Mapping)
+                else None
+            ),
+            series_multiplier_denominator=(
+                metadata.get("fee_multiplier_denominator")
+                if isinstance(metadata, Mapping)
+                else None
+            ),
+            series_changes=series_changes,
+            event_changes=event_changes,
+            waiver_expiration_time=market.fee_waiver_expiration_time,
+            as_of=requested_as_of,
+            cutoff=requested_cutoff,
+            evidence=tuple(evidence),
+        )
+        operation_deadline.check()
+        return resolution
+
+    def resolve_fee_policies(
+        self,
+        contexts: Sequence[MarketContext],
+        *,
+        as_of: datetime,
+        cutoff: datetime,
+        deadline: float | None = None,
+    ) -> tuple[FeePolicyResolution, ...]:
+        """Resolve a deduplicated fee read for every retained market context."""
+
+        unique: dict[MarketKey, MarketContext] = {}
+        for context in contexts:
+            if context.market.key in unique:
+                raise ValueError("fee policy request contains duplicate market identities")
+            unique[context.market.key] = context
+        if not unique:
+            return ()
+        operation_deadline = self._deadline(deadline)
+        results: list[FeePolicyResolution] = []
+        series_metadata: dict[str, tuple[Mapping[str, Any], RawArtifact]] = {}
+        for context in unique.values():
+            if context.market.series_ref not in series_metadata:
+                metadata, archived = self._fetch_series_metadata(
+                    context.market.series_ref,
+                    deadline=operation_deadline,
+                )
+                series_metadata[context.market.series_ref] = (metadata, archived.artifact)
+            metadata, metadata_artifact = series_metadata[context.market.series_ref]
+            results.append(
+                self.resolve_fee_policy_for_market(
+                    context.market,
+                    as_of=as_of,
+                    cutoff=cutoff,
+                    deadline=operation_deadline.monotonic_deadline,
+                    series_metadata=metadata,
+                    series_metadata_artifact=metadata_artifact,
+                )
+            )
+        operation_deadline.check()
+        return tuple(results)
 
     def get_market_candlesticks(
         self,
@@ -1331,6 +1790,11 @@ class KalshiPublicRestAdapter:
         latest_expiration = _optional_timestamp(
             payload, ("latest_expiration_time",), "latest_expiration_time"
         )
+        fee_waiver_expiration = _optional_timestamp(
+            payload,
+            ("fee_waiver_expiration_time",),
+            "fee_waiver_expiration_time",
+        )
         source_updated = _optional_timestamp(
             payload, ("updated_time", "updated_ts", "updated_at"), "updated_time"
         )
@@ -1402,6 +1866,7 @@ class KalshiPublicRestAdapter:
             ContractQuantity(int(volume)),
             MoneyMicros(int(liquidity)),
             ContractQuantity(int(volume_24h)),
+            fee_waiver_expiration,
         )
 
     @staticmethod
@@ -1448,6 +1913,35 @@ class KalshiPublicRestAdapter:
             label="series rules",
             required=False,
         )
+        fee_type = source.get("fee_type")
+        if fee_type is not None and (
+            not isinstance(fee_type, str) or not fee_type.strip()
+        ):
+            raise KalshiPayloadError("series fee_type must be a non-empty string")
+        fee_multiplier = source.get("fee_multiplier")
+        if fee_multiplier is not None and isinstance(fee_multiplier, (bool, float)):
+            raise KalshiPayloadError("series fee_multiplier must be an exact number")
+        fee_multiplier_numerator = source.get("fee_multiplier_numerator")
+        fee_multiplier_denominator = source.get("fee_multiplier_denominator")
+        if (
+            (fee_multiplier_numerator is not None or fee_multiplier_denominator is not None)
+            and (
+                isinstance(fee_multiplier_numerator, bool)
+                or not isinstance(fee_multiplier_numerator, int)
+                or isinstance(fee_multiplier_denominator, bool)
+                or not isinstance(fee_multiplier_denominator, int)
+            )
+        ):
+            raise KalshiPayloadError("series fee multiplier rational is malformed")
+        source_updated_at = _optional_timestamp(
+            source,
+            ("last_updated_ts", "updated_time", "updated_ts", "updated_at"),
+            "series last_updated_ts",
+        )
+        if source_updated_at is not None and source_updated_at > archived.observed_at:
+            raise KalshiLookAheadError("series last_updated_ts is newer than local observation")
+        if source_updated_at is not None:
+            _check_cutoff(source_updated_at, None, "series last_updated_ts")
         return Series(
             market.series_key,
             title or market.series_key.series_ref,
@@ -1455,6 +1949,11 @@ class KalshiPublicRestAdapter:
             metadata_archived.observed_at if metadata_archived else archived.observed_at,
             metadata_archived.artifact if metadata_archived else archived.artifact,
             _series_tags(source),
+            fee_type,
+            fee_multiplier,
+            fee_multiplier_numerator,
+            fee_multiplier_denominator,
+            source_updated_at=source_updated_at,
         )
 
     def _market_path(self, market: BinaryMarket, historical_cutoff: HistoricalCutoff) -> str:
@@ -1500,7 +1999,11 @@ class KalshiPublicRestAdapter:
         if series_ref is None:
             event_ref = _first_string(payload, ("event_ticker", "event_ref"), label="event ticker")
             assert event_ref is not None
-            event_metadata, _ = self._fetch_event_metadata(event_ref, deadline=deadline)
+            event_metadata, _ = self._fetch_event_metadata(
+                event_ref,
+                deadline=deadline,
+                use_cache=use_cache,
+            )
             series_ref = _first_string(
                 event_metadata, ("series_ticker", "series_ref"), label="series ticker"
             )
@@ -1637,6 +2140,56 @@ class KalshiPublicRestAdapter:
                 )
             except ValueError as exc:
                 raise KalshiPayloadError(str(exc)) from exc
+            if self._require_fee_policy:
+                try:
+                    fee_resolution = self.resolve_fee_policy_for_market(
+                        market,
+                        as_of=execution_cutoff,
+                        cutoff=(
+                            execution_cutoff
+                            + timedelta(seconds=self._fresh_execution_deadline_seconds)
+                        ),
+                        deadline=operation_deadline.monotonic_deadline,
+                        bypass_cache=True,
+                    )
+                except FeePolicyError as exc:
+                    raise FreshExecutionContextError(
+                        "fresh execution fee policy could not be verified",
+                        retryable=False,
+                        error_code="MISSING_FEE_POLICY",
+                    ) from exc
+                market = replace(
+                    market,
+                    fee_policy=(
+                        fee_resolution.policy if fee_resolution.tradeable else None
+                    ),
+                    fee_policy_status=fee_resolution.status.value,
+                    fee_policy_reason=(
+                        fee_resolution.reason.value
+                        if fee_resolution.reason is not None
+                        else None
+                    ),
+                )
+                if not fee_resolution.tradeable:
+                    raise FreshExecutionContextError(
+                        "fresh execution fee policy is unavailable for this market",
+                        retryable=False,
+                        error_code="MISSING_FEE_POLICY",
+                    )
+                policy = fee_resolution.policy
+                if policy is None:  # pragma: no cover - guarded by tradeable
+                    raise FreshExecutionContextError(
+                        "fresh execution fee policy is unavailable",
+                        retryable=False,
+                        error_code="MISSING_FEE_POLICY",
+                    )
+                execution_cutoff = max(
+                    execution_cutoff,
+                    _aware(self._clock(), "execution completion cutoff"),
+                    policy.source_observed_at or execution_cutoff,
+                )
+                market = replace(market, fee_policy=policy.with_cutoff(execution_cutoff))
+                book = replace(book, cutoff=execution_cutoff)
             if execution_cutoff - observed > FRESH_EXECUTION_MAX_BOOK_AGE:
                 raise FreshExecutionContextError(
                     "fresh execution order book is stale",
@@ -1829,6 +2382,34 @@ class KalshiPublicRestAdapter:
         rules = _first_string(
             payload, ("rules_primary", "rules"), label="series rules", required=False
         )
+        fee_type = payload.get("fee_type")
+        if fee_type is not None and (
+            not isinstance(fee_type, str) or not fee_type.strip()
+        ):
+            raise KalshiPayloadError("series fee_type must be a non-empty string")
+        fee_multiplier = payload.get("fee_multiplier")
+        if fee_multiplier is not None and isinstance(fee_multiplier, (bool, float)):
+            raise KalshiPayloadError("series fee_multiplier must be an exact number")
+        fee_multiplier_numerator = payload.get("fee_multiplier_numerator")
+        fee_multiplier_denominator = payload.get("fee_multiplier_denominator")
+        if (
+            (fee_multiplier_numerator is not None or fee_multiplier_denominator is not None)
+            and (
+                isinstance(fee_multiplier_numerator, bool)
+                or not isinstance(fee_multiplier_numerator, int)
+                or isinstance(fee_multiplier_denominator, bool)
+                or not isinstance(fee_multiplier_denominator, int)
+            )
+        ):
+            raise KalshiPayloadError("series fee multiplier rational is malformed")
+        source_updated_at = _optional_timestamp(
+            payload,
+            ("last_updated_ts", "updated_time", "updated_ts", "updated_at"),
+            "series last_updated_ts",
+        )
+        _check_cutoff(source_updated_at, requested_cutoff, "series last_updated_ts")
+        if source_updated_at is not None and source_updated_at > archived.observed_at:
+            raise KalshiLookAheadError("series last_updated_ts is newer than local observation")
         assert title is not None
         return Series(
             series_key,
@@ -1837,6 +2418,11 @@ class KalshiPublicRestAdapter:
             archived.observed_at,
             archived.artifact,
             _series_tags(payload),
+            fee_type,
+            fee_multiplier,
+            fee_multiplier_numerator,
+            fee_multiplier_denominator,
+            source_updated_at=source_updated_at,
         )
 
 
@@ -1854,6 +2440,11 @@ __all__ = [
     "KALSHI_PUBLIC_REST_ROOT",
     "KALSHI_SCHEMA_VERSION",
     "RETRYABLE_STATUS_CODES",
+    "FeePolicyError",
+    "FeePolicyResolution",
+    "FeePolicySourceConflictError",
+    "FeeSchedule",
+    "FeeScheduleDriftError",
     "HistoricalCutoff",
     "KalshiAdapter",
     "KalshiCursorError",

@@ -112,6 +112,7 @@ def _validate_active_shape(raw: Mapping[str, object]) -> None:
         "execution_mode",
         "artifacts",
         "fixtures",
+        "fees",
         "classifications",
         "limits",
         "owner_decisions",
@@ -140,6 +141,21 @@ def _validate_active_shape(raw: Mapping[str, object]) -> None:
         digest = definition.get("sha256")
         if not isinstance(digest, str) or len(digest) != 64 or digest.lower() != digest:
             raise ConfigurationError(f"artifact {name} must carry a lowercase SHA-256")
+    fees = raw["fees"]
+    if not isinstance(fees, Mapping):
+        raise ConfigurationError("active experiment fee policy configuration is missing")
+    if fees.get("policy_required") is not True:
+        raise ConfigurationError("active experiment must require a fee policy")
+    schedule_artifact = fees.get("schedule_artifact")
+    if not isinstance(schedule_artifact, Mapping):
+        raise ConfigurationError("active experiment fee schedule artifact is missing")
+    if schedule_artifact.get("path") != "spec/fee-schedules/kalshi-predictions-v1.json":
+        raise ConfigurationError("active experiment must use the canonical Kalshi fee schedule")
+    schedule_sha256 = schedule_artifact.get("sha256")
+    pdf_sha256 = schedule_artifact.get("pdf_sha256")
+    for name, digest in (("schedule", schedule_sha256), ("official PDF", pdf_sha256)):
+        if not isinstance(digest, str) or len(digest) != 64 or digest.lower() != digest:
+            raise ConfigurationError(f"fee {name} hash must be a lowercase SHA-256")
     fixtures = raw["fixtures"]
     if not isinstance(fixtures, Mapping):
         raise ConfigurationError("active experiment fixture contract is missing")
