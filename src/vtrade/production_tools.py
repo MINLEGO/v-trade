@@ -767,6 +767,7 @@ class ProductionToolRegistry:
             arguments=arguments,
             cutoff=self._context.cutoff,
             maximum_tokens=self._context.maximum_default_result_tokens,
+            include_data_cutoff=False,
         )
 
     def _search_beliefs(self, arguments: JsonObject) -> JsonObject:
@@ -789,6 +790,7 @@ class ProductionToolRegistry:
             arguments=arguments,
             cutoff=self._context.cutoff,
             maximum_tokens=self._context.maximum_default_result_tokens,
+            include_data_cutoff=False,
         )
 
     def _beliefs(self, include_inactive: bool) -> list[JsonObject]:
@@ -1186,6 +1188,7 @@ def _page(
     arguments: Mapping[str, object],
     cutoff: datetime,
     maximum_tokens: int,
+    include_data_cutoff: bool = True,
 ) -> JsonObject:
     limit = _limit(arguments)
     offset = _cursor_offset(arguments.get("cursor"), name, cutoff)
@@ -1193,14 +1196,17 @@ def _page(
     has_more = offset + len(selected) < len(items)
     truncated = False
     while True:
-        output: JsonObject = {
-            "as_of": cutoff.isoformat(),
-            "data_cutoff": cutoff.isoformat(),
-            item_key: selected,
-            "next_cursor": _cursor(name, cutoff, offset + len(selected)) if has_more else None,
-            "has_more": has_more,
-            "payload_truncated": truncated,
-        }
+        output: JsonObject = {"as_of": cutoff.isoformat()}
+        if include_data_cutoff:
+            output["data_cutoff"] = cutoff.isoformat()
+        output.update(
+            {
+                item_key: selected,
+                "next_cursor": _cursor(name, cutoff, offset + len(selected)) if has_more else None,
+                "has_more": has_more,
+                "payload_truncated": truncated,
+            }
+        )
         if _output_tokens(output) <= maximum_tokens:
             return output
         if selected:

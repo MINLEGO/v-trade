@@ -15,6 +15,37 @@ from vtrade.harness import ToolExecution
 from vtrade.production_tools import ProductionToolRegistry, _execution_output, _output_tokens
 
 
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    (
+        ("get_general_beliefs", {}),
+        ("search_general_beliefs", {"keyword": "inflation"}),
+    ),
+)
+def test_belief_handlers_omit_data_cutoff_but_keep_as_of(
+    tool_name: str, arguments: dict[str, object]
+) -> None:
+    cutoff = datetime(2026, 8, 21, 10, 0, tzinfo=UTC)
+    context = SimpleNamespace(
+        claim=SimpleNamespace(agent_id="agent-1", data_cutoff=cutoff),
+        cutoff=cutoff,
+        maximum_default_result_tokens=4_000,
+        portfolio=lambda _arguments: {},
+        memory=SimpleNamespace(
+            read_beliefs=lambda **_kwargs: [
+                {"belief_id": "belief-1", "content": "Inflation may remain elevated."}
+            ]
+        ),
+    )
+    registry = ProductionToolRegistry(context)  # type: ignore[arg-type]
+    tool = next(spec for spec in registry.tool_specs() if spec.name == tool_name)
+
+    output = tool.handler(arguments)
+
+    assert output["as_of"] == cutoff.isoformat()
+    assert "data_cutoff" not in output
+
+
 def test_registry_has_exact_schema_parity_for_all_27_names() -> None:
     context = SimpleNamespace(
         maximum_default_result_tokens=4_000,
