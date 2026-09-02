@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from vtrade.artifacts import ContentAddressedArtifactStore
+from vtrade.broker_repository import _persist_fee_policy_cursor as _persist_broker_fee_policy_cursor
 from vtrade.domain.execution import FeePolicySnapshot
 from vtrade.domain.types import (
     BinaryMarket,
@@ -36,6 +38,7 @@ from vtrade.fee_policy import (
     load_fee_schedule,
 )
 from vtrade.kalshi import KalshiPublicRestAdapter
+from vtrade.kalshi_persistence import PostgresKalshiFreezeRepository
 from vtrade.semantic_runtime import _fee_policy_from_payload
 
 NOW = datetime(2026, 8, 21, 10, 0, tzinfo=UTC)
@@ -45,6 +48,17 @@ ARTIFACT = RawArtifact(
     "fixture://fee-policy",
     observed_at=NOW - timedelta(minutes=1),
 )
+
+
+class _FeePolicyCursor:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+    def execute(self, query: str, params: tuple[object, ...] = ()) -> None:
+        self.calls.append((query, params))
+
+    def fetchone(self) -> None:
+        return None
 
 
 def _schedule() -> FeeSchedule:
@@ -83,6 +97,44 @@ def _market() -> BinaryMarket:
         audit=ARTIFACT,
         fee_waiver_expiration_time=NOW + timedelta(hours=1),
     )
+
+
+def test_fee_policy_writers_cast_only_json_fields() -> None:
+    snapshot = FeePolicySnapshot(
+        waiver_evidence={"waived": True},
+        exact_inputs={"source": {"marker": "exact"}},
+        effective_from=NOW,
+        as_of=NOW,
+        source_observed_at=NOW,
+        cutoff=NOW,
+    )
+
+    writers = (
+        PostgresKalshiFreezeRepository._persist_fee_policy_cursor,
+        _persist_broker_fee_policy_cursor,
+    )
+    for writer in writers:
+        cursor = _FeePolicyCursor()
+        writer(
+            cursor,
+            snapshot,
+            market_id=uuid.uuid4(),
+            raw_artifact_id=uuid.uuid4(),
+        )
+
+        assert len(cursor.calls) == 2
+        insert_query, params = cursor.calls[1]
+        assert insert_query.count("%s") == 31
+        assert len(params) == 31
+        jsonb_cast_positions = [
+            index
+            for index, token in enumerate(insert_query.split("%s")[1:], 1)
+            if token.startswith("::jsonb")
+        ]
+        assert jsonb_cast_positions == [20, 21]
+        assert params[19] == json.dumps({"waived": True})
+        assert params[20] == json.dumps({"source": {"marker": "exact"}}, sort_keys=True)
+        assert params[21] == NOW
 
 
 def test_canonical_schedule_is_hash_pinned_and_exact() -> None:

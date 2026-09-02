@@ -697,7 +697,7 @@ class PostgresKalshiFreezeRepository:
             "scheduled_ts, observed_at, cutoff, source_tier, raw_artifact_id, schedule_sha256, "
             "settlement_fee_micros, policy_fingerprint) VALUES "
             "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
-            "%s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "%s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 policy_id,
                 market_id,
