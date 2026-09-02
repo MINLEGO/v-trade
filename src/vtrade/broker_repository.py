@@ -1509,7 +1509,9 @@ def _persist_fee_policy_cursor(
 ) -> uuid.UUID:
     """Insert an exact execution fee snapshot in the caller's transaction."""
 
-    policy_id = uuid.uuid5(uuid.NAMESPACE_URL, f"vtrade:fee-policy:{snapshot.fingerprint}")
+    policy_id = _stable_database_uuid(
+        "fee-policy", f"{market_id}:{snapshot.fingerprint}"
+    )
     cursor.execute(
         "SELECT id, policy_fingerprint FROM fee_policy_snapshots "
         "WHERE market_id = %s AND policy_fingerprint = %s FOR UPDATE",

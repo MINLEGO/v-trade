@@ -674,7 +674,7 @@ class PostgresKalshiFreezeRepository:
         market_id: uuid.UUID,
         raw_artifact_id: uuid.UUID,
     ) -> uuid.UUID:
-        policy_id = _stable_id("fee-policy", snapshot.fingerprint)
+        policy_id = _stable_id("fee-policy", f"{market_id}:{snapshot.fingerprint}")
         cursor.execute(
             "SELECT id, policy_fingerprint FROM fee_policy_snapshots "
             "WHERE market_id = %s AND policy_fingerprint = %s FOR UPDATE",

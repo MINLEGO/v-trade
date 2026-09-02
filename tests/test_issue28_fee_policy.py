@@ -137,6 +137,37 @@ def test_fee_policy_writers_cast_only_json_fields() -> None:
         assert params[21] == NOW
 
 
+def test_fee_policy_snapshot_ids_are_scoped_to_market() -> None:
+    snapshot = FeePolicySnapshot(
+        as_of=NOW,
+        effective_from=NOW,
+        source_observed_at=NOW,
+        cutoff=NOW,
+    )
+    market_ids = (uuid.uuid4(), uuid.uuid4())
+
+    writers = (
+        PostgresKalshiFreezeRepository._persist_fee_policy_cursor,
+        _persist_broker_fee_policy_cursor,
+    )
+    policy_ids_by_writer: list[list[uuid.UUID]] = []
+    for writer in writers:
+        policy_ids = [
+            writer(
+                _FeePolicyCursor(),
+                snapshot,
+                market_id=market_id,
+                raw_artifact_id=uuid.uuid4(),
+            )
+            for market_id in market_ids
+        ]
+
+        assert policy_ids[0] != policy_ids[1]
+        policy_ids_by_writer.append(policy_ids)
+
+    assert policy_ids_by_writer[0] == policy_ids_by_writer[1]
+
+
 def test_canonical_schedule_is_hash_pinned_and_exact() -> None:
     schedule = load_fee_schedule()
 
