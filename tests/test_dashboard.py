@@ -369,6 +369,8 @@ class TestDashboardApi:
 
         html = client.get("/admin", headers=auth).text
         assert "legacy-views" not in html
+        assert "global-control-button" in html
+        assert "Pause run" in html
         javascript = client.get("/admin/assets/dashboard.js", headers=auth).text
         for label in (
             "Long-term plan",
@@ -376,6 +378,9 @@ class TestDashboardApi:
             "Open positions",
             "Research detail",
             "Tool input",
+            "agentControl",
+            "X-Operator-Id",
+            "Idempotency-Key",
         ):
             assert label in javascript
 

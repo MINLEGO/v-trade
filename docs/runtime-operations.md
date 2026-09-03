@@ -66,6 +66,12 @@ experiment and a ready run before adding a paused agent. Starting, pausing, and
 removing an agent are authenticated, idempotent, and append-only audited actions.
 The worker does not submit venue orders.
 
+The private `/admin` dashboard exposes the same pause/resume actions without a
+terminal: use `Pause run` or `Resume run` beside the run status for a global
+control, or select an agent and use its `Pause agent`/`Resume agent` button. Each
+action asks for confirmation, uses a fresh idempotency key, and leaves active
+cycles running to completion.
+
 ## Runtime safety
 
 Every cycle persists an immutable cutoff and checkpoint sequence: market freeze,

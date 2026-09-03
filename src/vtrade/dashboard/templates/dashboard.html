@@ -58,7 +58,10 @@
               <h1>How is the run behaving?</h1>
               <p class="lede">Inspect performance, agent activity, costs and signals that deserve a closer look.</p>
             </div>
-            <div class="run-status" id="run-status"><span class="status-dot" aria-hidden="true"></span><span>Loading run status</span></div>
+              <div class="run-header-controls">
+                <div class="run-status" id="run-status"><span class="status-dot" aria-hidden="true"></span><span>Loading run status</span></div>
+                <button class="control-button" id="global-control-button" type="button" disabled>Pause run</button>
+              </div>
           </div>
 
           <section class="metric-grid" id="overview-metrics" aria-label="Run metrics" aria-busy="true">
@@ -109,7 +112,7 @@
             <section class="panel"><div class="panel-heading"><div><p class="eyebrow">Attention needed</p><h2>Alerts</h2></div><span class="item-count" id="alert-count">—</span></div><div class="alert-list" id="alert-list"><p class="empty-state">Loading alerts…</p></div></section>
             <section class="panel"><div class="panel-heading"><div><p class="eyebrow">Data quality</p><h2>Freshness</h2></div></div><div class="freshness-list" id="freshness-list"><p class="empty-state">Loading freshness checks…</p></div></section>
             <section class="panel"><div class="panel-heading"><div><p class="eyebrow">Providers</p><h2>Usage and costs</h2></div></div><div class="usage-list" id="usage-list"><p class="empty-state">Loading usage…</p></div></section>
-            <section class="panel controls-panel"><div class="panel-heading"><div><p class="eyebrow">Restricted controls</p><h2>Run controls</h2></div></div><p>Pause and resume remain available only through the authenticated, audited operator API. This read-only dashboard never submits a control action.</p></section>
+            <section class="panel controls-panel"><div class="panel-heading"><div><p class="eyebrow">Restricted controls</p><h2>Run controls</h2></div></div><p>Pause skips future scheduled cycles while allowing an active cycle to finish. The controls above and on each agent are authenticated and append-only audited.</p></section>
           </div>
         </section>
       </main>

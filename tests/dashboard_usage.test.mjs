@@ -132,6 +132,32 @@ test("provider usage label supports legacy total and request aliases", () => {
   assert.equal(label({ tokens: 9, requests: 1 }), "9 tokens / 1 requests");
 });
 
+test("control requests use the authenticated audited operator contract", async () => {
+  const calls = [];
+  const context = loadDashboardContext();
+  context.fetch = async (endpoint, options) => {
+    calls.push({ endpoint, options });
+    return { ok: true, json: async () => ({ status: "ok" }) };
+  };
+
+  await context.controlRequest("/admin/agents/agent-1/pause");
+  await context.controlRequest("/admin/agents/agent-1/resume");
+
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[0].options.credentials, "same-origin");
+  assert.equal(calls[0].options.headers.Accept, "application/json");
+  assert.equal(calls[0].options.headers["X-Operator-Id"], "dashboard");
+  assert.match(calls[0].options.headers["Idempotency-Key"], /^dashboard-.+/);
+  assert.notEqual(
+    calls[0].options.headers["Idempotency-Key"],
+    calls[1].options.headers["Idempotency-Key"],
+  );
+  assert.deepEqual(calls.map((call) => call.endpoint), [
+    "/admin/agents/agent-1/pause",
+    "/admin/agents/agent-1/resume",
+  ]);
+});
+
 test("auditText marks a retained value unavailable after retention purge", () => {
   const context = loadDashboardContext();
   const audit = context.auditText("sensitive payload", "Payload unavailable after retention cleanup.", true);

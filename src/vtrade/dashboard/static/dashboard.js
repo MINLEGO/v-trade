@@ -10,7 +10,10 @@ const ENDPOINTS = {
   agents: "/admin/dashboard-data/agents",
   cycles: "/admin/dashboard-data/cycles",
   cycle: (id) => `/admin/dashboard-data/cycles/${encodeURIComponent(id)}`,
+  systemControl: (paused) => `/admin/control/${paused ? "pause" : "resume"}`,
+  agentControl: (id, paused) => `/admin/agents/${encodeURIComponent(id)}/${paused ? "pause" : "resume"}`,
 };
+const DASHBOARD_OPERATOR_ID = "dashboard";
 
 const state = {
   window: "30d",
@@ -22,6 +25,8 @@ const state = {
   selectedAgentId: null,
   selectedCycleId: null,
   loading: false,
+  dataReady: false,
+  controlLoading: null,
 };
 
 const dollars = new Intl.NumberFormat("en-US", {
@@ -138,6 +143,29 @@ async function request(endpoint) {
   return response.json();
 }
 
+function idempotencyKey() {
+  const randomUuid = globalThis.crypto?.randomUUID?.();
+  return `dashboard-${randomUuid || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
+}
+
+async function controlRequest(endpoint) {
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "X-Operator-Id": DASHBOARD_OPERATOR_ID,
+      "Idempotency-Key": idempotencyKey(),
+    },
+    credentials: "same-origin",
+  });
+  if (!response.ok) {
+    let detail = "";
+    try { detail = (await response.json()).detail || ""; } catch { /* response is not JSON */ }
+    throw new Error(detail || `Control request failed (${response.status})`);
+  }
+  return response.json();
+}
+
 function setConnection(kind, label) {
   const dot = $("#connection-dot");
   dot.className = `status-dot${kind ? ` is-${kind}` : ""}`;
@@ -176,10 +204,14 @@ function setLoading(value) {
   const button = $("#refresh-button");
   button.disabled = value;
   button.classList.toggle("is-spinning", value);
+  syncGlobalControl();
+  syncAgentControlButtons();
+  if (!value && state.dataReady) renderAgents();
   if (value) setConnection("", "Loading data");
 }
 
 async function loadDashboard() {
+  state.dataReady = false;
   setLoading(true);
   updateUrlQuery();
   try {
@@ -189,10 +221,12 @@ async function loadDashboard() {
     state.overview = overviewPayload || {};
     state.agents = list(first(agentPayload.agents, agentPayload.items, agentPayload));
     state.cycles = list(first(cyclePayload.cycles, cyclePayload.items, cyclePayload));
+    state.dataReady = true;
     renderAll();
     setConnection("healthy", "Live data");
     $("#updated-at").textContent = `Updated ${new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date())}`;
   } catch (error) {
+    state.dataReady = false;
     const message = `Could not load dashboard data: ${error.message}`;
     setConnection("error", "Data unavailable");
     $("#updated-at").textContent = "Last refresh failed";
@@ -298,6 +332,7 @@ function renderOverview() {
   const dot = element("span", `status-dot is-${paused ? "warning" : "healthy"}`);
   dot.setAttribute("aria-hidden", "true");
   status.append(dot, document.createTextNode(paused ? "Run is paused" : "Run is active"));
+  syncGlobalControl();
 
   const leaderboard = list(first(data.leaderboard, data.agent_performance, state.agents));
   renderLeaderboard(leaderboard);
@@ -413,6 +448,23 @@ function renderAgents() {
 
 function badge(value) { return element("span", `badge ${statusClass(value)}`, text(value)); }
 
+function agentIsPaused(agent) {
+  return Boolean(agent.paused_at) || String(first(agent.status, "")).toLowerCase() === "paused";
+}
+
+function agentControlButton(agent) {
+  const id = String(first(agent.id, agent.agent_id));
+  const paused = agentIsPaused(agent);
+  const action = paused ? "Resume" : "Pause";
+  const button = element("button", `control-button ${paused ? "resume-control" : "pause-control"}`, `${action} agent`);
+  button.type = "button";
+  button.dataset.agentControl = id;
+  button.dataset.paused = String(paused);
+  button.disabled = state.loading || !state.dataReady || Boolean(state.controlLoading);
+  button.setAttribute("aria-label", `${action} ${text(first(agent.name, agent.agent_name, id))}`);
+  return button;
+}
+
 const RETENTION_UNAVAILABLE = "Payload unavailable after retention cleanup.";
 
 function auditText(value, unavailable = "Not recorded for this cycle.", retentionPurged = false) {
@@ -427,7 +479,8 @@ function renderAgentDetail(agent) {
   if (!agent) { root.replaceChildren(element("div", "empty-state large-empty", "Select an agent to inspect its audit context.")); return; }
   const hero = element("section", "agent-hero"); const title = document.createElement("div"); title.append(element("h2", "", first(agent.name, agent.agent_name, "Unnamed agent")), element("p", "", `${text(first(agent.model_label, agent.model, "Model unavailable"))} · ${text(first(agent.run_id, "Current run"))}`));
   const kpis = element("div", "hero-kpis");
-  [["Account value", amount(first(agent.account_value_micros, agent.account_value))], ["Total PnL", amount(first(agent.total_pnl_micros, agent.pnl_micros, agent.total_pnl))], ["Return", percent(first(agent.return_fraction, agent.return_percent, agent.return))]].forEach(([label, value]) => { const kpi = element("div", "hero-kpi"); kpi.append(element("span", "", label), element("strong", "", value)); kpis.append(kpi); }); hero.append(title, kpis);
+  [["Account value", amount(first(agent.account_value_micros, agent.account_value))], ["Total PnL", amount(first(agent.total_pnl_micros, agent.pnl_micros, agent.total_pnl))], ["Return", percent(first(agent.return_fraction, agent.return_percent, agent.return))]].forEach(([label, value]) => { const kpi = element("div", "hero-kpi"); kpi.append(element("span", "", label), element("strong", "", value)); kpis.append(kpi); });
+  const actions = element("div", "agent-actions"); actions.append(agentControlButton(agent)); hero.append(title, kpis, actions);
   const plans = list(first(agent.active_plans, agent.plans));
   const longTermPlan = plans.find((plan) => plan.plan_type === "long_term");
   const nextCyclePlan = plans.find((plan) => plan.plan_type === "next_cycle");
@@ -609,6 +662,75 @@ function renderOperations() {
   const data = overviewData(); renderAlerts(list(first(data.open_alert_items, data.open_alerts_list)), first(data.open_alerts, data.alert_count)); renderFreshness(list(first(data.freshness, data.data_freshness))); renderUsage(list(first(data.provider_usage, data.costs)));
 }
 
+function systemIsPaused() {
+  const data = overviewData();
+  const controls = first(data.controls, {});
+  return Boolean(first(controls.globally_paused, data.globally_paused));
+}
+
+function syncAgentControlButtons() {
+  const disabled = state.loading || !state.dataReady || Boolean(state.controlLoading);
+  $$('[data-agent-control]').forEach((button) => { button.disabled = disabled; });
+}
+
+function syncGlobalControl() {
+  const button = $("#global-control-button");
+  if (!button) return;
+  const available = state.dataReady;
+  const paused = systemIsPaused();
+  const pending = state.controlLoading === "system";
+  button.disabled = !available || state.loading || Boolean(state.controlLoading);
+  button.textContent = pending ? "Updating…" : available ? `${paused ? "Resume" : "Pause"} run` : "Run state unavailable";
+  button.dataset.paused = String(paused);
+  button.setAttribute("aria-label", `${paused ? "Resume" : "Pause"} complete run`);
+}
+
+async function changeSystemState(paused) {
+  if (state.controlLoading || paused === systemIsPaused()) return;
+  const action = paused ? "Pause" : "Resume";
+  const message = paused
+    ? "Pause the complete run? Future scheduled cycles will be skipped; an active cycle will finish."
+    : "Resume the complete run? Future scheduled cycles may run again.";
+  if (!window.confirm(message)) return;
+  state.controlLoading = "system";
+  syncGlobalControl();
+  try {
+    await controlRequest(ENDPOINTS.systemControl(paused));
+    toast(`${action} run submitted.`);
+    await loadDashboard();
+  } catch (error) {
+    toast(`Could not ${action.toLowerCase()} run: ${error.message}`, "error");
+  } finally {
+    state.controlLoading = null;
+    syncGlobalControl();
+    renderAgents();
+  }
+}
+
+async function changeAgentState(agent, paused) {
+  const id = String(first(agent.id, agent.agent_id));
+  if (!id || state.controlLoading || paused === agentIsPaused(agent)) return;
+  const name = text(first(agent.name, agent.agent_name, id));
+  const action = paused ? "Pause" : "Resume";
+  const message = paused
+    ? `Pause ${name}? Future scheduled cycles will be skipped; an active cycle will finish.`
+    : `Resume ${name}? Future scheduled cycles may run again.`;
+  if (!window.confirm(message)) return;
+  state.controlLoading = `agent:${id}`;
+  renderAgents();
+  try {
+    await controlRequest(ENDPOINTS.agentControl(id, paused));
+    toast(`${action} submitted for ${name}.`);
+    await loadDashboard();
+  } catch (error) {
+    toast(`Could not ${action.toLowerCase()} ${name}: ${error.message}`, "error");
+  } finally {
+    state.controlLoading = null;
+    renderAgents();
+    syncGlobalControl();
+  }
+}
+
 function renderAlerts(alerts, count) {
   $("#alert-count").textContent = count === undefined ? String(alerts.length) : String(count); const root = $("#alert-list");
   if (!alerts.length) { root.replaceChildren(element("p", "empty-state", "No open alerts.")); return; }
@@ -653,7 +775,16 @@ function bindEvents() {
   $("#agent-filter").addEventListener("change", (event) => { state.agentId = event.target.value; state.selectedAgentId = null; state.selectedCycleId = null; loadDashboard(); });
   $("#run-filter").addEventListener("change", (event) => { state.runId = event.target.value.trim(); state.selectedAgentId = null; state.selectedCycleId = null; loadDashboard(); });
   $("#refresh-button").addEventListener("click", loadDashboard);
+  $("#global-control-button").addEventListener("click", () => {
+    changeSystemState($("#global-control-button").dataset.paused !== "true");
+  });
   $("#agent-list").addEventListener("click", (event) => { const row = event.target.closest("[data-agent-id]"); if (!row) return; state.selectedAgentId = row.dataset.agentId; renderAgents(); });
+  $("#agent-detail").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-agent-control]");
+    if (!button || button.disabled) return;
+    const agent = state.agents.find((item) => String(first(item.id, item.agent_id)) === button.dataset.agentControl);
+    if (agent) changeAgentState(agent, button.dataset.paused !== "true");
+  });
   $("#cycle-list").addEventListener("click", (event) => { const row = event.target.closest("[data-cycle-id]"); if (row) selectCycle(row.dataset.cycleId); });
   window.addEventListener("resize", () => { if (state.overview) drawPerformance(first(overviewData().performance_history, overviewData().chart, [])); });
 }
