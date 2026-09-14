@@ -28,6 +28,10 @@ of a contract.
 complementary asks for both outcomes, with exact integer microdollar prices and
 contract units.
 
+**Execution book**: The order-book view that defines the liquidity an agent may act
+on. Paper execution derives it from the canonical order book through its paper
+liquidity policy; a live execution adapter may expose venue liquidity directly.
+
 **Live catalogue**: The global collection of known ordinary binary markets currently
 eligible for consideration.
 
@@ -63,9 +67,14 @@ retained.
 a validated binary `FINALIZED` result with `settlement_ts`; a resolution observation
 alone is not a payout.
 
-**Decision cycle**: One scheduled agent run that becomes active only after selecting
-a successfully loaded cycle catalogue. Once failed or abandoned, it is terminal and
-is never resumed; another run receives a new identity.
+**Cycle occurrence**: One scheduled or operator-triggered opportunity for an agent
+to run. It records the start-gate outcome and either ends skipped or activates
+exactly one decision cycle.
+_Avoid_: Scheduled run
+
+**Decision cycle**: The agent execution activated from one cycle occurrence after
+its start gates pass and a successfully loaded cycle catalogue is selected. Once
+failed or abandoned, it is terminal and is never resumed.
 
 **Abandoned decision cycle**: A decision cycle whose exclusive runtime ownership was
 lost before a clean terminal result could be recorded.
@@ -78,6 +87,11 @@ _Avoid_: Cycle context, Market freeze
 
 **Execution context**: The precise and sufficiently fresh market, order-book, fee,
 and risk observations validated for one order attempt.
+
+**Order attempt**: One durable, idempotent request to execute a paper order. It is
+recorded before execution and ends with a rejection, committed financial effects,
+or an explicitly unknown outcome requiring reconciliation.
+_Avoid_: Order operation, Order intent
 
 **Observation time (`observed_at`)**: The instant at which V-Trade captured one
 observation from the venue.
@@ -103,17 +117,44 @@ cannot authorize an execution context.
 that supports an observation. It is retained only when the cycle trace is
 insufficient or when reconciliation, ledger, or settlement requires it.
 
-**Provider invocation**: One identified paid model or research request whose usage
-remains accountable even if its decision cycle fails or is abandoned.
+**Provider invocation**: One identified external-provider request for a decision
+cycle, catalogue build, or maintenance activity. Its usage remains accountable even
+if its owner fails or is abandoned.
+
+**Tool invocation**: One identified request by an agent to a V-Trade tool. A
+mutating invocation has a stable server-issued identity and argument fingerprint,
+and its outcome remains explicit even when completion is unknown.
 
 **Operational record**: A record of runtime activity such as a cycle, attempt, tool
 call, failure, or resource usage.
 
-**Cycle trace**: The primary audit record of one decision cycle, including its
-context, activity, decisions, and outcomes.
+**Cycle trace**: The append-only primary audit record of one decision cycle,
+including its context, activity, decisions, and outcomes.
 
-**Financial record**: An authoritative durable record of an order, fill, ledger
-entry, position, or settlement.
+**Financial record**: An authoritative durable record of an order attempt, fill,
+ledger entry, or settlement.
+
+**Financial correction**: An append-only, operator-authorized financial fact that
+compensates a committed fill or settlement proven incorrect. The original financial
+record remains immutable.
+
+**Funding event**: An authoritative allocation or audited adjustment of an agent's
+cash that does not arise from a fill or settlement.
+
+**Portfolio projection**: A current, transactionally maintained view of cash,
+positions, fees, and portfolio version derived from authoritative financial records.
+It is rebuildable and never replaces those records.
+
+**Reconciliation case**: An agent-scoped uncertainty or conflict about a financial
+effect. An unresolved case blocks new decision cycles for that agent without
+blocking maintenance or other agents.
+
+**Evidence bundle**: An immutable, role-labelled collection of provider evidence
+supporting one retained observation or financial decision.
+
+**Orphan artifact**: An immutable content-addressed artifact that no durable record
+references. Its existence does not prove that the activity which produced it
+succeeded.
 
 **Release evidence**: A redacted operator record proving the result and scope of a
 validation or release gate.
@@ -122,6 +163,12 @@ validation or release gate.
 order. It preserves the same execution, accounting, and reconciliation details as
 the real-order path, without promising determinism or replay equivalence for the
 surrounding cycle.
+
+**Paper liquidity haircut**: A conservative transformation of observed order-book
+depth used to estimate paper fillability. It does not mutate the canonical order book
+or shared liquidity and is applied independently for each agent. The agent sees only
+the transformed execution depth; the original venue depth remains supporting audit
+evidence.
 
 **Methodological provenance**: The active experiment preserves the agreed agent
 process—plans, beliefs, research, tools, and autonomous market selection—without
